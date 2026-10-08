@@ -1,9 +1,10 @@
-import time
+import os
 import json
 import math
-import os
+import time
 from datetime import datetime
 from flask import Flask, request
+import urllib.request
 
 app = Flask(__name__)
 
@@ -52,7 +53,6 @@ authorized_users = load_users()
 
 def api_call(method, data):
     try:
-        import urllib.request
         url = BASE_URL + "/" + method
         body = json.dumps(data).encode("utf-8")
         req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
@@ -139,81 +139,4 @@ def send_assets_menu(chat_id, page=0, msg_id=None):
     if (page + 1) * per_page < len(ALL_ASSETS): nav.append({"text": "Avanti", "callback_data": "pg_" + str(page+1)})
     if nav: kb.append(nav)
         
-    text = "👋 Bentornato! Scegli un asset per l'analisi:"
-    if msg_id: edit_message(chat_id, msg_id, text, {"inline_keyboard": kb})
-    else: send_message(chat_id, text, {"inline_keyboard": kb})
-
-def send_expiry_menu(chat_id, asset_name, msg_id):
-    kb = {"inline_keyboard": [[{"text": "1 Minuto", "callback_data": "exp_1m"}], [{"text": "2 Minuti", "callback_data": "exp_2m"}], [{"text": "3 Minuti", "callback_data": "exp_3m"}], [{"text": "5 Minuti", "callback_data": "exp_5m"}], [{"text": "≡ Cambia Asset", "callback_data": "back_assets"}]]}
-    edit_message(chat_id, msg_id, "💲💹 Asset: " + asset_name + "\n\nSeleziona la scadenza:", kb)
-
-@app.route("/", methods=["POST"])
-def webhook():
-    try:
-        up = request.get_json(force=True)
-        if "callback_query" in up:
-            cq = up["callback_query"]
-            cid, mid, val = cq["message"]["chat"]["id"], cq["message"]["message_id"], cq["data"]
-            answer_callback(cq["id"])
-            
-            if val.startswith("approve_") or val.startswith("reject_"):
-                if cid == SUPER_USER_CHAT_ID:
-                    target = int(val.split("_")[1])
-                    if val.startswith("approve_"):
-                        authorized_users.add(target)
-                        save_users()
-                        pending_approval.pop(target, None)
-                        send_message(target, "✅ Il tuo account è stato approvato! Puoi già usare il bot.")
-                        send_assets_menu(target, 0)
-                        edit_message(cid, mid, "Richiesta APPROVATA ✅")
-                    else:
-                        pending_approval.pop(target, None)
-                        send_message(target, "❌ Richiesta rifiutata dall'amministratore.")
-                        edit_message(cid, mid, "Richiesta RIFIUTATA ❌")
-                return "OK", 200
-                
-            if cid != SUPER_USER_CHAT_ID and cid not in authorized_users:
-                send_message(cid, "⚠️ Non sei autorizzato o devi inviare prima il tuo ID Pocket Option.")
-                return "OK", 200
-                
-            if val.startswith("ast_"):
-                ast = ALL_ASSETS[int(val.split("_")[1])]
-                user_selection[cid] = {"asset": ast}
-                send_expiry_menu(cid, ast, mid)
-            elif val.startswith("exp_"):
-                sel = user_selection.get(cid, {})
-                t, m = get_analysis(sel.get("asset", "EUR/USD"), val.split("_")[1])
-                edit_message(cid, mid, t, m)
-            elif val.startswith("retry_"):
-                parts = val.split("_")
-                t, m = get_analysis(parts[1], parts[2])
-                edit_message(cid, mid, t, m)
-            elif val.startswith("pg_"):
-                send_assets_menu(cid, int(val.split("_")[1]), mid)
-            elif val == "back_assets":
-                send_assets_menu(cid, 0, mid)
-                
-        elif "message" in up and "text" in up["message"]:
-            cid = up["message"]["chat"]["id"]
-            txt_msg = up["message"]["text"].strip()
-            if cid == SUPER_USER_CHAT_ID or cid in authorized_users:
-                if txt_msg.lower() == "/start": pass
-                send_assets_menu(cid, 0)
-                return "OK", 200
-            if cid in pending_approval:
-                send_message(cid, "⏳ La tua richiesta è già in attesa di approvazione da parte dell'amministratore.")
-                return "OK", 200
-            pending_approval[cid] = txt_msg
-            admin_txt = "🔔 NUOVA RICHIESTA DI ACCESSO\n\n👤 ID Telegram: " + str(cid) + "\n🆔 ID Pocket Option: " + txt_msg
-            send_message(SUPER_USER_CHAT_ID, admin_txt, {"inline_keyboard": [[{"text": "SI", "callback_data": "approve_" + str(cid)}, {"text": "NO", "callback_data": "reject_" + str(cid)}]]})
-            send_message(cid, "⏳ ID Pocket Option ricevuto. In attesa di approvazione...")
-    except Exception as e:
-        print("Errore nel webhook:", e)
-    return "OK", 200
-
-@app.route("/", methods=["GET"])
-def index():
-    return "Bot attivo e in esecuzione!", 200
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    
