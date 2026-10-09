@@ -3,8 +3,10 @@ import json
 import math
 import time
 import io
+import traceback
 import matplotlib
 matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 import mplfinance as mpf
 from datetime import datetime, timedelta, timezone
 from flask import Flask, request
@@ -132,12 +134,16 @@ def calculate_indicators(df):
 
 def generate_chart_image(df, asset_name):
     try:
-        # Taglio ottimizzato esattamente a 20 candele (coincidente con l'EMA 20)
-        close_series = df['Close'].iloc[:, 0] if isinstance(df['Close'], pd.DataFrame) else df['Close']
+        df_clean = df.copy()
+        for col in ['Open', 'High', 'Low', 'Close']:
+            df_clean[col] = df_clean[col].astype(float)
+
+        close_series = df_clean['Close'].iloc[:, 0] if isinstance(df_clean['Close'], pd.DataFrame) else df_clean['Close']
         ema20_full = close_series.ewm(span=20, adjust=False).mean()
 
-        df_plot = df.tail(20).copy()
-        ema20_plot = ema20_full.tail(20)
+        # Riportato a 30 candele per un grafico ottimale e bilanciato
+        df_plot = df_clean.tail(30).copy()
+        ema20_plot = ema20_full.tail(30)
 
         market_colors = mpf.make_marketcolors(
             up='#00E676', 
@@ -176,7 +182,9 @@ def generate_chart_image(df, asset_name):
         plt.close(fig)
         return buf
     except Exception as e:
-        print("Errore nella generazione del grafico con mplfinance:", e)
+        print("ERRORE NELLA GENERAZIONE DEL GRAFICO:")
+        traceback.print_exc()
+        plt.close('all')
         return None
 
 def get_yahoo_ticker(asset_name):
