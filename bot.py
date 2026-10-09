@@ -164,31 +164,39 @@ def calculate_indicators(df):
     ema20 = close.ewm(span=20, adjust=False).mean()
     current_ema = round(float(ema20.iloc[-1]), 5)
     
-    return current_rsi, m_line, m_sig, m_hist, current_close, current_ema
+    return current_rsi, m_line, m_sig, m_hist, current_close, current_ema, rsi
 
-def generate_chart_image(df, asset_name, sig_type):
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
-        
+def generate_chart_image(df, rsi_series, asset_name, sig_type):
     close = df['Close']
     if isinstance(close, pd.DataFrame):
         close = close.iloc[:, 0]
         
     df_tail = close.tail(30)
+    rsi_tail = rsi_series.tail(30)
     ema20 = df_tail.ewm(span=20, adjust=False).mean()
     
-    fig, ax = plt.subplots(figsize=(6, 3.8), dpi=100)
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(6, 4.5), dpi=100, gridspec_kw={'height_ratios': [3, 1]})
     fig.patch.set_facecolor('#1e222d')
-    ax.set_facecolor('#131722')
+    ax1.set_facecolor('#131722')
+    ax2.set_facecolor('#131722')
     
-    ax.plot(df_tail.index, df_tail.values, color='#26a69a', linewidth=1.8, label='Prezzo')
-    ax.plot(df_tail.index, ema20.values, color='#ffaa00', linewidth=1.2, linestyle='--', label='EMA 20')
+    # Pannello Superiore: Prezzo ed EMA 20
+    ax1.plot(df_tail.index, df_tail.values, color='#26a69a', linewidth=1.5, label='Prezzo')
+    ax1.plot(df_tail.index, ema20.values, color='#ffaa00', linewidth=1.2, linestyle='--', label='EMA 20')
+    ax1.set_title(f"{asset_name} | Segnale: {sig_type}", fontsize=9, fontweight='bold', color='white')
+    ax1.tick_params(colors='white', labelsize=6)
+    ax1.grid(color='#2a2e39', linestyle='-', linewidth=0.5)
+    ax1.legend(loc='upper left', facecolor='#1e222d', edgecolor='none', labelcolor='white', fontsize=6)
     
-    ax.set_title(f"{asset_name} | Segnale: {sig_type}", fontsize=9, fontweight='bold', color='white')
-    ax.tick_params(colors='white', labelsize=7)
-    ax.grid(color='#2a2e39', linestyle='-', linewidth=0.5)
-    ax.legend(loc='upper left', facecolor='#1e222d', edgecolor='none', labelcolor='white', fontsize=7)
+    # Pannello Inferiore: RSI
+    ax2.plot(rsi_tail.index, rsi_tail.values, color='#ab47bc', linewidth=1.2, label='RSI (9)')
+    ax2.axhline(70, color='#ef5350', linestyle='--', linewidth=0.8)
+    ax2.axhline(30, color='#26a69a', linestyle='--', linewidth=0.8)
+    ax2.tick_params(colors='white', labelsize=6)
+    ax2.grid(color='#2a2e39', linestyle='-', linewidth=0.5)
+    ax2.legend(loc='upper left', facecolor='#1e222d', edgecolor='none', labelcolor='white', fontsize=6)
     
+    plt.tight_layout()
     buf = io.BytesIO()
     fig.savefig(buf, format='png', dpi=100, facecolor=fig.get_facecolor(), edgecolor='none', bbox_inches='tight')
     buf.seek(0)
@@ -215,7 +223,7 @@ def get_analysis_result(asset, exp_key):
             data = yf.download(ticker_symbol, period="1h", interval="1m", progress=False, threads=False)
             if data.empty: raise Exception("Dati vuoti")
                 
-            rsi_val, macd_line, macd_signal, macd_hist, current_close, current_ema = calculate_indicators(data)
+            rsi_val, macd_line, macd_signal, macd_hist, current_close, current_ema, rsi_series = calculate_indicators(data)
             
             trend_bullish = current_close > current_ema
             if trend_bullish and (macd_line >= macd_signal or rsi_val < 48):
@@ -229,9 +237,9 @@ def get_analysis_result(asset, exp_key):
             conf = min(97.0, max(68.0, conf))
             source_label = "Reale (Yahoo + EMA)" if not is_otc else "OTC (Dati Reali + EMA)"
             
-            chart_bytes = generate_chart_image(data, asset, sig_type)
+            chart_bytes = generate_chart_image(data, rsi_series, asset, sig_type)
         except Exception as e:
-            print(f"Fallback attivato per {asset}: {e}")
+            print(f"Errore Yahoo per {asset}: {e}")
             use_yahoo = False
 
     if not use_yahoo:
@@ -246,11 +254,11 @@ def get_analysis_result(asset, exp_key):
             prices.append(base_price + math.sin(t_point / 45.0 + asset_code) * 5.0 + (i * 0.02))
             
         data = pd.DataFrame({'Close': prices}, index=pd.DatetimeIndex(times))
-        rsi_val, macd_line, macd_signal, macd_hist, current_close, current_ema = calculate_indicators(data)
+        rsi_val, macd_line, macd_signal, macd_hist, current_close, current_ema, rsi_series = calculate_indicators(data)
         sig_type = "ACQUISTA (BUY)" if macd_line > macd_signal or rsi_val < 42 else "VENDI (SELL)"
         conf = round(76.0 + 16.0 * abs(math.cos((current_ts / 45.0) + asset_code)), 1)
         source_label = "OTC (Algoritmico Weekend)"
-        chart_bytes = generate_chart_image(data, asset, sig_type)
+        chart_bytes = generate_chart_image(data, rsi_series, asset, sig_type)
 
     sig_emoji = "🟢" if "ACQUISTA" in sig_type else "🔴"
     exp_map = {"1m": "1 Minuto (1M)", "2m": "2 Minuti (2M)", "3m": "3 Minuti (3M)", "5m": "5 Minuti (5M)"}
@@ -307,7 +315,7 @@ def webhook():
     if up:
         try:
             if "callback_query" in up:
-                cq = up["callback_query"], cq["message"]["chat"]["id"], cq["message"]["message_id"], cq["data"]
+                cq = up["callback_query"]
                 cid, mid, val = cq["message"]["chat"]["id"], cq["message"]["message_id"], cq["data"]
                 answer_callback(cq["id"])
                 
@@ -345,7 +353,7 @@ def webhook():
                         ast_name = parts[1]
                         exp_key = parts[2]
                     
-                    edit_message(cid, mid, f"⏳ Elaborazione grafico per {ast_name} ({exp_key.upper()})...")
+                    edit_message(cid, mid, f"⏳ Analisi in corso per {ast_name} ({exp_key.upper()})...")
                     t, m, c_bytes = get_analysis_result(ast_name, exp_key)
                     if c_bytes:
                         api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
