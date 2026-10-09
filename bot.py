@@ -135,13 +135,16 @@ def calculate_indicators(df):
 def generate_chart_image(df, asset_name):
     try:
         df_clean = df.copy()
+        
+        # Converte l'orario UTC in orario italiano (+2 ore) direttamente sull'asse dei tempi
+        df_clean.index = df_clean.index + timedelta(hours=2)
+
         for col in ['Open', 'High', 'Low', 'Close']:
             df_clean[col] = df_clean[col].astype(float)
 
         close_series = df_clean['Close'].iloc[:, 0] if isinstance(df_clean['Close'], pd.DataFrame) else df_clean['Close']
         ema20_full = close_series.ewm(span=20, adjust=False).mean()
 
-        # Riportato a 30 candele per un grafico ottimale e bilanciato
         df_plot = df_clean.tail(30).copy()
         ema20_plot = ema20_full.tail(30)
 
