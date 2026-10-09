@@ -210,7 +210,6 @@ def get_analysis_result(asset, exp_key):
     ticker_symbol = get_yahoo_ticker(asset)
     
     try:
-        # Download con timeout di sicurezza di 3 secondi per prevenire qualsiasi blocco
         with concurrent.futures.ThreadPoolExecutor() as executor:
             future = executor.submit(fetch_yahoo_data, ticker_symbol)
             data = future.result(timeout=3.0)
@@ -343,10 +342,8 @@ def webhook():
                     edit_message(cid, mid, f"⏳ Analisi in corso per {ast_name} ({exp_key.upper()})...")
                     t, m, c_bytes = get_analysis_result(ast_name, exp_key)
                     
-                    # 1. Invia il testo con l'analisi
                     edit_message(cid, mid, t, m)
                     
-                    # 2. Invia la foto delle candele giapponesi in un messaggio separato (se disponibile)
                     if c_bytes:
                         send_photo(cid, c_bytes, f"📈 Candele {ast_name} ({exp_key.upper()})")
                 elif val.startswith("pg_"):
@@ -358,7 +355,7 @@ def webhook():
                     
             elif "message" in up and "text" in up["message"]:
                 cid = up["message"]["chat"]["id"]
-                txt_msg = up["message"]["text"].strip()ミン
+                txt_msg = up["message"]["text"].strip()
                 if cid == SUPER_USER_CHAT_ID or cid in authorized_users:
                     send_assets_menu(cid, 0)
                     return "ok", 200
