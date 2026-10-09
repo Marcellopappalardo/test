@@ -342,21 +342,23 @@ def webhook():
                     ast = ALL_ASSETS[int(val.split("_")[1])]
                     user_selection[cid] = {"asset": ast}
                     send_expiry_menu(cid, ast, mid)
-                elif val.startswith("exp_"):
-                    sel = user_selection.get(cid, {})
-                    ast_name = sel.get("asset", "EUR/USD")
-                    exp_key = val.split("_")[1]
-                    edit_message(cid, mid, "⏳ Analisi in corso per " + ast_name + " (" + exp_key.upper() + ")...")
-                    t, m, c_bytes = get_analysis_result(ast_name, exp_key)
-                    if c_bytes:
-                        api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
-                        send_photo(cid, c_bytes, t, m)
+                elif val.startswith("exp_") or val.startswith("retry_"):
+                    if val.startswith("exp_"):
+                        sel = user_selection.get(cid, {})
+                        ast_name = sel.get("asset", "EUR/USD")
+                        exp_key = val.split("_")[1]
                     else:
-                        edit_message(cid, mid, t, m)
-                elif val.startswith("retry_"):
-                    parts = val.split("_")
-                    edit_message(cid, mid, "⏳ Aggiornamento in corso...")
-                    t, m, c_bytes = get_analysis_result(parts[1], parts[2])
+                        parts = val.split("_")
+                        ast_name = parts[1]
+                        exp_key = parts[2]
+                    
+                    # 1. MOSTRA SUBITO IL TESTO DI ATTESA RAPIDO (Non si blocca)
+                    edit_message(cid, mid, f"⏳ Elaborazione segnale per {ast_name} ({exp_key.upper()})...")
+                    
+                    # 2. CALCOLA L'ANALISI E OTTIENI TESTO E FOTO
+                    t, m, c_bytes = get_analysis_result(ast_name, exp_key)
+                    
+                    # 3. INVIA IL RISULTATO (Cancella il messaggio di attesa e manda la foto con il testo)
                     if c_bytes:
                         api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
                         send_photo(cid, c_bytes, t, m)
