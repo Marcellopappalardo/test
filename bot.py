@@ -178,7 +178,6 @@ def generate_chart_image(df, asset_name, sig_type):
     mc = mpf.make_marketcolors(up='#26a69a', down='#ef5350', wick={'up':'#26a69a', 'down':'#ef5350'}, edge={'up':'#26a69a', 'down':'#ef5350'})
     s = mpf.make_mpf_style(marketcolors=mc, facecolor='#131722', edgecolor='#131722', figcolor='#1e222d', gridcolor='#2a2e39')
     
-    # Prende esattamente le ultime 30 candele per velocizzare al massimo il rendering
     df_tail = df.tail(30)
     ema_tail = ema20.tail(30)
     
@@ -220,7 +219,6 @@ def get_analysis_result(asset, exp_key):
     if use_yahoo:
         ticker_symbol = get_yahoo_ticker(asset)
         try:
-            # Scarica SOLO le ultime 30 candele (periodo ridotto a 1 ora) per velocità istantanea
             data = yf.download(ticker_symbol, period="1h", interval="1m", progress=False, threads=False)
             if data.empty: raise Exception("Dati vuoti")
                 
@@ -370,7 +368,7 @@ def webhook():
                     send_assets_menu(cid, 0, mid)
                     
             elif "message" in up and "text" in up["message"]:
-                cid = up["message"]["chat']['id']
+                cid = up["message"]["chat"]["id"]
                 txt_msg = up["message"]["text"].strip()
                 if cid == SUPER_USER_CHAT_ID or cid in authorized_users:
                     send_assets_menu(cid, 0)
