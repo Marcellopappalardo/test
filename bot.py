@@ -49,18 +49,23 @@ user_selection = {}
 pending_approval = {}
 
 def load_users():
+    users = {SUPER_USER_CHAT_ID}
     if os.path.exists(USERS_FILE):
         try:
             with open(USERS_FILE, "r") as f:
-                return set(json.load(f))
-        except: pass
-    return {SUPER_USER_CHAT_ID}
+                data = json.load(f)
+                for uid in data:
+                    users.add(int(uid))
+        except Exception as e:
+            print("Errore caricamento utenti:", e)
+    return users
 
 def save_users():
     try:
         with open(USERS_FILE, "w") as f:
             json.dump(list(authorized_users), f)
-    except: pass
+    except Exception as e:
+        print("Errore salvataggio utenti:", e)
 
 authorized_users = load_users()
 
@@ -135,8 +140,6 @@ def calculate_indicators(df):
 def generate_chart_image(df, asset_name):
     try:
         df_clean = df.copy()
-        
-        # Converte l'orario UTC in orario italiano (+2 ore) direttamente sull'asse dei tempi
         df_clean.index = df_clean.index + timedelta(hours=2)
 
         for col in ['Open', 'High', 'Low', 'Close']:
@@ -249,17 +252,25 @@ def fetch_yahoo_real_data(asset_name):
         if clean_df.empty:
             raise Exception("Dati vuoti")
             
+        last_candle_time = clean_df.index[-1]
+        now_utc = pd.Timestamp.now(tz='UTC').tz_localize(None)
+        if (now_utc - last_candle_time).total_seconds() > 5400:
+            if "OTC" not in asset_name and "BTC" not in asset_name and "ETH" not in asset_name and "Bitcoin" not in asset_name and "Ethereum" not in asset_name:
+                raise Exception("MERCATO_CHIUSO")
+
         market_cache[asset_name] = (current_time, clean_df)
         return clean_df
     except Exception as e:
-        print(f"Timeout o errore di rete per {asset_name}: {e}")
+        print(f"Errore o mercato chiuso per {asset_name}: {e}")
+        if str(e) == "MERCATO_CHIUSO":
+            return "MERCATO_CHIUSO"
         if asset_name in market_cache:
             _, old_df = market_cache[asset_name]
             return old_df
         return None
 
 def send_assets_menu(chat_id, page=0, msg_id=None):
-    per_page = 9  # Griglia 3x3
+    per_page = 9
     sub = ALL_ASSETS[page*per_page:(page+1)*per_page]
     kb = []
     for i in range(0, len(sub), 3):
@@ -305,14 +316,14 @@ def webhook():
                         target = int(val.split("_")[1])
                         if val.startswith("approve_"):
                             authorized_users.add(target)
-                            save_users()
-                            pending_approval.pop(target, None)
-                            send_message(target, "✅ Account approvato!")
+                            save_users() # Salvataggio permanente su users.json
+                            pocket_id = pending_approval.pop(target, "Non specificato")
+                            send_message(target, "✅ Account approvato con successo! Benvenuto.")
                             send_assets_menu(target, 0)
-                            edit_message(cid, mid, "Approvato ✅")
+                            edit_message(cid, mid, f"Approvato ✅ (ID Pocket Option: {pocket_id})")
                         else:
                             pending_approval.pop(target, None)
-                            send_message(target, "❌ Rifiutato.")
+                            send_message(target, "❌ Richiesta rifiutata dall'amministratore.")
                             edit_message(cid, mid, "Rifiutato ❌")
                     return "ok", 200
                     
@@ -338,13 +349,18 @@ def webhook():
                     
                     data = fetch_yahoo_real_data(ast_name)
 
+                    if data == "MERCATO_CHIUSO":
+                        closed_text = f"⚠️ **Mercato Chiuso per {ast_name}!**\n\nQuesto asset reale è attualmente chiuso. Scegli un altro asset oppure un asset con dicitura **OTC**."
+                        closed_kb = {"inline_keyboard": [[{"text": "≡ Cambia Asset", "callback_data": "back_assets"}]]}
+                        edit_message(cid, mid, closed_text, closed_kb)
+                        return "ok", 200
+
                     if data is None or data.empty:
                         error_text = f"⚠️ **Yahoo Finance non risponde per {ast_name}.**\n\nIl server è temporaneamente occupato. Clicca su Aggiorna per riprovare."
                         error_kb = {"inline_keyboard": [[{"text": "🔄 Aggiorna", "callback_data": "retry_" + ast_name + "_" + exp_key}], [{"text": "≡ Cambia Asset", "callback_data": "back_assets"}]]}
                         edit_message(cid, mid, error_text, error_kb)
                         return "ok", 200
 
-                    # Orario esatto italiano sincronizzato (+2 ore CEST)
                     italian_tz = timezone(timedelta(hours=2))
                     current_it_time = datetime.now(italian_tz)
                     next_entry_dt = current_it_time + timedelta(minutes=1)
@@ -353,12 +369,27 @@ def webhook():
                     rsi_val, macd_line, macd_signal, macd_hist, current_close, current_ema = calculate_indicators(data)
                     
                     trend_bullish = current_close > current_ema
-                    if trend_bullish and (macd_line >= macd_signal or rsi_val < 48):
+                    
+                    cond_buy = (
+                        trend_bullish and 
+                        macd_line > macd_signal and 
+                        macd_hist > 0 and 
+                        rsi_val >= 50 and rsi_val <= 70
+                    )
+                    
+                    cond_sell = (
+                        not trend_bullish and 
+                        macd_line < macd_signal and 
+                        macd_hist < 0 and 
+                        rsi_val <= 50 and rsi_val >= 30
+                    )
+
+                    if cond_buy:
                         sig_type = "ACQUISTA (BUY)"
-                    elif not trend_bullish and (macd_line <= macd_signal or rsi_val > 52):
+                    elif cond_sell:
                         sig_type = "VENDI (SELL)"
                     else:
-                        sig_type = "ACQUISTA (BUY)" if macd_line > macd_signal else "VENDI (SELL)"
+                        sig_type = "ACQUISTA (BUY)" if macd_line >= macd_signal else "VENDI (SELL)"
                         
                     conf = round(79.0 + abs(macd_hist) * 800, 1)
                     conf = min(97.0, max(68.0, conf))
@@ -400,15 +431,20 @@ def webhook():
             elif "message" in up and "text" in up["message"]:
                 cid = up["message"]["chat"]["id"]
                 txt_msg = up["message"]["text"].strip()
+                
                 if cid == SUPER_USER_CHAT_ID or cid in authorized_users:
                     send_assets_menu(cid, 0)
                     return "ok", 200
+                    
                 if cid in pending_approval:
-                    send_message(cid, "⏳ In attesa di approvazione.")
+                    send_message(cid, "⏳ Il tuo ID Pocket Option è già in attesa di approvazione.")
                     return "ok", 200
+                
+                # Primo messaggio inviato dall'utente: viene registrato come ID Pocket Option
                 pending_approval[cid] = txt_msg
-                send_message(SUPER_USER_CHAT_ID, "🔔 Richiesta ID: " + txt_msg, {"inline_keyboard": [[{"text": "SI", "callback_data": "approve_" + str(cid)}, {"text": "NO", "callback_data": "reject_" + str(cid)}]]})
-                send_message(cid, "⏳ In attesa di approvazione...")
+                admin_text = f"🔔 **Nuova richiesta di accesso!**\n\n• **Chat ID Telegram:** `{cid}`\n• **ID Pocket Option:** `{txt_msg}`"
+                send_message(SUPER_USER_CHAT_ID, admin_text, {"inline_keyboard": [[{"text": "SI", "callback_data": "approve_" + str(cid)}, {"text": "NO", "callback_data": "reject_" + str(cid)}]]})
+                send_message(cid, "⏳ ID Pocket Option ricevuto. In attesa di approvazione da parte dell'amministratore...")
         except Exception as e:
             print("Errore nel webhook:", e)
     return "ok", 200
