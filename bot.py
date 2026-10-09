@@ -4,9 +4,9 @@ import math
 import time
 import io
 import matplotlib
-matplotlib.use('Agg')  # Fondamentale per i server cloud come Render
-import matplotlib.pyplot as plt
-from datetime import datetime, timedelta
+matplotlib.use('Agg')
+import mplfinance as mpf
+from datetime import datetime, timedelta, timezone
 from flask import Flask, request
 import requests
 import pandas as pd
@@ -20,7 +20,7 @@ SUPER_USER_CHAT_ID = 6121337831
 USERS_FILE = "users.json"
 
 market_cache = {}
-CACHE_DURATION = 300  # 5 minuti di validità della cache reale
+CACHE_DURATION = 300
 
 ALL_ASSETS = [
     "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD", "AUD/CAD","USD/MXN",
@@ -132,62 +132,38 @@ def calculate_indicators(df):
 
 def generate_chart_image(df, asset_name):
     try:
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 6), sharex=True, gridspec_kw={'height_ratios': [3, 1]})
-        fig.patch.set_facecolor('#1e1e1e')
-        
-        dates = np.arange(len(df))
-        opens = df['Open'].values if isinstance(df['Open'], pd.Series) else df['Open']
-        highs = df['High'].values if isinstance(df['High'], pd.Series) else df['High']
-        lows = df['Low'].values if isinstance(df['Low'], pd.Series) else df['Low']
-        closes = df['Close'].values if isinstance(df['Close'], pd.Series) else df['Close']
+        # Ottimizzato a 30 candele per massima pulizia e velocità di caricamento
+        df_plot = df.tail(30).copy()
         
         close_series = df['Close'].iloc[:, 0] if isinstance(df['Close'], pd.DataFrame) else df['Close']
-        ema20 = close_series.ewm(span=20, adjust=False).mean()
+        ema20 = close_series.ewm(span=20, adjust=False).mean().tail(30)
 
-        ax1.set_facecolor('#1e1e1e')
-        
-        width = 0.6
-        up_col = '#26a69a'
-        down_col = '#ef5350'
+        market_colors = mpf.make_marketcolors(up='#26a69a', down='#ef5350', wick='inherit', edge='inherit')
+        custom_style = mpf.make_mpf_style(base_mpf_style='nightclouds', marketcolors=market_colors, facecolor='#1e1e1e', edgecolor='#333333', figcolor='#1e1e1e')
 
-        for i in range(len(dates)):
-            o, h, l, c = opens[i], highs[i], lows[i], closes[i]
-            color = up_col if c >= o else down_col
-            ax1.plot([dates[i], dates[i]], [l, h], color=color, linewidth=1)
-            body_bottom = min(o, c)
-            body_height = abs(c - o) if abs(c - o) > 0 else 0.00001
-            ax1.bar(dates[i], body_height, bottom=body_bottom, width=width, color=color, edgecolor=color)
+        add_plots = [
+            mpf.make_addplot(ema20, color='#ffaa00', width=1.2, linestyle='--')
+        ]
 
-        ax1.plot(dates, ema20.values, label='EMA 20', color='#ffaa00', linestyle='--', linewidth=1.2)
-        ax1.set_title(f"Analisi Tecnica: {asset_name}", color='white', fontsize=11, fontweight='bold')
-        ax1.tick_params(colors='white', labelsize=8)
-        ax1.grid(True, color='#333333', linestyle=':', alpha=0.7)
-        ax1.legend(loc='upper left', facecolor='#2d2d2d', edgecolor='none', labelcolor='white', fontsize=8)
-
-        delta = close_series.diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=9).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=9).mean()
-        rs = gain / loss
-        rsi = 100 - (100 / (1 + rs))
-
-        ax2.set_facecolor('#1e1e1e')
-        ax2.plot(dates, rsi.values, label='RSI (9)', color='#bf00ff', linewidth=1.2)
-        ax2.axhline(70, color='#ff4444', linestyle='--', alpha=0.5, linewidth=1)
-        ax2.axhline(30, color='#44bb44', linestyle='--', alpha=0.5, linewidth=1)
-        ax2.set_ylim(0, 100)
-        ax2.tick_params(colors='white', labelsize=8)
-        ax2.grid(True, color='#333333', linestyle=':', alpha=0.7)
-        ax2.legend(loc='upper left', facecolor='#2d2d2d', edgecolor='none', labelcolor='white', fontsize=8)
-
-        plt.tight_layout()
-        
         buf = io.BytesIO()
-        plt.savefig(buf, format='png', facecolor=fig.get_facecolor(), edgecolor='none', dpi=100)
+        fig, axes = mpf.plot(
+            df_plot,
+            type='candle',
+            style=custom_style,
+            addplot=add_plots,
+            title=f"\nAnalisi Tecnica: {asset_name}",
+            volume=False,
+            figsize=(8, 4.5),
+            returnfig=True,
+            panel_ratios=(1,)
+        )
+        
+        fig.savefig(buf, format='png', facecolor='#1e1e1e', edgecolor='none', bbox_inches='tight', dpi=100)
         buf.seek(0)
         plt.close(fig)
         return buf
     except Exception as e:
-        print("Errore nella generazione del grafico a candele:", e)
+        print("Errore nella generazione del grafico con mplfinance:", e)
         return None
 
 def get_yahoo_ticker(asset_name):
@@ -342,7 +318,9 @@ def webhook():
                         edit_message(cid, mid, error_text, error_kb)
                         return "ok", 200
 
-                    generation_time = datetime.now()
+                    italian_tz = timezone(timedelta(hours=2))
+                    generation_time = datetime.now(italian_tz)
+                    
                     rsi_val, macd_line, macd_signal, macd_hist, current_close, current_ema = calculate_indicators(data)
                     
                     trend_bullish = current_close > current_ema
@@ -363,7 +341,6 @@ def webhook():
                     next_entry_dt = generation_time + timedelta(minutes=1)
                     entry_time = next_entry_dt.replace(second=0, microsecond=0).strftime('%H:%M:%S')
 
-                    # Testo formattato correttamente con i backticks dentro le virgolette
                     text = "🐂🐻 ANALISI EASY TRACK\n\n"
                     text += f"💲💹 Asset: {ast_name}\n"
                     text += f"💵 Prezzo Reale: `{round(current_close, 5)}`\n"
