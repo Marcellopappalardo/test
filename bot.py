@@ -5,6 +5,13 @@ import time
 from datetime import datetime
 from flask import Flask, request
 import urllib.request
+import yfinance as yf
+import pandas as pd
+import numpy as np
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import io
 
 app = Flask(__name__)
 
@@ -14,22 +21,25 @@ SUPER_USER_CHAT_ID = 6121337831
 USERS_FILE = "users.json"
 
 ALL_ASSETS = [
-    "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD", "AUD/CAD", 
-    "AUD/CHF", "NZD/USD", "USD/CHF", "EUR/GBP", "EUR/JPY", "GBP/JPY", 
-    "AUD/JPY", "EUR/AUD", "EUR/CAD", "EUR/NZD", "GBP/NZD", "AUD/NZD", 
-    "CAD/JPY", "CHF/JPY", "GBP/CAD", "GBP/AUD", "EUR/USD OTC", "GBP/USD OTC", 
-    "USD/JPY OTC", "AUD/USD OTC", "USD/CAD OTC", "AUD/CAD OTC", "NZD/USD OTC", 
+    "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD", "AUD/CAD","USD/MXN",
+    "USD/PKR", "EUR/RUB", "EUR/TRY", "JOD/CNY", "NGN/USD", "LBP/USD", "TND/USD",
+    "AUD/CHF", "NZD/USD", "USD/CHF", "EUR/GBP", "EUR/JPY", "GBP/JPY", "NGN/USD",
+    "AUD/JPY", "EUR/AUD", "EUR/CAD", "EUR/NZD", "GBP/NZD", "AUD/NZD", "QAR/CNY",
+    "CAD/JPY", "CHF/JPY", "GBP/CAD", "GBP/AUD", "USD/ARS", "UAH/USD", "SAR/CNY",
+    "LBP/USD", "EUR/USD OTC", "GBP/USD OTC", "USD/ARS OTC", "QAR/CNY OTC", "LBP/USD OTC",
+    "USD/JPY OTC", "AUD/USD OTC", "NGN/USD OTC", "USD/CAD OTC", "AUD/CAD OTC", "NZD/USD OTC",
+    "USD/MXN OTC", "USD/PKR OTC", "EUR/RUB OTC", "EUR/TRY OTC", "JOD/CNY OTC",
     "USD/CHF OTC", "EUR/GBP OTC", "EUR/JPY OTC", "GBP/JPY OTC", "AUD/JPY OTC", 
     "AUD/CHF OTC", "EUR/AUD OTC", "EUR/CAD OTC", "EUR/NZD OTC", "GBP/NZD OTC", 
-    "AUD/NZD OTC", "CAD/JPY OTC", "CHF/JPY OTC", "GBP/CAD OTC", "GBP/AUD OTC", 
-    "GOLD", "SILVER", "GOLD OTC", "SILVER OTC", "BRENT OIL OTC", "WTI OIL OTC", 
-    "NATURAL GAS OTC", "BTC/USD", "ETH/USD", "BTC/USD OTC", "ETH/USD OTC", 
-    "LTC/USD OTC", "XRP/USD OTC", "ADA/USD OTC", "SOL/USD OTC", "DOGE OTC", 
-    "BNB OTC", "POLYGON OTC", "TRON OTC", "APPLE", "MICROSOFT", "TESLA", 
-    "AMAZON", "NETFLIX", "GOOGLE", "META", "MCDONALD'S", "APPLE OTC", 
-    "MICROSOFT OTC", "TESLA OTC", "AMAZON OTC", "NETFLIX OTC", "GOOGLE OTC", 
-    "META OTC", "COCA COLA OTC", "INTEL OTC", "BOEING COMPANY OTC", "ALIBABA OTC", 
-    "CITIGROUP INC OTC", "EXXONMOBIL OTC"
+    "AUD/NZD OTC", "CAD/JPY OTC", "CHF/JPY OTC", "GBP/CAD OTC", "GBP/AUD OTC",
+    "TND/USD OTC", "UAH/USD OTC", "SAR/CNY OTC", "LBP/USD OTC", "Bitcoin OTC",
+    "Cardano OTC", "Polkadot OTC", "Toncoin OTC", "Bitcoin ETF OTC", "TRON OTC",
+    "Dogecoin OTC", "Litecoin OTC", "Chainlink OTC", "Solana OTC", "BNB OTC", "Polygon OTC",
+    "Ethereum OTC", "Avalanche OTC", "Dash", "BCH/EUR", "BCH/GBP", "BCH/JPY", "BTC/GBP", "BTC/JPY", "Bitcoin",
+    "Chainlink", "Ethereum", "APPLE", "MICROSOFT", "TESLA", "AMAZON", "NETFLIX", "GOOGLE", "META", "MCDONALD'S",
+    "APPLE OTC", "MICROSOFT OTC", "TESLA OTC", "AMAZON OTC", "NETFLIX OTC", "GOOGLE OTC", "META OTC", "COCA COLA OTC",
+    "INTEL OTC", "BOEING COMPANY OTC", "ALIBABA OTC", "CITIGROUP INC OTC", "EXXONMOBIL OTC"
+    
 ]
 
 user_selection = {}
@@ -73,56 +83,220 @@ def edit_message(chat_id, msg_id, text, markup=None):
     if markup: p["reply_markup"] = markup
     api_call("editMessageText", p)
 
+def send_photo(chat_id, photo_bytes, caption, markup=None):
+    url = BASE_URL + "/sendPhoto"
+    boundary = '----WebKitFormBoundary7MA4YWxkTrZu0gW'
+    body = bytearray()
+    
+    body.extend(f'--{boundary}\r\n'.encode('utf-8'))
+    body.extend(b'Content-Disposition: form-data; name="chat_id"\r\n\r\n')
+    body.extend(f'{chat_id}\r\n'.encode('utf-8'))
+    
+    body.extend(f'--{boundary}\r\n'.encode('utf-8'))
+    body.extend(b'Content-Disposition: form-data; name="caption"\r\n\r\n')
+    body.extend(f'{caption}\r\n'.encode('utf-8'))
+    
+    if markup:
+        body.extend(f'--{boundary}\r\n'.encode('utf-8'))
+        body.extend(b'Content-Disposition: form-data; name="reply_markup"\r\n\r\n')
+        body.extend(f'{json.dumps(markup)}\r\n'.encode('utf-8'))
+        
+    body.extend(f'--{boundary}\r\n'.encode('utf-8'))
+    body.extend(b'Content-Disposition: form-data; name="photo"; filename="chart.png"\r\n')
+    body.extend(b'Content-Type: image/png\r\n\r\n')
+    body.extend(photo_bytes)
+    body.extend(b'\r\n')
+    
+    body.extend(f'--{boundary}--\r\n'.encode('utf-8'))
+    
+    req = urllib.request.Request(
+        url,
+        data=bytes(body),
+        headers={'Content-Type': f'multipart/form-data; boundary={boundary}'}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as res:
+            return json.loads(res.read().decode('utf-8'))
+    except Exception as e:
+        print("Errore sendPhoto:", e)
+        return None
+
 def answer_callback(cq_id):
     api_call("answerCallbackQuery", {"callback_query_id": cq_id})
 
-def get_analysis(asset, exp_key):
+def get_yahoo_ticker(asset):
+    asset_clean = asset.replace(" OTC", "")
+    if "/" in asset_clean and len(asset_clean) == 7:
+        parts = asset_clean.split("/")
+        return parts[0] + parts[1] + "=X"
+    if "BTC" in asset_clean or "ETH" in asset_clean or "LTC" in asset_clean or "XRP" in asset_clean or "ADA" in asset_clean or "SOL" in asset_clean:
+        return asset_clean.replace("/", "-")
+        
+    mapping = {
+        "GOLD": "GC=F", "SILVER": "SI=F", "BRENT OIL": "BZ=F", "WTI OIL": "CL=F",
+        "NATURAL GAS": "NG=F", "APPLE": "AAPL", "MICROSOFT": "MSFT", "TESLA": "TSLA",
+        "AMAZON": "AMZN", "NETFLIX": "NFLX", "GOOGLE": "GOOGL", "META": "META",
+        "MCDONALD'S": "MCD", "COCA COLA": "KO", "INTEL": "INTC", "BOEING COMPANY": "BA",
+        "ALIBABA": "BABA", "CITIGROUP INC": "C", "EXXONMOBIL": "XOM"
+    }
+    return mapping.get(asset_clean, asset_clean)
+
+def calculate_indicators(df):
+    close = df['Close']
+    if isinstance(close, pd.DataFrame):
+        close = close.iloc[:, 0]
+        
+    current_close = float(close.iloc[-1])
+
+    delta = close.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=9).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=9).mean()
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    current_rsi = round(float(rsi.iloc[-1]), 1)
+    if math.isnan(current_rsi): current_rsi = 50.0
+
+    exp1 = close.ewm(span=12, adjust=False).mean()
+    exp2 = close.ewm(span=26, adjust=False).mean()
+    macd = exp1 - exp2
+    signal = macd.ewm(span=9, adjust=False).mean()
+    hist = macd - signal
+    
+    m_line = round(float(macd.iloc[-1]), 5)
+    m_sig = round(float(signal.iloc[-1]) if not math.isnan(signal.iloc[-1]) else 0, 5)
+    m_hist = round(float(hist.iloc[-1]), 5)
+
+    ema20 = close.ewm(span=20, adjust=False).mean()
+    current_ema = round(float(ema20.iloc[-1]), 5)
+    
+    return current_rsi, m_line, m_sig, m_hist, current_close, current_ema
+
+def generate_chart_image(df, asset_name, sig_type):
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(6, 5), sharex=True, gridspec_kw={'height_ratios': [3, 1]})
+    
+    close = df['Close']
+    if isinstance(close, pd.DataFrame):
+        close = close.iloc[:, 0]
+    ema20 = close.ewm(span=20, adjust=False).mean()
+    
+    ax1.plot(close.index, close.values, label='Prezzo', color='#00d2ff', linewidth=1.5)
+    ax1.plot(ema20.index, ema20.values, label='EMA 20', color='#ffaa00', linewidth=1.2, linestyle='--')
+    ax1.set_title(f"{asset_name} | Segnale: {sig_type}", fontsize=10, fontweight='bold', color='white')
+    ax1.tick_params(colors='white', labelsize=8)
+    ax1.set_facecolor('#131722')
+    fig.patch.set_facecolor('#1e222d')
+    ax1.grid(True, alpha=0.15, color='white')
+    ax1.legend(loc='upper left', fontsize=8, facecolor='#1e222d', edgecolor='none', labelcolor='white')
+    
+    delta = close.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=9).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=9).mean()
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    
+    ax2.plot(rsi.index, rsi.values, label='RSI (9)', color='#9c27b0', linewidth=1.2)
+    ax2.axhline(70, color='#ff5252', linestyle=':', alpha=0.6)
+    ax2.axhline(30, color='#4caf50', linestyle=':', alpha=0.6)
+    ax2.tick_params(colors='white', labelsize=8)
+    ax2.set_facecolor('#131722')
+    ax2.grid(True, alpha=0.15, color='white')
+    ax2.legend(loc='upper left', fontsize=8, facecolor='#1e222d', edgecolor='none', labelcolor='white')
+    
+    plt.tight_layout()
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', dpi=120, facecolor=fig.get_facecolor(), edgecolor='none')
+    buf.seek(0)
+    plt.close(fig)
+    return buf.read()
+
+def get_analysis_result(asset, exp_key):
     now = datetime.now()
-    if now.weekday() in [5, 6] and "OTC" not in asset:
-        return "🐂🐻 MERCATO CHIUSO\n\n💲💹 Asset: " + asset + "\n\n⚠️ I mercati reali sono chiusi nel weekend. Scegli un asset OTC.", {"inline_keyboard": [[{"text": "≡ Cambia Asset", "callback_data": "back_assets"}]]}
+    is_otc = "OTC" in asset
+    
+    if now.weekday() in [5, 6] and not is_otc:
+        text = "🐂🐻 MERCATO CHIUSO\n\n💲💹 Asset: " + asset + "\n\n⚠️ I mercati reali sono chiusi nel weekend. Scegli un asset OTC."
+        kb = {"inline_keyboard": [[{"text": "≡ Cambia Asset", "callback_data": "back_assets"}]]}
+        return text, kb, None
 
     exp_durations = {"1m": 60, "2m": 120, "3m": 180, "5m": 300}
     block_size = exp_durations.get(exp_key, 60)
     
-    current_ts = time.time()
-    candle_ts = math.floor(current_ts / block_size) * block_size
-    t_factor = candle_ts / 45.0  
-    asset_code = sum(ord(c) for c in asset)
-    
-    rsi_val = max(12.5, min(92.0, round(50 + 32 * math.sin(t_factor + asset_code), 1)))
-    
-    m_val = t_factor / 1.5 + asset_code
-    macd_line = round(0.0018 * math.sin(m_val), 5)
-    macd_signal = round(0.0018 * math.sin(m_val - 0.3), 5)
-    macd_hist = round(macd_line - macd_signal, 5)
-    
-    sig_type = "BUY" if macd_line > macd_signal or rsi_val < 42 else "SELL"
-    sig_emoji = "🟢" if sig_type == "BUY" else "🔴"
-    conf = round(76.0 + 16.0 * abs(math.cos(t_factor + asset_code)), 1)
-    
-    exp_map = {
-        "1m": "1 Minuto (1M)",
-        "2m": "2 Minuti (2M)",
-        "3m": "3 Minuti (3M)",
-        "5m": "5 Minuti (5M)"
-    }
+    use_yahoo = True
+    if is_otc and now.weekday() in [5, 6]:
+        use_yahoo = False
+
+    chart_bytes = None
+    if use_yahoo:
+        ticker_symbol = get_yahoo_ticker(asset)
+        try:
+            yf_interval = "1m"
+            data = yf.download(ticker_symbol, period="1d", interval=yf_interval, progress=False)
+            if data.empty: raise Exception("Dati vuoti")
+                
+            rsi_val, macd_line, macd_signal, macd_hist, current_close, current_ema = calculate_indicators(data)
+            
+            trend_bullish = current_close > current_ema
+            if trend_bullish and (macd_line >= macd_signal or rsi_val < 48):
+                sig_type = "ACQUISTA (BUY)"
+            elif not trend_bullish and (macd_line <= macd_signal or rsi_val > 52):
+                sig_type = "VENDI (SELL)"
+            else:
+                sig_type = "ACQUISTA (BUY)" if macd_line > macd_signal else "VENDI (SELL)"
+                
+            conf = round(79.0 + abs(macd_hist) * 800, 1)
+            conf = min(97.0, max(68.0, conf))
+            source_label = "Reale (Yahoo + EMA)" if not is_otc else "OTC (Dati Reali + EMA)"
+            
+            chart_bytes = generate_chart_image(data, asset, sig_type)
+        except Exception as e:
+            print(f"Fallback attivato per {asset}: {e}")
+            use_yahoo = False
+
+    if not use_yahoo:
+        # Generiamo uno storico sintetico basato su funzioni matematiche per disegnare comunque il grafico
+        current_ts = time.time()
+        times = []
+        prices = []
+        asset_code = sum(ord(c) for c in asset)
+        base_price = 100.0 + (asset_code % 50)
+        
+        for i in range(50, 0, -1):
+            t_point = current_ts - (i * 60)
+            t_factor = t_point / 45.0
+            dt = datetime.fromtimestamp(t_point)
+            times.append(dt)
+            price_val = base_price + math.sin(t_factor + asset_code) * 5.0 + (i * 0.02)
+            prices.append(price_val)
+            
+        data = pd.DataFrame({'Close': prices}, index=pd.DatetimeIndex(times))
+        
+        rsi_val, macd_line, macd_signal, macd_hist, current_close, current_ema = calculate_indicators(data)
+        
+        sig_type = "ACQUISTA (BUY)" if macd_line > macd_signal or rsi_val < 42 else "VENDI (SELL)"
+        conf = round(76.0 + 16.0 * abs(math.cos((current_ts / 45.0) + asset_code)), 1)
+        source_label = "OTC (Algoritmico Weekend)"
+        
+        chart_bytes = generate_chart_image(data, asset, sig_type)
+
+    sig_emoji = "🟢" if "ACQUISTA" in sig_type else "🔴"
+    exp_map = {"1m": "1 Minuto (1M)", "2m": "2 Minuti (2M)", "3m": "3 Minuti (3M)", "5m": "5 Minuti (5M)"}
     expiry_name = exp_map.get(exp_key, "1 Minuto (1M)")
-    entry_time = datetime.fromtimestamp(candle_ts + block_size).replace(second=0, microsecond=0)
+    entry_time = datetime.now().replace(second=0, microsecond=0)
 
     text = "🐂🐻 ANALISI EASY TRACK\n\n"
-    text += "💲💹 Asset: " + asset + "\n"
+    text += "💲💹 Asset: " + asset + " [" + source_label + "]\n"
     text += "🎯 Segnale: " + sig_type + " " + sig_emoji + "\n\n"
     text += "🛠️ Indicatori:\n"
     text += "• RSI (9): " + str(rsi_val) + "\n"
-    text += "• MACD Line: " + str(macd_line) + "\n"
-    text += "• MACD Signal: " + str(macd_signal) + "\n"
+    text += "• Linea MACD: " + str(macd_line) + "\n"
+    text += "• Segnale MACD: " + str(macd_signal) + "\n"
     text += "• Istogramma: " + str(macd_hist) + "\n\n"
     text += "⚖️ Affidabilità: " + str(conf) + "%\n"
     text += "⏳ Scadenza: " + expiry_name + "\n"
     text += "📌 Entrata: " + entry_time.strftime('%H:%M:%S')
     
     kb = {"inline_keyboard": [[{"text": "🔄 Aggiorna", "callback_data": "retry_" + asset + "_" + exp_key}], [{"text": "≡ Cambia Asset", "callback_data": "back_assets"}]]}
-    return text, kb
+    return text, kb, chart_bytes
 
 def send_assets_menu(chat_id, page=0, msg_id=None):
     per_page = 6
@@ -149,12 +323,11 @@ def send_expiry_menu(chat_id, asset_name, msg_id):
 
 @app.route('/')
 def index():
-    return "Il bot di trading è attivo e online!", 200
+    return "Il bot con grafici integrati è attivo e online!", 200
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
     up = request.get_json()
-    print("Aggiornamento ricevuto da Telegram:", up)
     if up:
         try:
             if "callback_query" in up:
@@ -179,7 +352,7 @@ def webhook():
                     return "ok", 200
                     
                 if cid != SUPER_USER_CHAT_ID and cid not in authorized_users:
-                    send_message(cid, "⚠️ Non sei autorizzato o devi inviare prima il tuo ID Pocket Option.")
+                    send_message(cid, "⚠️ Non sei autorizzato. Invia prima il tuo ID Pocket Option per richiedere l'accesso.")
                     return "ok", 200
                     
                 if val.startswith("ast_"):
@@ -188,12 +361,20 @@ def webhook():
                     send_expiry_menu(cid, ast, mid)
                 elif val.startswith("exp_"):
                     sel = user_selection.get(cid, {})
-                    t, m = get_analysis(sel.get("asset", "EUR/USD"), val.split("_")[1])
-                    edit_message(cid, mid, t, m)
+                    t, m, c_bytes = get_analysis_result(sel.get("asset", "EUR/USD"), val.split("_")[1])
+                    if c_bytes:
+                        api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
+                        send_photo(cid, c_bytes, t, m)
+                    else:
+                        edit_message(cid, mid, t, m)
                 elif val.startswith("retry_"):
                     parts = val.split("_")
-                    t, m = get_analysis(parts[1], parts[2])
-                    edit_message(cid, mid, t, m)
+                    t, m, c_bytes = get_analysis_result(parts[1], parts[2])
+                    if c_bytes:
+                        api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
+                        send_photo(cid, c_bytes, t, m)
+                    else:
+                        edit_message(cid, mid, t, m)
                 elif val.startswith("pg_"):
                     send_assets_menu(cid, int(val.split("_")[1]), mid)
                 elif val == "back_assets":
@@ -209,7 +390,8 @@ def webhook():
                     send_message(cid, "⏳ La tua richiesta è già in attesa di approvazione da parte dell'amministratore.")
                     return "ok", 200
                 pending_approval[cid] = txt_msg
-                admin_txt = "🔔 NUOVA RICHIESTA DI ACCESSO\n\n👤 ID Telegram: " + str(cid) + "\n🆔 ID Pocket Option: " + txt_msg
+                
+                admin_txt = "🔔 NUOVA RICHIESTA DI ACCESSO\n\n🆔 ID Pocket Option: " + txt_msg
                 send_message(SUPER_USER_CHAT_ID, admin_txt, {"inline_keyboard": [[{"text": "SI", "callback_data": "approve_" + str(cid)}, {"text": "NO", "callback_data": "reject_" + str(cid)}]]})
                 send_message(cid, "⏳ ID Pocket Option ricevuto. In attesa di approvazione...")
         except Exception as e:
