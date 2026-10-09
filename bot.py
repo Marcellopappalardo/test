@@ -132,17 +132,30 @@ def calculate_indicators(df):
 
 def generate_chart_image(df, asset_name):
     try:
-        # Ottimizzato a 30 candele per massima pulizia e velocità di caricamento
-        df_plot = df.tail(30).copy()
-        
+        # Taglio ottimizzato esattamente a 20 candele (coincidente con l'EMA 20)
         close_series = df['Close'].iloc[:, 0] if isinstance(df['Close'], pd.DataFrame) else df['Close']
-        ema20 = close_series.ewm(span=20, adjust=False).mean().tail(30)
+        ema20_full = close_series.ewm(span=20, adjust=False).mean()
 
-        market_colors = mpf.make_marketcolors(up='#26a69a', down='#ef5350', wick='inherit', edge='inherit')
-        custom_style = mpf.make_mpf_style(base_mpf_style='nightclouds', marketcolors=market_colors, facecolor='#1e1e1e', edgecolor='#333333', figcolor='#1e1e1e')
+        df_plot = df.tail(20).copy()
+        ema20_plot = ema20_full.tail(20)
+
+        market_colors = mpf.make_marketcolors(
+            up='#00E676', 
+            down='#FF5252', 
+            wick={'up': '#00E676', 'down': '#FF5252'}, 
+            edge='inherit',
+            volume='inherit'
+        )
+        custom_style = mpf.make_mpf_style(
+            base_mpf_style='nightclouds', 
+            marketcolors=market_colors, 
+            facecolor='#1e1e1e', 
+            edgecolor='#333333', 
+            figcolor='#1e1e1e'
+        )
 
         add_plots = [
-            mpf.make_addplot(ema20, color='#ffaa00', width=1.2, linestyle='--')
+            mpf.make_addplot(ema20_plot, color='#FFC107', width=1.5, linestyle='--')
         ]
 
         buf = io.BytesIO()
@@ -235,13 +248,15 @@ def fetch_yahoo_real_data(asset_name):
         return None
 
 def send_assets_menu(chat_id, page=0, msg_id=None):
-    per_page = 6
+    per_page = 9  # Griglia 3x3
     sub = ALL_ASSETS[page*per_page:(page+1)*per_page]
     kb = []
-    for i in range(0, len(sub), 2):
-        row = [{"text": sub[i], "callback_data": "ast_" + str(ALL_ASSETS.index(sub[i]))}]
-        if i + 1 < len(sub):
-            row.append({"text": sub[i+1], "callback_data": "ast_" + str(ALL_ASSETS.index(sub[i+1]))})
+    for i in range(0, len(sub), 3):
+        row = []
+        for j in range(3):
+            if i + j < len(sub):
+                asset_item = sub[i+j]
+                row.append({"text": asset_item, "callback_data": "ast_" + str(ALL_ASSETS.index(asset_item))})
         kb.append(row)
         
     nav = []
@@ -318,8 +333,11 @@ def webhook():
                         edit_message(cid, mid, error_text, error_kb)
                         return "ok", 200
 
+                    # Orario esatto italiano sincronizzato (+2 ore CEST)
                     italian_tz = timezone(timedelta(hours=2))
-                    generation_time = datetime.now(italian_tz)
+                    current_it_time = datetime.now(italian_tz)
+                    next_entry_dt = current_it_time + timedelta(minutes=1)
+                    entry_time = next_entry_dt.replace(second=0, microsecond=0).strftime('%H:%M:%S')
                     
                     rsi_val, macd_line, macd_signal, macd_hist, current_close, current_ema = calculate_indicators(data)
                     
@@ -337,9 +355,6 @@ def webhook():
                     sig_emoji = "🟢" if "ACQUISTA" in sig_type else "🔴"
                     exp_map = {"1m": "1 Minuto (1M)", "2m": "2 Minuti (2M)", "3m": "3 Minuti (3M)", "5m": "5 Minuti (5M)"}
                     expiry_name = exp_map.get(exp_key, "1 Minuto (1M)")
-                    
-                    next_entry_dt = generation_time + timedelta(minutes=1)
-                    entry_time = next_entry_dt.replace(second=0, microsecond=0).strftime('%H:%M:%S')
 
                     text = "🐂🐻 ANALISI EASY TRACK\n\n"
                     text += f"💲💹 Asset: {ast_name}\n"
