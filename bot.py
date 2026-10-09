@@ -10,7 +10,7 @@ import pandas as pd
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
-import mplfinance as mpf
+import matplotlib.pyplot as plt
 import io
 
 app = Flask(__name__)
@@ -173,30 +173,23 @@ def generate_chart_image(df, asset_name, sig_type):
     close = df['Close']
     if isinstance(close, pd.DataFrame):
         close = close.iloc[:, 0]
-    ema20 = close.ewm(span=20, adjust=False).mean()
+        
+    df_tail = close.tail(30)
+    ema20 = df_tail.ewm(span=20, adjust=False).mean()
     
-    mc = mpf.make_marketcolors(up='#26a69a', down='#ef5350', wick={'up':'#26a69a', 'down':'#ef5350'}, edge={'up':'#26a69a', 'down':'#ef5350'})
-    s = mpf.make_mpf_style(marketcolors=mc, facecolor='#131722', edgecolor='#131722', figcolor='#1e222d', gridcolor='#2a2e39')
+    fig, ax = plt.subplots(figsize=(6, 3.8), dpi=100)
+    fig.patch.set_facecolor('#1e222d')
+    ax.set_facecolor('#131722')
     
-    df_tail = df.tail(30)
-    ema_tail = ema20.tail(30)
+    ax.plot(df_tail.index, df_tail.values, color='#26a69a', linewidth=1.8, label='Prezzo')
+    ax.plot(df_tail.index, ema20.values, color='#ffaa00', linewidth=1.2, linestyle='--', label='EMA 20')
     
-    add_plots = [mpf.make_addplot(ema_tail, color='#ffaa00', width=1.2)]
+    ax.set_title(f"{asset_name} | Segnale: {sig_type}", fontsize=9, fontweight='bold', color='white')
+    ax.tick_params(colors='white', labelsize=7)
+    ax.grid(color='#2a2e39', linestyle='-', linewidth=0.5)
+    ax.legend(loc='upper left', facecolor='#1e222d', edgecolor='none', labelcolor='white', fontsize=7)
     
     buf = io.BytesIO()
-    fig, axes = mpf.plot(
-        df_tail,
-        type='candle',
-        style=s,
-        addplot=add_plots,
-        volume=False,
-        returnfig=True,
-        figratio=(5, 3.5),
-        figscale=0.8
-    )
-    axes[0].set_title(f"{asset_name} | Segnale: {sig_type}", fontsize=9, fontweight='bold', color='white')
-    axes[0].tick_params(colors='white', labelsize=7)
-    
     fig.savefig(buf, format='png', dpi=100, facecolor=fig.get_facecolor(), edgecolor='none', bbox_inches='tight')
     buf.seek(0)
     plt.close(fig)
@@ -252,7 +245,7 @@ def get_analysis_result(asset, exp_key):
             times.append(datetime.fromtimestamp(t_point))
             prices.append(base_price + math.sin(t_point / 45.0 + asset_code) * 5.0 + (i * 0.02))
             
-        data = pd.DataFrame({'Open': prices, 'High': [p+0.2 for p in prices], 'Low': [p-0.2 for p in prices], 'Close': prices}, index=pd.DatetimeIndex(times))
+        data = pd.DataFrame({'Close': prices}, index=pd.DatetimeIndex(times))
         rsi_val, macd_line, macd_signal, macd_hist, current_close, current_ema = calculate_indicators(data)
         sig_type = "ACQUISTA (BUY)" if macd_line > macd_signal or rsi_val < 42 else "VENDI (SELL)"
         conf = round(76.0 + 16.0 * abs(math.cos((current_ts / 45.0) + asset_code)), 1)
@@ -314,7 +307,7 @@ def webhook():
     if up:
         try:
             if "callback_query" in up:
-                cq = up["callback_query"]
+                cq = up["callback_query"], cq["message"]["chat"]["id"], cq["message"]["message_id"], cq["data"]
                 cid, mid, val = cq["message"]["chat"]["id"], cq["message"]["message_id"], cq["data"]
                 answer_callback(cq["id"])
                 
@@ -352,13 +345,8 @@ def webhook():
                         ast_name = parts[1]
                         exp_key = parts[2]
                     
-                    # 1. MOSTRA SUBITO IL TESTO DI ATTESA RAPIDO (Non si blocca)
-                    edit_message(cid, mid, f"⏳ Elaborazione segnale per {ast_name} ({exp_key.upper()})...")
-                    
-                    # 2. CALCOLA L'ANALISI E OTTIENI TESTO E FOTO
+                    edit_message(cid, mid, f"⏳ Elaborazione grafico per {ast_name} ({exp_key.upper()})...")
                     t, m, c_bytes = get_analysis_result(ast_name, exp_key)
-                    
-                    # 3. INVIA IL RISULTATO (Cancella il messaggio di attesa e manda la foto con il testo)
                     if c_bytes:
                         api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
                         send_photo(cid, c_bytes, t, m)
