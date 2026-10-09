@@ -82,7 +82,7 @@ def send_photo_message(chat_id, photo_buf, caption, markup=None):
     try:
         url = BASE_URL + "/sendPhoto"
         files = {'photo': ('chart.png', photo_buf, 'image/png')}
-        data = {'chat_id': chat_id, 'caption': caption}
+        data = {'chat_id': chat_id, 'caption': caption, 'parse_mode': 'Markdown'}
         if markup:
             data['reply_markup'] = json.dumps(markup)
         response = requests.post(url, data=data, files=files, timeout=10.0)
@@ -93,7 +93,7 @@ def send_photo_message(chat_id, photo_buf, caption, markup=None):
         return None
 
 def edit_message(chat_id, msg_id, text, markup=None):
-    p = {"chat_id": chat_id, "message_id": msg_id, "text": text}
+    p = {"chat_id": chat_id, "message_id": msg_id, "text": text, "parse_mode": "Markdown"}
     if markup: p["reply_markup"] = markup
     api_call("editMessageText", p)
 
@@ -191,9 +191,7 @@ def generate_chart_image(df, asset_name):
         return None
 
 def get_yahoo_ticker(asset_name):
-    # Pulisce la stringa rimuovendo la dicitura OTC e apici
     clean = asset_name.replace(" OTC", "").replace("'", "").strip()
-    
     mapping = {
         "EUR/USD": "EURUSD=X", "GBP/USD": "GBPUSD=X", "USD/JPY": "USDJPY=X",
         "AUD/USD": "AUDUSD=X", "USD/CAD": "USDCAD=X", "AUD/CAD": "AUDCAD=X",
@@ -213,14 +211,10 @@ def get_yahoo_ticker(asset_name):
         "MCDONALD'S": "MCD", "INTEL": "INTC", "BOEING COMPANY": "BA",
         "ALIBABA": "BABA", "CITIGROUP INC": "C", "EXXONMOBIL": "XOM"
     }
-    
     if clean in mapping:
         return mapping[clean]
-        
-    # Gestione automatica per le coppie di valute forex con lo slash (es. UAH/USD -> UAHUSD=X)
     if "/" in clean and len(clean) == 7:
         return clean.replace("/", "") + "=X"
-        
     return clean
 
 def fetch_yahoo_real_data(asset_name):
@@ -288,7 +282,7 @@ def send_assets_menu(chat_id, page=0, msg_id=None):
 
 def send_expiry_menu(chat_id, asset_name, msg_id):
     kb = {"inline_keyboard": [[{"text": "1 Minuto", "callback_data": "exp_1m"}], [{"text": "2 Minuti", "callback_data": "exp_2m"}], [{"text": "3 Minuti", "callback_data": "exp_3m"}], [{"text": "5 Minuti", "callback_data": "exp_5m"}], [{"text": "≡ Cambia Asset", "callback_data": "back_assets"}]]}
-    edit_message(chat_id, msg_id, "💲💹 Asset: " + asset_name + "\n\nSeleziona la scadenza:", kb)
+    edit_message(chat_id, msg_id, f"💲💹 Asset: {asset_name}\n\nSeleziona la scadenza:", kb)
 
 @app.route('/')
 def index():
@@ -369,18 +363,19 @@ def webhook():
                     next_entry_dt = generation_time + timedelta(minutes=1)
                     entry_time = next_entry_dt.replace(second=0, microsecond=0).strftime('%H:%M:%S')
 
+                    # Testo formattato correttamente con i backticks dentro le virgolette
                     text = "🐂🐻 ANALISI EASY TRACK\n\n"
-                    text += "💲💹 Asset: " + ast_name + "\n"
-                    text += "💵 Prezzo Reale: `" + str(round(current_close, 5))`\n"
-                    text += "🎯 Segnale: " + sig_type + " " + sig_emoji + "\n\n"
+                    text += f"💲💹 Asset: {ast_name}\n"
+                    text += f"💵 Prezzo Reale: `{round(current_close, 5)}`\n"
+                    text += f"🎯 Segnale: {sig_type} {sig_emoji}\n\n"
                     text += "🛠️ Indicatori:\n"
-                    text += "• RSI (9): " + str(rsi_val) + "\n"
-                    text += "• Linea MACD: " + str(macd_line) + "\n"
-                    text += "• Segnale MACD: " + str(macd_signal) + "\n"
-                    text += "• Istogramma: " + str(macd_hist) + "\n\n"
-                    text += "⚖️ Affidabilità: " + str(conf) + "%\n"
-                    text += "⏳ Scadenza: " + expiry_name + "\n"
-                    text += "📌 Entrata: " + entry_time
+                    text += f"• RSI (9): {rsi_val}\n"
+                    text += f"• Linea MACD: {macd_line}\n"
+                    text += f"• Segnale MACD: {macd_signal}\n"
+                    text += f"• Istogramma: {macd_hist}\n\n"
+                    text += f"⚖️ Affidabilità: {conf}%\n"
+                    text += f"⏳ Scadenza: {expiry_name}\n"
+                    text += f"📌 Entrata: {entry_time}"
                     
                     kb = {"inline_keyboard": [[{"text": "🔄 Aggiorna", "callback_data": "retry_" + ast_name + "_" + exp_key}], [{"text": "≡ Cambia Asset", "callback_data": "back_assets"}]]}
                     
