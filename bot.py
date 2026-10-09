@@ -2,17 +2,15 @@ import os
 import json
 import math
 import time
+import io
+import matplotlib
+matplotlib.use('Agg')  # Fondamentale per i server cloud come Render
+import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
 from flask import Flask, request
-import urllib.request
 import requests
 import pandas as pd
 import numpy as np
-import matplotlib
-matplotlib.use('Agg')
-import mplfinance as mpf
-import io
-import concurrent.futures
 
 app = Flask(__name__)
 
@@ -20,6 +18,9 @@ TG_TOKEN = "8585533636:AAE_J2ospaddCWva9gPHzE26dCp2_WaziLk"
 BASE_URL = "https://api.telegram.org/bot" + TG_TOKEN
 SUPER_USER_CHAT_ID = 6121337831
 USERS_FILE = "users.json"
+
+market_cache = {}
+CACHE_DURATION = 300  # 5 minuti di validità della cache reale
 
 ALL_ASSETS = [
     "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD", "AUD/CAD","USD/MXN",
@@ -64,10 +65,9 @@ authorized_users = load_users()
 def api_call(method, data):
     try:
         url = BASE_URL + "/" + method
-        body = json.dumps(data).encode("utf-8")
-        req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=8) as res:
-            return json.loads(res.read().decode("utf-8"))
+        headers = {"Content-Type": "application/json"}
+        response = requests.post(url, json=data, headers=headers, timeout=5.0)
+        return response.json()
     except Exception as e:
         print("Errore API Telegram:", e)
         return None
@@ -78,64 +78,27 @@ def send_message(chat_id, text, markup=None):
     res = api_call("sendMessage", p)
     return res.get("result", {}).get("message_id") if res and res.get("ok") else None
 
+def send_photo_message(chat_id, photo_buf, caption, markup=None):
+    try:
+        url = BASE_URL + "/sendPhoto"
+        files = {'photo': ('chart.png', photo_buf, 'image/png')}
+        data = {'chat_id': chat_id, 'caption': caption}
+        if markup:
+            data['reply_markup'] = json.dumps(markup)
+        response = requests.post(url, data=data, files=files, timeout=10.0)
+        res_json = response.json()
+        return res_json.get("result", {}).get("message_id") if res_json.get("ok") else None
+    except Exception as e:
+        print("Errore invio foto:", e)
+        return None
+
 def edit_message(chat_id, msg_id, text, markup=None):
     p = {"chat_id": chat_id, "message_id": msg_id, "text": text}
     if markup: p["reply_markup"] = markup
     api_call("editMessageText", p)
 
-def send_photo(chat_id, photo_bytes, caption, markup=None):
-    url = BASE_URL + "/sendPhoto"
-    boundary = '----WebKitFormBoundary7MA4YWxkTrZu0gW'
-    body = bytearray()
-    
-    body.extend(f'--{boundary}\r\n'.encode('utf-8'))
-    body.extend(b'Content-Disposition: form-data; name="chat_id"\r\n\r\n')
-    body.extend(f'{chat_id}\r\n'.encode('utf-8'))
-    
-    body.extend(f'--{boundary}\r\n'.encode('utf-8'))
-    body.extend(b'Content-Disposition: form-data; name="caption"\r\n\r\n')
-    body.extend(f'{caption}\r\n'.encode('utf-8'))
-    
-    if markup:
-        body.extend(f'--{boundary}\r\n'.encode('utf-8'))
-        body.extend(b'Content-Disposition: form-data; name="reply_markup"\r\n\r\n')
-        body.extend(f'{json.dumps(markup)}\r\n'.encode('utf-8'))
-        
-    body.extend(f'--{boundary}\r\n'.encode('utf-8'))
-    body.extend(b'Content-Disposition: form-data; name="photo"; filename="chart.png"\r\n')
-    body.extend(b'Content-Type: image/png\r\n\r\n')
-    body.extend(photo_bytes)
-    body.extend(b'\r\n')
-    
-    body.extend(f'--{boundary}--\r\n'.encode('utf-8'))
-    
-    req = urllib.request.Request(url, data=bytes(body), headers={'Content-Type': f'multipart/form-data; boundary={boundary}'})
-    try:
-        with urllib.request.urlopen(req, timeout=10) as res:
-            return json.loads(res.read().decode('utf-8'))
-    except Exception as e:
-        print("Errore sendPhoto:", e)
-        return None
-
 def answer_callback(cq_id):
     api_call("answerCallbackQuery", {"callback_query_id": cq_id})
-
-def get_yahoo_ticker(asset):
-    asset_clean = asset.replace(" OTC", "")
-    if "/" in asset_clean and len(asset_clean) == 7:
-        parts = asset_clean.split("/")
-        return parts[0] + parts[1] + "=X"
-    if "BTC" in asset_clean or "ETH" in asset_clean or "LTC" in asset_clean or "XRP" in asset_clean or "ADA" in asset_clean or "SOL" in asset_clean:
-        return asset_clean.replace("/", "-")
-        
-    mapping = {
-        "GOLD": "GC=F", "SILVER": "SI=F", "BRENT OIL": "BZ=F", "WTI OIL": "CL=F",
-        "NATURAL GAS": "NG=F", "APPLE": "AAPL", "MICROSOFT": "MSFT", "TESLA": "TSLA",
-        "AMAZON": "AMZN", "NETFLIX": "NFLX", "GOOGLE": "GOOGL", "META": "META",
-        "MCDONALD'S": "MCD", "COCA COLA": "KO", "INTEL": "INTC", "BOEING COMPANY": "BA",
-        "ALIBABA": "BABA", "CITIGROUP INC": "C", "EXXONMOBIL": "XOM"
-    }
-    return mapping.get(asset_clean, asset_clean)
 
 def calculate_indicators(df):
     close = df['Close']
@@ -167,132 +130,139 @@ def calculate_indicators(df):
     
     return current_rsi, m_line, m_sig, m_hist, current_close, current_ema
 
-def generate_chart_image(df, asset_name, sig_type):
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
+def generate_chart_image(df, asset_name):
+    try:
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(8, 6), sharex=True, gridspec_kw={'height_ratios': [3, 1]})
+        fig.patch.set_facecolor('#1e1e1e')
         
-    close = df['Close']
-    if isinstance(close, pd.DataFrame):
-        close = close.iloc[:, 0]
-    ema20 = close.ewm(span=20, adjust=False).mean()
-    
-    mc = mpf.make_marketcolors(up='#26a69a', down='#ef5350', wick={'up':'#26a69a', 'down':'#ef5350'}, edge={'up':'#26a69a', 'down':'#ef5350'})
-    s = mpf.make_mpf_style(marketcolors=mc, facecolor='#131722', edgecolor='#131722', figcolor='#1e222d', gridcolor='#2a2e39')
-    
-    df_tail = df.tail(30)
-    ema_tail = ema20.tail(30)
-    
-    add_plots = [mpf.make_addplot(ema_tail, color='#ffaa00', width=1.2)]
-    
-    buf = io.BytesIO()
-    fig, axes = mpf.plot(
-        df_tail,
-        type='candle',
-        style=s,
-        addplot=add_plots,
-        volume=False,
-        returnfig=True,
-        figratio=(5, 3.5),
-        figscale=0.8
-    )
-    axes[0].set_title(f"{asset_name} | Segnale: {sig_type}", fontsize=9, fontweight='bold', color='white')
-    axes[0].tick_params(colors='white', labelsize=7)
-    
-    fig.savefig(buf, format='png', dpi=100, facecolor=fig.get_facecolor(), edgecolor='none', bbox_inches='tight')
-    buf.seek(0)
-    plt.close(fig)
-    return buf.read()
-
-def fetch_yahoo_json(ticker):
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1m&range=1h"
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36'}
-    res = requests.get(url, headers=headers, timeout=4)
-    data = res.json()
-    result = data['chart']['result'][0]
-    timestamps = result['timestamp']
-    quote = result['indicators']['quote'][0]
-    
-    df = pd.DataFrame({
-        'Open': quote['open'],
-        'High': quote['high'],
-        'Low': quote['low'],
-        'Close': quote['close']
-    }, index=pd.to_datetime(timestamps, unit='s'))
-    return df.dropna()
-
-def get_analysis_result(asset, exp_key):
-    is_otc = "OTC" in asset
-    data = None
-    source_label = ""
-
-    if not is_otc:
-        ticker = get_yahoo_ticker(asset)
-        try:
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                future = executor.submit(fetch_yahoo_json, ticker)
-                data = future.result(timeout=4.0)
-            source_label = "Reale (Yahoo API + EMA)"
-        except Exception as e:
-            print(f"Errore Yahoo API per {asset}: {e}")
-            # Fallback intelligente immediato se Yahoo blocca la connessione sul cloud
-            is_otc = True
-
-    if is_otc or data is None:
-        current_ts = time.time()
-        times, prices = [], []
-        asset_code = sum(ord(c) for c in asset)
-        base_price = 100.0 + (asset_code % 50)
+        dates = np.arange(len(df))
+        opens = df['Open'].values if isinstance(df['Open'], pd.Series) else df['Open']
+        highs = df['High'].values if isinstance(df['High'], pd.Series) else df['High']
+        lows = df['Low'].values if isinstance(df['Low'], pd.Series) else df['Low']
+        closes = df['Close'].values if isinstance(df['Close'], pd.Series) else df['Close']
         
-        for i in range(30, 0, -1):
-            t_point = current_ts - (i * 60)
-            times.append(datetime.fromtimestamp(t_point))
-            prices.append(base_price + math.sin(t_point / 40.0 + asset_code) * 4.5 + (i * 0.02))
+        close_series = df['Close'].iloc[:, 0] if isinstance(df['Close'], pd.DataFrame) else df['Close']
+        ema20 = close_series.ewm(span=20, adjust=False).mean()
+
+        ax1.set_facecolor('#1e1e1e')
+        
+        width = 0.6
+        up_col = '#26a69a'
+        down_col = '#ef5350'
+
+        for i in range(len(dates)):
+            o, h, l, c = opens[i], highs[i], lows[i], closes[i]
+            color = up_col if c >= o else down_col
+            ax1.plot([dates[i], dates[i]], [l, h], color=color, linewidth=1)
+            body_bottom = min(o, c)
+            body_height = abs(c - o) if abs(c - o) > 0 else 0.00001
+            ax1.bar(dates[i], body_height, bottom=body_bottom, width=width, color=color, edgecolor=color)
+
+        ax1.plot(dates, ema20.values, label='EMA 20', color='#ffaa00', linestyle='--', linewidth=1.2)
+        ax1.set_title(f"Analisi Tecnica: {asset_name}", color='white', fontsize=11, fontweight='bold')
+        ax1.tick_params(colors='white', labelsize=8)
+        ax1.grid(True, color='#333333', linestyle=':', alpha=0.7)
+        ax1.legend(loc='upper left', facecolor='#2d2d2d', edgecolor='none', labelcolor='white', fontsize=8)
+
+        delta = close_series.diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=9).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=9).mean()
+        rs = gain / loss
+        rsi = 100 - (100 / (1 + rs))
+
+        ax2.set_facecolor('#1e1e1e')
+        ax2.plot(dates, rsi.values, label='RSI (9)', color='#bf00ff', linewidth=1.2)
+        ax2.axhline(70, color='#ff4444', linestyle='--', alpha=0.5, linewidth=1)
+        ax2.axhline(30, color='#44bb44', linestyle='--', alpha=0.5, linewidth=1)
+        ax2.set_ylim(0, 100)
+        ax2.tick_params(colors='white', labelsize=8)
+        ax2.grid(True, color='#333333', linestyle=':', alpha=0.7)
+        ax2.legend(loc='upper left', facecolor='#2d2d2d', edgecolor='none', labelcolor='white', fontsize=8)
+
+        plt.tight_layout()
+        
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png', facecolor=fig.get_facecolor(), edgecolor='none', dpi=100)
+        buf.seek(0)
+        plt.close(fig)
+        return buf
+    except Exception as e:
+        print("Errore nella generazione del grafico a candele:", e)
+        return None
+
+def get_yahoo_ticker(asset_name):
+    # Pulisce la stringa rimuovendo la dicitura OTC e apici
+    clean = asset_name.replace(" OTC", "").replace("'", "").strip()
+    
+    mapping = {
+        "EUR/USD": "EURUSD=X", "GBP/USD": "GBPUSD=X", "USD/JPY": "USDJPY=X",
+        "AUD/USD": "AUDUSD=X", "USD/CAD": "USDCAD=X", "AUD/CAD": "AUDCAD=X",
+        "USD/MXN": "USDMXN=X", "USD/PKR": "USDPKR=X", "EUR/RUB": "EURRUB=X",
+        "EUR/TRY": "EURTRY=X", "USD/CHF": "USDCHF=X", "EUR/GBP": "EURGBP=X",
+        "EUR/JPY": "EURJPY=X", "GBP/JPY": "GBPJPY=X", "AUD/JPY": "AUDJPY=X",
+        "AUD/CHF": "AUDCHF=X", "NZD/USD": "NZDUSD=X", "EUR/AUD": "EURAUD=X",
+        "EUR/CAD": "EURCAD=X", "EUR/NZD": "EURNZD=X", "GBP/NZD": "GBPNZD=X",
+        "AUD/NZD": "AUDNZD=X", "CAD/JPY": "CADJPY=X", "CHF/JPY": "CHFJPY=X",
+        "GBP/CAD": "GBPCAD=X", "GBP/AUD": "GBPAUD=X", "USD/ARS": "USDARS=X",
+        "Bitcoin": "BTC-USD", "Ethereum": "ETH-USD", "Cardano": "ADA-USD",
+        "Solana": "SOL-USD", "Dogecoin": "DOGE-USD", "Litecoin": "LTC-USD",
+        "Polkadot": "DOT-USD", "Toncoin": "TON-USD", "TRON": "TRX-USD",
+        "Chainlink": "LINK-USD", "Avalanche": "AVAX-USD", "Polygon": "MATIC-USD",
+        "BNB": "BNB-USD", "APPLE": "AAPL", "MICROSOFT": "MSFT", "TESLA": "TSLA",
+        "AMAZON": "AMZN", "NETFLIX": "NFLX", "GOOGLE": "GOOGL", "META": "META",
+        "MCDONALD'S": "MCD", "INTEL": "INTC", "BOEING COMPANY": "BA",
+        "ALIBABA": "BABA", "CITIGROUP INC": "C", "EXXONMOBIL": "XOM"
+    }
+    
+    if clean in mapping:
+        return mapping[clean]
+        
+    # Gestione automatica per le coppie di valute forex con lo slash (es. UAH/USD -> UAHUSD=X)
+    if "/" in clean and len(clean) == 7:
+        return clean.replace("/", "") + "=X"
+        
+    return clean
+
+def fetch_yahoo_real_data(asset_name):
+    current_time = time.time()
+    if asset_name in market_cache:
+        ts, cached_df = market_cache[asset_name]
+        if current_time - ts < CACHE_DURATION:
+            return cached_df
+
+    ticker_symbol = get_yahoo_ticker(asset_name)
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker_symbol}?interval=1m&range=1d"
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+        'Accept': 'application/json'
+    }
+    
+    try:
+        response = requests.get(url, headers=headers, timeout=2.0)
+        data = response.json()
+        result = data['chart']['result'][0]
+        timestamps = result['timestamp']
+        quote = result['indicators']['quote'][0]
+        
+        df = pd.DataFrame({
+            'Open': quote['open'],
+            'High': quote['high'],
+            'Low': quote['low'],
+            'Close': quote['close']
+        }, index=pd.to_datetime(timestamps, unit='s'))
+        
+        clean_df = df.dropna()
+        if clean_df.empty:
+            raise Exception("Dati vuoti")
             
-        data = pd.DataFrame({
-            'Open': [p - 0.1 for p in prices],
-            'High': [p + 0.3 for p in prices],
-            'Low': [p - 0.3 for p in prices],
-            'Close': prices
-        }, index=pd.DatetimeIndex(times))
-        source_label = "OTC (Analisi Dedicata)" if "OTC" in asset else "Reale (Fallback Istantaneo)"
-
-    generation_time = datetime.now()
-    rsi_val, macd_line, macd_signal, macd_hist, current_close, current_ema = calculate_indicators(data)
-    
-    trend_bullish = current_close > current_ema
-    if trend_bullish and (macd_line >= macd_signal or rsi_val < 48):
-        sig_type = "ACQUISTA (BUY)"
-    elif not trend_bullish and (macd_line <= macd_signal or rsi_val > 52):
-        sig_type = "VENDI (SELL)"
-    else:
-        sig_type = "ACQUISTA (BUY)" if macd_line > macd_signal else "VENDI (SELL)"
-        
-    conf = round(79.0 + abs(macd_hist) * 800, 1)
-    conf = min(97.0, max(68.0, conf))
-    
-    chart_bytes = generate_chart_image(data, asset, sig_type)
-
-    sig_emoji = "🟢" if "ACQUISTA" in sig_type else "🔴"
-    exp_map = {"1m": "1 Minuto (1M)", "2m": "2 Minuti (2M)", "3m": "3 Minuti (3M)", "5m": "5 Minuti (5M)"}
-    expiry_name = exp_map.get(exp_key, "1 Minuto (1M)")
-    
-    next_entry_dt = generation_time + timedelta(minutes=1)
-    entry_time = next_entry_dt.replace(second=0, microsecond=0).strftime('%H:%M:%S')
-
-    text = "🐂🐻 ANALISI EASY TRACK\n\n"
-    text += "💲💹 Asset: " + asset + " [" + source_label + "]\n"
-    text += "🎯 Segnale: " + sig_type + " " + sig_emoji + "\n\n"
-    text += "🛠️ Indicatori:\n"
-    text += "• RSI (9): " + str(rsi_val) + "\n"
-    text += "• Linea MACD: " + str(macd_line) + "\n"
-    text += "• Segnale MACD: " + str(macd_signal) + "\n"
-    text += "• Istogramma: " + str(macd_hist) + "\n\n"
-    text += "⚖️ Affidabilità: " + str(conf) + "%\n"
-    text += "⏳ Scadenza: " + expiry_name + "\n"
-    text += "📌 Entrata: " + entry_time
-    
-    kb = {"inline_keyboard": [[{"text": "🔄 Aggiorna", "callback_data": "retry_" + asset + "_" + exp_key}], [{"text": "≡ Cambia Asset", "callback_data": "back_assets"}]]}
-    return text, kb, chart_bytes
+        market_cache[asset_name] = (current_time, clean_df)
+        return clean_df
+    except Exception as e:
+        print(f"Timeout o errore di rete per {asset_name}: {e}")
+        if asset_name in market_cache:
+            _, old_df = market_cache[asset_name]
+            return old_df
+        return None
 
 def send_assets_menu(chat_id, page=0, msg_id=None):
     per_page = 6
@@ -311,10 +281,8 @@ def send_assets_menu(chat_id, page=0, msg_id=None):
         
     text = "👋 Scegli un asset:"
     if msg_id:
-        try:
-            edit_message(chat_id, msg_id, text, {"inline_keyboard": kb})
-        except:
-            send_message(chat_id, text, {"inline_keyboard": kb})
+        try: edit_message(chat_id, msg_id, text, {"inline_keyboard": kb})
+        except: send_message(chat_id, text, {"inline_keyboard": kb})
     else:
         send_message(chat_id, text, {"inline_keyboard": kb})
 
@@ -324,7 +292,7 @@ def send_expiry_menu(chat_id, asset_name, msg_id):
 
 @app.route('/')
 def index():
-    return "Il bot è attivo e stabilizzato al 100%!", 200
+    return "Bot operativo al 100%!", 200
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -370,13 +338,60 @@ def webhook():
                         exp_key = parts[-1]
                         ast_name = "_".join(parts[1:-1])
                     
-                    edit_message(cid, mid, f"⏳ Analisi in corso per {ast_name} ({exp_key.upper()})...")
-                    t, m, c_bytes = get_analysis_result(ast_name, exp_key)
+                    edit_message(cid, mid, f"⏳ Elaborazione per {ast_name} ({exp_key.upper()})...")
                     
-                    edit_message(cid, mid, t, m)
+                    data = fetch_yahoo_real_data(ast_name)
+
+                    if data is None or data.empty:
+                        error_text = f"⚠️ **Yahoo Finance non risponde per {ast_name}.**\n\nIl server è temporaneamente occupato. Clicca su Aggiorna per riprovare."
+                        error_kb = {"inline_keyboard": [[{"text": "🔄 Aggiorna", "callback_data": "retry_" + ast_name + "_" + exp_key}], [{"text": "≡ Cambia Asset", "callback_data": "back_assets"}]]}
+                        edit_message(cid, mid, error_text, error_kb)
+                        return "ok", 200
+
+                    generation_time = datetime.now()
+                    rsi_val, macd_line, macd_signal, macd_hist, current_close, current_ema = calculate_indicators(data)
                     
-                    if c_bytes:
-                        send_photo(cid, c_bytes, f"📈 Candele {ast_name} ({exp_key.upper()})")
+                    trend_bullish = current_close > current_ema
+                    if trend_bullish and (macd_line >= macd_signal or rsi_val < 48):
+                        sig_type = "ACQUISTA (BUY)"
+                    elif not trend_bullish and (macd_line <= macd_signal or rsi_val > 52):
+                        sig_type = "VENDI (SELL)"
+                    else:
+                        sig_type = "ACQUISTA (BUY)" if macd_line > macd_signal else "VENDI (SELL)"
+                        
+                    conf = round(79.0 + abs(macd_hist) * 800, 1)
+                    conf = min(97.0, max(68.0, conf))
+
+                    sig_emoji = "🟢" if "ACQUISTA" in sig_type else "🔴"
+                    exp_map = {"1m": "1 Minuto (1M)", "2m": "2 Minuti (2M)", "3m": "3 Minuti (3M)", "5m": "5 Minuti (5M)"}
+                    expiry_name = exp_map.get(exp_key, "1 Minuto (1M)")
+                    
+                    next_entry_dt = generation_time + timedelta(minutes=1)
+                    entry_time = next_entry_dt.replace(second=0, microsecond=0).strftime('%H:%M:%S')
+
+                    text = "🐂🐻 ANALISI EASY TRACK\n\n"
+                    text += "💲💹 Asset: " + ast_name + "\n"
+                    text += "💵 Prezzo Reale: `" + str(round(current_close, 5))`\n"
+                    text += "🎯 Segnale: " + sig_type + " " + sig_emoji + "\n\n"
+                    text += "🛠️ Indicatori:\n"
+                    text += "• RSI (9): " + str(rsi_val) + "\n"
+                    text += "• Linea MACD: " + str(macd_line) + "\n"
+                    text += "• Segnale MACD: " + str(macd_signal) + "\n"
+                    text += "• Istogramma: " + str(macd_hist) + "\n\n"
+                    text += "⚖️ Affidabilità: " + str(conf) + "%\n"
+                    text += "⏳ Scadenza: " + expiry_name + "\n"
+                    text += "📌 Entrata: " + entry_time
+                    
+                    kb = {"inline_keyboard": [[{"text": "🔄 Aggiorna", "callback_data": "retry_" + ast_name + "_" + exp_key}], [{"text": "≡ Cambia Asset", "callback_data": "back_assets"}]]}
+                    
+                    chart_buf = generate_chart_image(data, ast_name)
+                    
+                    api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
+                    if chart_buf:
+                        send_photo_message(cid, chart_buf, text, kb)
+                    else:
+                        send_message(cid, text, kb)
+
                 elif val.startswith("pg_"):
                     api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
                     send_assets_menu(cid, int(val.split("_")[1]))
@@ -397,7 +412,7 @@ def webhook():
                 send_message(SUPER_USER_CHAT_ID, "🔔 Richiesta ID: " + txt_msg, {"inline_keyboard": [[{"text": "SI", "callback_data": "approve_" + str(cid)}, {"text": "NO", "callback_data": "reject_" + str(cid)}]]})
                 send_message(cid, "⏳ In attesa di approvazione...")
         except Exception as e:
-            print("Errore:", e)
+            print("Errore nel webhook:", e)
     return "ok", 200
 
 if __name__ == "__main__":
