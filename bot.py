@@ -2,7 +2,7 @@ import os
 import json
 import math
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from flask import Flask, request
 import urllib.request
 import yfinance as yf
@@ -23,16 +23,16 @@ USERS_FILE = "users.json"
 ALL_ASSETS = [
     "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD", "AUD/CAD","USD/MXN",
     "USD/PKR", "EUR/RUB", "EUR/TRY", "JOD/CNY", "NGN/USD", "LBP/USD", "TND/USD",
-    "AUD/CHF", "NZD/USD", "USD/CHF", "EUR/GBP", "EUR/JPY", "GBP/JPY", "NGN/USD",
+    "AUD/CHF", "NZD/USD", "USD/CHF", "EUR/GBP", "EUR/JPY", "GBP/JPY",
     "AUD/JPY", "EUR/AUD", "EUR/CAD", "EUR/NZD", "GBP/NZD", "AUD/NZD", "QAR/CNY",
     "CAD/JPY", "CHF/JPY", "GBP/CAD", "GBP/AUD", "USD/ARS", "UAH/USD", "SAR/CNY",
-    "LBP/USD", "EUR/USD OTC", "GBP/USD OTC", "USD/ARS OTC", "QAR/CNY OTC", "LBP/USD OTC",
+    "EUR/USD OTC", "GBP/USD OTC", "USD/ARS OTC", "QAR/CNY OTC", "LBP/USD OTC",
     "USD/JPY OTC", "AUD/USD OTC", "NGN/USD OTC", "USD/CAD OTC", "AUD/CAD OTC", "NZD/USD OTC",
     "USD/MXN OTC", "USD/PKR OTC", "EUR/RUB OTC", "EUR/TRY OTC", "JOD/CNY OTC",
     "USD/CHF OTC", "EUR/GBP OTC", "EUR/JPY OTC", "GBP/JPY OTC", "AUD/JPY OTC", 
     "AUD/CHF OTC", "EUR/AUD OTC", "EUR/CAD OTC", "EUR/NZD OTC", "GBP/NZD OTC", 
     "AUD/NZD OTC", "CAD/JPY OTC", "CHF/JPY OTC", "GBP/CAD OTC", "GBP/AUD OTC",
-    "TND/USD OTC", "UAH/USD OTC", "SAR/CNY OTC", "LBP/USD OTC", "Bitcoin OTC",
+    "TND/USD OTC", "UAH/USD OTC", "SAR/CNY OTC", "Bitcoin OTC",
     "Cardano OTC", "Polkadot OTC", "Toncoin OTC", "Bitcoin ETF OTC", "TRON OTC",
     "Dogecoin OTC", "Litecoin OTC", "Chainlink OTC", "Solana OTC", "BNB OTC", "Polygon OTC",
     "Ethereum OTC", "Avalanche OTC", "Dash", "BCH/EUR", "BCH/GBP", "BCH/JPY", "BTC/GBP", "BTC/JPY", "Bitcoin",
@@ -65,7 +65,7 @@ def api_call(method, data):
         url = BASE_URL + "/" + method
         body = json.dumps(data).encode("utf-8")
         req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
-        with urllib.request.urlopen(req, timeout=10) as res:
+        with urllib.request.urlopen(req, timeout=8) as res:
             return json.loads(res.read().decode("utf-8"))
     except Exception as e:
         print("Errore API Telegram:", e)
@@ -110,7 +110,7 @@ def send_photo(chat_id, photo_bytes, caption, markup=None):
     
     req = urllib.request.Request(url, data=bytes(body), headers={'Content-Type': f'multipart/form-data; boundary={boundary}'})
     try:
-        with urllib.request.urlopen(req, timeout=15) as res:
+        with urllib.request.urlopen(req, timeout=10) as res:
             return json.loads(res.read().decode('utf-8'))
     except Exception as e:
         print("Errore sendPhoto:", e)
@@ -178,23 +178,23 @@ def generate_chart_image(df, asset_name, sig_type):
     mc = mpf.make_marketcolors(up='#26a69a', down='#ef5350', wick={'up':'#26a69a', 'down':'#ef5350'}, edge={'up':'#26a69a', 'down':'#ef5350'})
     s = mpf.make_mpf_style(marketcolors=mc, facecolor='#131722', edgecolor='#131722', figcolor='#1e222d', gridcolor='#2a2e39')
     
-    add_plots = [mpf.make_addplot(ema20.tail(40), color='#ffaa00', width=1.2)]
+    add_plots = [mpf.make_addplot(ema20.tail(30), color='#ffaa00', width=1.2)]
     
     buf = io.BytesIO()
     fig, axes = mpf.plot(
-        df.tail(40),
+        df.tail(30),
         type='candle',
         style=s,
         addplot=add_plots,
         volume=False,
         returnfig=True,
-        figratio=(6, 4),
-        figscale=0.9
+        figratio=(5, 3.5),
+        figscale=0.8
     )
     axes[0].set_title(f"{asset_name} | Segnale: {sig_type}", fontsize=9, fontweight='bold', color='white')
     axes[0].tick_params(colors='white', labelsize=7)
     
-    fig.savefig(buf, format='png', dpi=110, facecolor=fig.get_facecolor(), edgecolor='none', bbox_inches='tight')
+    fig.savefig(buf, format='png', dpi=100, facecolor=fig.get_facecolor(), edgecolor='none', bbox_inches='tight')
     buf.seek(0)
     plt.close(fig)
     return buf.read()
@@ -244,7 +244,7 @@ def get_analysis_result(asset, exp_key):
         asset_code = sum(ord(c) for c in asset)
         base_price = 100.0 + (asset_code % 50)
         
-        for i in range(40, 0, -1):
+        for i in range(30, 0, -1):
             t_point = current_ts - (i * 60)
             times.append(datetime.fromtimestamp(t_point))
             prices.append(base_price + math.sin(t_point / 45.0 + asset_code) * 5.0 + (i * 0.02))
@@ -257,7 +257,11 @@ def get_analysis_result(asset, exp_key):
         chart_bytes = generate_chart_image(data, asset, sig_type)
 
     sig_emoji = "🟢" if "ACQUISTA" in sig_type else "🔴"
-    entry_time = datetime.now().strftime('%H:%M:%S')
+    exp_map = {"1m": "1 Minuto (1M)", "2m": "2 Minuti (2M)", "3m": "3 Minuti (3M)", "5m": "5 Minuti (5M)"}
+    expiry_name = exp_map.get(exp_key, "1 Minuto (1M)")
+    
+    next_minute = datetime.now() + timedelta(minutes=1)
+    entry_time = next_minute.replace(second=0, microsecond=0).strftime('%H:%M:%S')
 
     text = "🐂🐻 ANALISI EASY TRACK\n\n"
     text += "💲💹 Asset: " + asset + " [" + source_label + "]\n"
@@ -268,7 +272,7 @@ def get_analysis_result(asset, exp_key):
     text += "• Segnale MACD: " + str(macd_signal) + "\n"
     text += "• Istogramma: " + str(macd_hist) + "\n\n"
     text += "⚖️ Affidabilità: " + str(conf) + "%\n"
-    text += "⏳ Scadenza: 1 Minuto (1M)\n"
+    text += "⏳ Scadenza: " + expiry_name + "\n"
     text += "📌 Entrata: " + entry_time
     
     kb = {"inline_keyboard": [[{"text": "🔄 Aggiorna", "callback_data": "retry_" + asset + "_" + exp_key}], [{"text": "≡ Cambia Asset", "callback_data": "back_assets"}]]}
@@ -289,13 +293,17 @@ def send_assets_menu(chat_id, page=0, msg_id=None):
     if (page + 1) * per_page < len(ALL_ASSETS): nav.append({"text": "Avanti", "callback_data": "pg_" + str(page+1)})
     if nav: kb.append(nav)
         
-    text = "👋 Bentornato! Scegli un asset per l'analisi (Timeframe M1):"
+    text = "👋 Scegli un asset:"
     if msg_id: edit_message(chat_id, msg_id, text, {"inline_keyboard": kb})
     else: send_message(chat_id, text, {"inline_keyboard": kb})
 
+def send_expiry_menu(chat_id, asset_name, msg_id):
+    kb = {"inline_keyboard": [[{"text": "1 Minuto", "callback_data": "exp_1m"}], [{"text": "2 Minuti", "callback_data": "exp_2m"}], [{"text": "3 Minuti", "callback_data": "exp_3m"}], [{"text": "5 Minuti", "callback_data": "exp_5m"}], [{"text": "≡ Cambia Asset", "callback_data": "back_assets"}]]}
+    edit_message(chat_id, msg_id, "💲💹 Asset: " + asset_name + "\n\nSeleziona la scadenza:", kb)
+
 @app.route('/')
 def index():
-    return "Il bot con grafici a candele è attivo e online!", 200
+    return "Il bot è attivo e ottimizzato!", 200
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -314,24 +322,29 @@ def webhook():
                             authorized_users.add(target)
                             save_users()
                             pending_approval.pop(target, None)
-                            send_message(target, "✅ Il tuo account è stato approvato! Puoi già usare il bot.")
+                            send_message(target, "✅ Account approvato!")
                             send_assets_menu(target, 0)
-                            edit_message(cid, mid, "Richiesta APPROVATA ✅")
+                            edit_message(cid, mid, "Approvato ✅")
                         else:
                             pending_approval.pop(target, None)
-                            send_message(target, "❌ Richiesta rifiutata dall'amministratore.")
-                            edit_message(cid, mid, "Richiesta RIFIUTATA ❌")
+                            send_message(target, "❌ Rifiutato.")
+                            edit_message(cid, mid, "Rifiutato ❌")
                     return "ok", 200
                     
                 if cid != SUPER_USER_CHAT_ID and cid not in authorized_users:
-                    send_message(cid, "⚠️ Non sei autorizzato. Invia prima il tuo ID Pocket Option per richiedere l'accesso.")
+                    send_message(cid, "⚠️ Non autorizzato.")
                     return "ok", 200
                     
                 if val.startswith("ast_"):
                     ast = ALL_ASSETS[int(val.split("_")[1])]
                     user_selection[cid] = {"asset": ast}
-                    # Esegue direttamente l'analisi a 1 minuto per velocizzare la risposta
-                    t, m, c_bytes = get_analysis_result(ast, "1m")
+                    send_expiry_menu(cid, ast, mid)
+                elif val.startswith("exp_"):
+                    sel = user_selection.get(cid, {})
+                    ast_name = sel.get("asset", "EUR/USD")
+                    exp_key = val.split("_")[1]
+                    edit_message(cid, mid, "⏳ Analisi in corso per " + ast_name + " (" + exp_key.upper() + ")...")
+                    t, m, c_bytes = get_analysis_result(ast_name, exp_key)
                     if c_bytes:
                         api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
                         send_photo(cid, c_bytes, t, m)
@@ -339,6 +352,7 @@ def webhook():
                         edit_message(cid, mid, t, m)
                 elif val.startswith("retry_"):
                     parts = val.split("_")
+                    edit_message(cid, mid, "⏳ Aggiornamento in corso...")
                     t, m, c_bytes = get_analysis_result(parts[1], parts[2])
                     if c_bytes:
                         api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
@@ -357,15 +371,13 @@ def webhook():
                     send_assets_menu(cid, 0)
                     return "ok", 200
                 if cid in pending_approval:
-                    send_message(cid, "⏳ La tua richiesta è già in attesa di approvazione da parte dell'amministratore.")
+                    send_message(cid, "⏳ In attesa di approvazione.")
                     return "ok", 200
                 pending_approval[cid] = txt_msg
-                
-                admin_txt = "🔔 NUOVA RICHIESTA DI ACCESSO\n\n🆔 ID Pocket Option: " + txt_msg
-                send_message(SUPER_USER_CHAT_ID, admin_txt, {"inline_keyboard": [[{"text": "SI", "callback_data": "approve_" + str(cid)}, {"text": "NO", "callback_data": "reject_" + str(cid)}]]})
-                send_message(cid, "⏳ ID Pocket Option ricevuto. In attesa di approvazione...")
+                send_message(SUPER_USER_CHAT_ID, "🔔 Richiesta ID: " + txt_msg, {"inline_keyboard": [[{"text": "SI", "callback_data": "approve_" + str(cid)}, {"text": "NO", "callback_data": "reject_" + str(cid)}]]})
+                send_message(cid, "⏳ In attesa di approvazione...")
         except Exception as e:
-            print("Errore nella gestione del webhook:", e)
+            print("Errore:", e)
     return "ok", 200
 
 if __name__ == "__main__":
