@@ -26,7 +26,6 @@ chart_lock = threading.Lock()
 
 # Asset reali e OTC affiancati (disposizione 3x3)
 ALL_ASSETS = [
-    # Forex principali & FX minori
     "EUR/USD", "EUR/USD OTC", "GBP/USD", 
     "GBP/USD OTC", "USD/JPY", "USD/JPY OTC",
     "AUD/USD", "AUD/USD OTC", "USD/CAD", 
@@ -243,7 +242,7 @@ def fetch_yahoo_real_data(asset_name):
     }
     
     try:
-        response = requests.get(url, headers=headers, timeout=2.5)
+        response = requests.get(url, headers=headers, timeout=3.0)
         if response.status_code != 200:
             raise Exception(f"HTTP {response.status_code}")
             
@@ -262,14 +261,6 @@ def fetch_yahoo_real_data(asset_name):
         clean_df = df.dropna()
         if clean_df.empty:
             raise Exception("Dati vuoti")
-            
-        last_candle_time = clean_df.index[-1]
-        now_utc = pd.Timestamp.now(tz='UTC').tz_localize(None)
-        
-        # Se l'ultimo dato è più vecchio di 1.5 ore e NON è OTC o Crypto, il mercato è chiuso (es. Sabato/Domenica)
-        if (now_utc - last_candle_time).total_seconds() > 5400:
-            if "OTC" not in asset_name and "BTC" not in asset_name and "ETH" not in asset_name and "Bitcoin" not in asset_name and "Ethereum" not in asset_name:
-                return "MERCATO_CHIUSO"
 
         market_cache[asset_name] = (current_time, clean_df)
         return clean_df
@@ -312,14 +303,8 @@ def process_analysis_background(cid, mid, ast_name, exp_key):
     try:
         data = fetch_yahoo_real_data(ast_name)
 
-        if data == "MERCATO_CHIUSO":
-            closed_text = f"⚠️ **Mercato Chiuso per {ast_name}!**\n\nQuesto asset reale è chiuso nel fine settimana. Scegli un asset con dicitura **OTC** oppure una **Crypto**."
-            closed_kb = {"inline_keyboard": [[{"text": "≡ Cambia Asset", "callback_data": "back_assets"}]]}
-            edit_message(cid, mid, closed_text, closed_kb)
-            return
-
         if data is None or data.empty:
-            error_text = f"⚠️ **Yahoo Finance non risponde per {ast_name}.**\n\nIl server è temporaneamente occupato. Clicca su Aggiorna per riprovare."
+            error_text = f"⚠️ **Impossibile recuperare i dati per {ast_name}.**\n\nIl server è temporaneamente occupato. Clicca su Aggiorna per riprovare."
             error_kb = {"inline_keyboard": [[{"text": "🔄 Aggiorna", "callback_data": "retry_" + ast_name + "_" + exp_key}], [{"text": "≡ Cambia Asset", "callback_data": "back_assets"}]]}
             edit_message(cid, mid, error_text, error_kb)
             return
@@ -404,4 +389,36 @@ def webhook():
                 if val.startswith("ast_"):
                     ast = ALL_ASSETS[int(val.split("_")[1])]
                     user_selection[cid] = {"asset": ast}
-                    send_expiry_menu
+                    send_expiry_menu(cid, ast, mid)
+                elif val.startswith("exp_") or val.startswith("retry_"):
+                    if val.startswith("exp_"):
+                        sel = user_selection.get(cid, {})
+                        ast_name = sel.get("asset", "EUR/USD")
+                        exp_key = val.split("_")[1]
+                    else:
+                        parts = val.split("_")
+                        exp_key = parts[-1]
+                        ast_name = "_".join(parts[1:-1])
+                    
+                    edit_message(cid, mid, f"⏳ Elaborazione per {ast_name} ({exp_key.upper()})...")
+                    
+                    threading.Thread(target=process_analysis_background, args=(cid, mid, ast_name, exp_key)).start()
+                    return "ok", 200
+
+                elif val.startswith("pg_"):
+                    api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
+                    send_assets_menu(cid, int(val.split("_")[1]))
+                elif val == "back_assets":
+                    api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
+                    send_assets_menu(cid, 0)
+                    
+            elif "message" in up and "text" in up["message"]:
+                cid = up["message"]["chat"]["id"]
+                send_assets_menu(cid, 0)
+                return "ok", 200
+        except Exception as e:
+            print("Errore nel webhook:", e)
+    return "ok", 200
+
+if __name__ == "__main__":
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
