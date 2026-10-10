@@ -24,7 +24,7 @@ market_cache = {}
 CACHE_DURATION = 300
 chart_lock = threading.Lock()
 
-# Asset reali e OTC affiancati (disposizione 3x3)
+# Asset reali e OTC disposti in griglia 3x3
 ALL_ASSETS = [
     "EUR/USD", "EUR/USD OTC", "GBP/USD", 
     "GBP/USD OTC", "USD/JPY", "USD/JPY OTC",
@@ -363,6 +363,7 @@ def process_analysis_background(cid, mid, ast_name, exp_key):
         
         chart_buf = generate_chart_image(data, ast_name)
         
+        # Elimina il messaggio di caricamento e invia direttamente il grafico con l'analisi pulita
         api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
         if chart_buf:
             send_photo_message(cid, chart_buf, text, kb)
@@ -414,6 +415,13 @@ def webhook():
                     
             elif "message" in up and "text" in up["message"]:
                 cid = up["message"]["chat"]["id"]
+                txt = up["message"]["text"].strip()
+                if txt.startswith("/start"):
+                    # Elimina il messaggio /start dell'utente per mantenere la chat pulita (opzionale)
+                    try:
+                        api_call("deleteMessage", {"chat_id": cid, "message_id": up["message"]["message_id"]})
+                    except:
+                        pass
                 send_assets_menu(cid, 0)
                 return "ok", 200
         except Exception as e:
