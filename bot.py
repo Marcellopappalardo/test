@@ -257,7 +257,7 @@ def fetch_yahoo_real_data(asset_name):
     }
     
     try:
-        response = requests.get(url, headers=headers, timeout=(2.0, 3.0))
+        response = requests.get(url, headers=headers, timeout=3.0)
         if response.status_code != 200:
             raise Exception(f"HTTP {response.status_code}")
             
@@ -281,14 +281,12 @@ def fetch_yahoo_real_data(asset_name):
         now_utc = pd.Timestamp.now(tz='UTC').tz_localize(None)
         if (now_utc - last_candle_time).total_seconds() > 5400:
             if "OTC" not in asset_name and "BTC" not in asset_name and "ETH" not in asset_name and "Bitcoin" not in asset_name and "Ethereum" not in asset_name:
-                raise Exception("MERCATO_CHIUSO")
+                return "MERCATO_CHIUSO"
 
         market_cache[asset_name] = (current_time, clean_df)
         return clean_df
     except Exception as e:
-        print(f"Errore Yahoo per {asset_name}: {e}")
-        if str(e) == "MERCATO_CHIUSO":
-            return "MERCATO_CHIUSO"
+        print(f"Errore dati reali per {asset_name}: {e}")
         if asset_name in market_cache:
             _, old_df = market_cache[asset_name]
             return old_df
@@ -333,7 +331,7 @@ def process_analysis_background(cid, mid, ast_name, exp_key):
             return
 
         if data is None or data.empty:
-            error_text = f"⚠️ **Yahoo Finance non risponde per {ast_name}.**\n\nIl server è temporaneamente occupato. Clicca su Aggiorna per riprovare."
+            error_text = f"⚠️ **Impossibile recuperare i dati reali per {ast_name}.**\n\nIl server è temporaneamente occupato. Clicca su Aggiorna per riprovare."
             error_kb = {"inline_keyboard": [[{"text": "🔄 Aggiorna", "callback_data": "retry_" + ast_name + "_" + exp_key}], [{"text": "≡ Cambia Asset", "callback_data": "back_assets"}]]}
             edit_message(cid, mid, error_text, error_kb)
             return
@@ -431,7 +429,6 @@ def webhook():
                     
                     edit_message(cid, mid, f"⏳ Elaborazione per {ast_name} ({exp_key.upper()})...")
                     
-                    # Avvia l'analisi in background thread per liberare subito il webhook
                     threading.Thread(target=process_analysis_background, args=(cid, mid, ast_name, exp_key)).start()
                     return "ok", 200
 
