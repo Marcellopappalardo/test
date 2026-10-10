@@ -22,7 +22,9 @@ TG_TOKEN = '8585533636:AAE_J2ospaddCWva9gPHzE26dCp2_WaziLk'
 BASE_URL = 'https://api.telegram.org/bot' + TG_TOKEN
 
 market_cache = {}
-CACHE_DURATION = 300
+CACHE_DURATION = (
+    10  # Ridotto a 10 secondi per azzerare ritardi nei dati in tempo reale
+)
 chart_lock = threading.Lock()
 
 # Asset reali e OTC
@@ -242,7 +244,6 @@ def analyze_market_structure(df):
 
 
 def detect_candlestick_pattern(df):
-  """Riconosce il pattern della candela attuale (ultima disponibile)."""
   if len(df) < 2:
     return 'Dati insufficienti'
 
@@ -273,23 +274,14 @@ def detect_candlestick_pattern(df):
   upper_shadow = h - max(o, cl)
   lower_shadow = min(o, cl) - l
 
-  # Doji
   if body <= range_candle * 0.1:
     return 'Doji (Indecisione ⚖️)'
-
-  # Engulfing Rialzista
   if cl > o and pcl < po and cl >= po and o <= pcl:
     return 'Engulfing Rialzista 🟢'
-
-  # Engulfing Ribassista
   if cl < o and pcl > po and cl <= po and o >= pcl:
     return 'Engulfing Ribassista 🔴'
-
-  # Hammer (Martello)
   if lower_shadow >= body * 2 and upper_shadow <= body * 0.5 and cl > o:
     return 'Martello / Hammer 🟢'
-
-  # Shooting Star (Stella Cadente)
   if upper_shadow >= body * 2 and lower_shadow <= body * 0.5 and cl < o:
     return 'Stella Cadente / Shooting Star 🔴'
 
@@ -300,7 +292,6 @@ def detect_candlestick_pattern(df):
 
 
 def check_trend_reversal(df, macd_hist):
-  """Verifica se è in corso un'inversione di trend basata su MACD e EMA 20."""
   close = (
       df['Close'].iloc[:, 0]
       if isinstance(df['Close'], pd.DataFrame)
@@ -328,14 +319,11 @@ def check_trend_reversal(df, macd_hist):
   prev_hist = prev_macd - prev_sig
 
   reversal_messages = []
-
-  # 1. Inversione MACD Crossover
   if prev_hist <= 0 and macd_hist > 0:
     reversal_messages.append('Inversione Rialzista (Incrocio MACD 🟢)')
   elif prev_hist >= 0 and macd_hist < 0:
     reversal_messages.append('Inversione Ribassista (Incrocio MACD 🔴)')
 
-  # 2. Rottura EMA 20
   if prev_close <= prev_ema and curr_close > curr_ema:
     reversal_messages.append('Rottura Rialzista EMA 20 🚀')
   elif prev_close >= prev_ema and curr_close < curr_ema:
