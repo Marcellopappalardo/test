@@ -23,7 +23,7 @@ BASE_URL = 'https://api.telegram.org/bot' + TG_TOKEN
 
 market_cache = {}
 CACHE_DURATION = (
-    10  # Ridotto a 10 secondi per azzerare ritardi nei dati in tempo reale
+    10  # Cache ridotta a 10 secondi per avere dati sempre freschi
 )
 chart_lock = threading.Lock()
 
@@ -391,6 +391,7 @@ def generate_chart_image(df, asset_name):
     try:
       plt.close('all')
       df_clean = df.copy()
+      # Allineamento rigoroso del fuso orario +2 ore per corrispondere all'orario locale del broker
       df_clean.index = df_clean.index + timedelta(hours=2)
 
       for col in ['Open', 'High', 'Low', 'Close']:
@@ -543,7 +544,7 @@ def fetch_binance_real_data(asset_name):
     return None
 
   symbol = mapping[clean]
-  url = f'https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=50'
+  url = f'https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=60'
   try:
     response = requests.get(url, timeout=3.0)
     if response.status_code != 200:
@@ -561,7 +562,10 @@ def fetch_binance_real_data(asset_name):
         index=pd.to_datetime(timestamps, unit='s'),
     )
 
-    return df.dropna()
+    # Troncatura ed eliminazione della candela incompleta in corso per sincronizzare il minuto esatto
+    df = df[~df.index.duplicated(keep='first')]
+    df = df.dropna()
+    return df
   except Exception as e:
     print(f'Errore API Binance per {asset_name}: {e}')
     return None
@@ -739,6 +743,10 @@ def process_analysis_background(cid, mid, ast_name, exp_key):
       score += 1
     else:
       score -= 1
+
+    # Filtro anti-rumore: Se gli indicatori sono troppo vicini alla zona neutra, attenua il punteggio
+    if abs(rsi_val - 50) < 2.5:
+      score = 0 if score > 0 else (0 if score < 0 else score)
 
     if score > 0:
       sig_type = 'ACQUISTA (BUY)'
