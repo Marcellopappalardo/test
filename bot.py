@@ -120,6 +120,28 @@ def edit_message(chat_id, msg_id, text, markup=None):
 def answer_callback(cq_id):
     api_call("answerCallbackQuery", {"callback_query_id": cq_id})
 
+def analyze_market_structure(df):
+    """Analisi della struttura di mercato (Higher Highs / Higher Lows)"""
+    highs = df['High']
+    lows = df['Low']
+    if isinstance(highs, pd.DataFrame):
+        highs = highs.iloc[:, 0]
+    if isinstance(lows, pd.DataFrame):
+        lows = lows.iloc[:, 0]
+        
+    recent_highs = highs.tail(12)
+    recent_lows = lows.tail(12)
+    
+    is_higher_high = float(recent_highs.iloc[-1]) >= float(recent_highs.iloc[-6])
+    is_higher_low = float(recent_lows.iloc[-1]) >= float(recent_lows.iloc[-6])
+    
+    if is_higher_high and is_higher_low:
+        return "Rialzista (HH / HL)", 2
+    elif not is_higher_high and not is_higher_low:
+        return "Ribassista (LH / LL)", -2
+    else:
+        return "Laterale / Misto", 0
+
 def calculate_indicators(df):
     close = df['Close']
     if isinstance(close, pd.DataFrame):
@@ -153,7 +175,9 @@ def calculate_indicators(df):
     ema20 = close.ewm(span=20, adjust=False).mean()
     current_ema = round(float(ema20.iloc[-1]), 5)
     
-    return current_rsi, m_line, m_sig, m_hist, current_close, prev_close, current_ema
+    structure_name, structure_score = analyze_market_structure(df)
+    
+    return current_rsi, m_line, m_sig, m_hist, current_close, prev_close, current_ema, structure_name, structure_score
 
 def generate_chart_image(df, asset_name):
     with chart_lock:
@@ -331,10 +355,12 @@ def process_analysis_background(cid, mid, ast_name, exp_key):
         next_entry_dt = current_it_time + timedelta(minutes=1)
         entry_time = next_entry_dt.replace(second=0, microsecond=0).strftime('%H:%M:%S')
         
-        rsi_val, macd_line, macd_signal, macd_hist, current_close, prev_close, current_ema = calculate_indicators(data)
+        rsi_val, macd_line, macd_signal, macd_hist, current_close, prev_close, current_ema, structure_name, structure_score = calculate_indicators(data)
         
-        # LOGICA BILANCIATA REALE (CONSENTE SIA BUY CHE SELL)
+        # LOGICA POTENZIATA CON STRUTTURA DI MERCATO
         score = 0
+        score += structure_score  # La struttura ha un peso maggiore sul segnale
+
         if current_close > prev_close: score += 1
         else: score -= 1
 
@@ -354,7 +380,7 @@ def process_analysis_background(cid, mid, ast_name, exp_key):
         else:
             sig_type = "ACQUISTA (BUY)" if current_close >= prev_close else "VENDI (SELL)"
             
-        conf = round(72.0 + abs(macd_hist * 1000) + abs(rsi_val - 50) * 0.3, 1)
+        conf = round(72.0 + abs(macd_hist * 1000) + abs(rsi_val - 50) * 0.3 + abs(structure_score) * 2, 1)
         conf = min(96.0, max(65.0, conf))
 
         sig_emoji = "🟢" if "ACQUISTA" in sig_type else "🔴"
@@ -365,6 +391,8 @@ def process_analysis_background(cid, mid, ast_name, exp_key):
         text += f"💲💹 Asset: {ast_name}\n"
         text += f"💵 Prezzo Reale: `{round(current_close, 5)}`\n"
         text += f"🎯 Segnale: {sig_type} {sig_emoji}\n\n"
+        text += "📈 Struttura di Mercato:\n"
+        text += f"• Trend: {structure_name}\n\n"
         text += "🛠️ Indicatori:\n"
         text += f"• RSI (9): {rsi_val}\n"
         text += f"• Linea MACD: {macd_line}\n"
@@ -378,7 +406,6 @@ def process_analysis_background(cid, mid, ast_name, exp_key):
         
         chart_buf = generate_chart_image(data, ast_name)
         
-        # Elimina definitivamente il messaggio precedente (effetto scomparsa istantanea)
         delete_message(cid, mid)
 
         if chart_buf:
@@ -418,10 +445,7 @@ def webhook():
                         exp_key = parts[-1]
                         ast_name = "_".join(parts[1:-1])
                     
-                    # Elimina SUBITO il messaggio per farlo sparire all'istante
                     delete_message(cid, mid)
-                    
-                    # Invia un messaggio temporaneo di elaborazione che poi verrà rimpiazzato dal grafico
                     temp_mid = send_message(cid, f"⏳ Elaborazione per {ast_name} ({exp_key.upper()})...")
 
                     threading.Thread(target=process_analysis_background, args=(cid, temp_mid, ast_name, exp_key)).start()
