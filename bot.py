@@ -23,9 +23,7 @@ TG_TOKEN = '8585533636:AAE_J2ospaddCWva9gPHzE26dCp2_WaziLk'
 BASE_URL = 'https://api.telegram.org/bot' + TG_TOKEN
 
 market_cache = {}
-CACHE_DURATION = (
-    5  # Ridotto a 5 secondi per massimizzare la freschezza dei dati a 1m
-)
+CACHE_DURATION = 5  # 5 secondi per mantenere i dati freschi su 1M
 chart_lock = threading.Lock()
 
 ITALY_TZ = ZoneInfo('Europe/Rome')
@@ -252,9 +250,9 @@ def check_trend_reversal(df, macd_hist):
 
   reversal_messages = []
   if prev_hist <= 0 and macd_hist > 0:
-    reversal_messages.append('Inversione Rialzista (Incrocio MACD 🟢)')
+    reversal_messages.append('Inversione Rialzista (MACD 🟢)')
   elif prev_hist >= 0 and macd_hist < 0:
-    reversal_messages.append('Inversione Ribassista (Incrocio MACD 🔴)')
+    reversal_messages.append('Inversione Ribassista (MACD 🔴)')
 
   if prev_close <= prev_ema and curr_close > curr_ema:
     reversal_messages.append('Rottura Rialzista EMA 20 🚀')
@@ -264,7 +262,7 @@ def check_trend_reversal(df, macd_hist):
   return (
       ' | '.join(reversal_messages)
       if reversal_messages
-      else 'Nessuna inversione immediata (Trend stabile)'
+      else 'Trend Stabile (Senza incroci critici)'
   )
 
 
@@ -370,7 +368,7 @@ def generate_chart_image(df, asset_name):
           type='candle',
           style=custom_style,
           addplot=add_plots,
-          title=f'\nAnalisi Tecnica (1M): {asset_name}',
+          title=f'\nAnalisi Tecnica 1M: {asset_name}',
           volume=False,
           figsize=(8, 4.5),
           returnfig=True,
@@ -591,7 +589,7 @@ def send_assets_menu(chat_id, page=0, msg_id=None):
   if nav:
     kb.append(nav)
 
-  text = '👋 Scegli un asset reale (Candele 1M):'
+  text = '👋 Scegli un asset reale (Timeframe 1M):'
   send_message(chat_id, text, {'inline_keyboard': kb})
 
 
@@ -631,12 +629,9 @@ def process_analysis_background(cid, mid, ast_name, exp_key):
       send_message(cid, error_text, error_kb)
       return
 
-    last_candle_time_utc = data.index[-1]
-    if last_candle_time_utc.tzinfo is None:
-      last_candle_time_utc = last_candle_time_utc.tz_localize('UTC')
-
-    last_candle_time_it = last_candle_time_utc.tz_convert(ITALY_TZ)
-    next_entry_dt = last_candle_time_it + timedelta(minutes=1)
+    # CORRETTO: Orario di entrata calcolato in tempo reale al minuto successivo esatto in Italia
+    now_it = datetime.now(ITALY_TZ)
+    next_entry_dt = now_it.replace(second=0, microsecond=0) + timedelta(minutes=1)
     entry_time = next_entry_dt.strftime('%H:%M:%S')
 
     (
@@ -655,33 +650,47 @@ def process_analysis_background(cid, mid, ast_name, exp_key):
 
     score = 0
     score += structure_score
-    score += 1 if current_close > prev_close else -1
-    score += 1 if macd_line > macd_signal else -1
-    score += 1 if macd_hist > 0 else -1
-    score += 1 if rsi_val > 50 else -1
 
-    if abs(rsi_val - 50) < 2.5:
-      score = 0 if score != 0 else score
+    body_sizes = abs(data['Close'] - data['Open'])
+    if isinstance(body_sizes, pd.DataFrame):
+      body_sizes = body_sizes.iloc[:, 0]
+    avg_body = body_sizes.tail(10).mean()
+    current_body = abs(current_close - float(data.iloc[-1]['Open']))
+
+    is_noise = current_body < (avg_body * 0.4)
+
+    if not is_noise:
+      score += 1 if current_close > prev_close else -1
+      score += 1 if macd_hist > 0 else -1
+
+      if rsi_val > 55:
+        score += 1
+      elif rsi_val < 45:
+        score -= 1
+    else:
+      score = 0
 
     if score > 0:
       sig_type = 'ACQUISTA (BUY)'
     elif score < 0:
       sig_type = 'VENDI (SELL)'
     else:
-      sig_type = (
-          'ACQUISTA (BUY)' if current_close >= prev_close else 'VENDI (SELL)'
-      )
+      sig_type = 'ATTESA / MERCATO LATERALE (NO SIGNAL)'
 
     conf = round(
-        72.0
+        70.0
         + abs(macd_hist * 1000)
         + abs(rsi_val - 50) * 0.3
         + abs(structure_score) * 2,
         1,
     )
-    conf = min(96.0, max(65.0, conf))
+    conf = min(95.0, max(60.0, conf))
+    if 'ATTESA' in sig_type:
+      conf = 50.0
 
-    sig_emoji = '🟢' if 'ACQUISTA' in sig_type else '🔴'
+    sig_emoji = (
+        '🟢' if 'ACQUISTA' in sig_type else ('🔴' if 'VENDI' in sig_type else '⚪')
+    )
     exp_map = {
         '1m': '1 Minuto (1M)',
         '2m': '2 Minuti (2M)',
@@ -690,20 +699,22 @@ def process_analysis_background(cid, mid, ast_name, exp_key):
     }
     expiry_name = exp_map.get(exp_key, '1 Minuto (1M)')
 
-    text = '🐂🐻 ANALISI EASY TRACK (1M)\n\n'
+    text = '🐂🐻 ANALISI EASY TRACK (1M FILTRATO)\n\n'
     text += f'💲💹 Asset: {ast_name}\n'
     text += f'💵 Prezzo Reale: `{round(current_close, 5)}`\n'
     text += f'🎯 Segnale: {sig_type} {sig_emoji}\n\n'
     text += '📈 Struttura di Mercato:\n'
     text += f'• Trend: {structure_name}\n'
-    text += f'• Inversione: {trend_reversal_status}\n\n'
+    text += f'• Stato: {trend_reversal_status}\n\n'
     text += '🕯️ Candela Attuale (1M):\n'
-    text += f'• Pattern: {candlestick_pattern}\n\n'
+    text += f'• Pattern: {candlestick_pattern}\n'
+    text += (
+        '• Filtro Rumore: ' + ('Attivo (Candela pulita)' if not is_noise else 'Rilevato Rumore ⚠️')
+        + '\n\n'
+    )
     text += '🛠️ Indicatori:\n'
     text += f'• RSI (9): {rsi_val}\n'
-    text += f'• Linea MACD: {macd_line}\n'
-    text += f'• Segnale MACD: {macd_signal}\n'
-    text += f'• Istogramma: {macd_hist}\n\n'
+    text += f'• Istogramma MACD: {macd_hist}\n\n'
     text += f'⚖️ Affidabilità: {conf}%\n'
     text += f'⏳ Scadenza: {expiry_name}\n'
     text += f'📌 Entrata: {entry_time}'
@@ -738,7 +749,7 @@ def process_analysis_background(cid, mid, ast_name, exp_key):
 
 @app.route('/')
 def index():
-  return 'Bot operativo al 100% su timeframe 1m!', 200
+  return 'Bot operativo al 100% su timeframe 1m (Anti-Rumore e Orario Perfetto)!', 200
 
 
 @app.route('/webhook', methods=['POST'])
