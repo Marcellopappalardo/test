@@ -23,7 +23,9 @@ TG_TOKEN = '8585533636:AAE_J2ospaddCWva9gPHzE26dCp2_WaziLk'
 BASE_URL = 'https://api.telegram.org/bot' + TG_TOKEN
 
 market_cache = {}
-CACHE_DURATION = 5  # Ridotto a 5 secondi per massimizzare la freschezza dei dati
+CACHE_DURATION = (
+    5  # Ridotto a 5 secondi per massimizzare la freschezza dei dati a 1m
+)
 chart_lock = threading.Lock()
 
 ITALY_TZ = ZoneInfo('Europe/Rome')
@@ -368,7 +370,7 @@ def generate_chart_image(df, asset_name):
           type='candle',
           style=custom_style,
           addplot=add_plots,
-          title=f'\nAnalisi Tecnica: {asset_name}',
+          title=f'\nAnalisi Tecnica (1M): {asset_name}',
           volume=False,
           figsize=(8, 4.5),
           returnfig=True,
@@ -589,7 +591,7 @@ def send_assets_menu(chat_id, page=0, msg_id=None):
   if nav:
     kb.append(nav)
 
-  text = '👋 Scegli un asset reale:'
+  text = '👋 Scegli un asset reale (Candele 1M):'
   send_message(chat_id, text, {'inline_keyboard': kb})
 
 
@@ -629,8 +631,6 @@ def process_analysis_background(cid, mid, ast_name, exp_key):
       send_message(cid, error_text, error_kb)
       return
 
-    # SINCRONIZZAZIONE PERFETTA DELL'ORARIO D'ENTRATA (SENZA RITARDO)
-    # Prende l'orario dell'ultima candela reale ricevuta e calcola il minuto successivo esatto in Italia
     last_candle_time_utc = data.index[-1]
     if last_candle_time_utc.tzinfo is None:
       last_candle_time_utc = last_candle_time_utc.tz_localize('UTC')
@@ -690,14 +690,14 @@ def process_analysis_background(cid, mid, ast_name, exp_key):
     }
     expiry_name = exp_map.get(exp_key, '1 Minuto (1M)')
 
-    text = '🐂🐻 ANALISI EASY TRACK\n\n'
+    text = '🐂🐻 ANALISI EASY TRACK (1M)\n\n'
     text += f'💲💹 Asset: {ast_name}\n'
     text += f'💵 Prezzo Reale: `{round(current_close, 5)}`\n'
     text += f'🎯 Segnale: {sig_type} {sig_emoji}\n\n'
     text += '📈 Struttura di Mercato:\n'
     text += f'• Trend: {structure_name}\n'
     text += f'• Inversione: {trend_reversal_status}\n\n'
-    text += '🕯️ Candela Attuale:\n'
+    text += '🕯️ Candela Attuale (1M):\n'
     text += f'• Pattern: {candlestick_pattern}\n\n'
     text += '🛠️ Indicatori:\n'
     text += f'• RSI (9): {rsi_val}\n'
@@ -738,7 +738,7 @@ def process_analysis_background(cid, mid, ast_name, exp_key):
 
 @app.route('/')
 def index():
-  return 'Bot operativo al 100%!', 200
+  return 'Bot operativo al 100% su timeframe 1m!', 200
 
 
 @app.route('/webhook', methods=['POST'])
@@ -771,7 +771,9 @@ def webhook():
 
           delete_message(cid, mid)
           temp_mid = send_message(
-              cid, f'⏳ Elaborazione per {ast_name} ({exp_key.upper()})...'
+              cid,
+              f'⏳ Elaborazione in tempo reale (1M) per {ast_name}'
+              f' ({exp_key.upper()})...',
           )
 
           threading.Thread(
