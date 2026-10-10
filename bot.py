@@ -21,9 +21,9 @@ BASE_URL = "https://api.telegram.org/bot" + TG_TOKEN
 
 market_cache = {}
 CACHE_DURATION = 300
-chart_lock = threading.Lock() # Lock di sicurezza per Matplotlib
+chart_lock = threading.Lock() # Sicurezza anti-blocco per i grafici
 
-# Lista riorganizzata: Asset Reale e OTC affiancati
+# Asset reali e OTC della stessa valuta affiancati
 ALL_ASSETS = [
     # Forex principali & FX minori
     "EUR/USD", "EUR/USD OTC",
@@ -294,7 +294,7 @@ def fetch_yahoo_real_data(asset_name):
         return None
 
 def send_assets_menu(chat_id, page=0, msg_id=None):
-    per_page = 8
+    per_page = 8  # 4 coppie (reale + OTC) per pagina su 2 colonne
     sub = ALL_ASSETS[page*per_page:(page+1)*per_page]
     kb = []
     for i in range(0, len(sub), 2):
@@ -434,7 +434,7 @@ def webhook():
                     
             elif "message" in up and "text" in up["message"]:
                 cid = up["message"]["chat"]["id"]
-                # Mostra direttamente il menu asset a qualsiasi utente scriva al bot
+                # Accesso immediato per chiunque scriva al bot
                 send_assets_menu(cid, 0)
                 return "ok", 200
         except Exception as e:
