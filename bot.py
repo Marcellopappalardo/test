@@ -107,7 +107,10 @@ def send_photo_message(chat_id, photo_buf, caption, markup=None):
 
 def edit_message(chat_id, msg_id, text, markup=None):
     p = {"chat_id": chat_id, "message_id": msg_id, "text": text, "parse_mode": "Markdown"}
-    if markup: p["reply_markup"] = markup
+    if markup is not None:
+        p["reply_markup"] = markup
+    else:
+        p["reply_markup"] = {"inline_keyboard": []} # Rimuove i tasti facendoli scompare
     api_call("editMessageText", p)
 
 def answer_callback(cq_id):
@@ -337,7 +340,10 @@ def process_analysis_background(cid, mid, ast_name, exp_key):
         elif cond_sell:
             sig_type = "VENDI (SELL)"
         else:
-            sig_type = "ACQUISTA (BUY)" if macd_line >= macd_signal else "VENDI (SELL)"
+            if macd_hist >= 0 and rsi_val >= 50:
+                sig_type = "ACQUISTA (BUY)"
+            else:
+                sig_type = "VENDI (SELL)"
             
         conf = round(79.0 + abs(macd_hist) * 800, 1)
         conf = min(97.0, max(68.0, conf))
@@ -363,7 +369,6 @@ def process_analysis_background(cid, mid, ast_name, exp_key):
         
         chart_buf = generate_chart_image(data, ast_name)
         
-        # Elimina il messaggio di caricamento e invia direttamente il grafico con l'analisi pulita
         api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
         if chart_buf:
             send_photo_message(cid, chart_buf, text, kb)
@@ -401,7 +406,8 @@ def webhook():
                         exp_key = parts[-1]
                         ast_name = "_".join(parts[1:-1])
                     
-                    edit_message(cid, mid, f"⏳ Elaborazione per {ast_name} ({exp_key.upper()})...")
+                    # Rimuove i pulsanti subito facendo svanire la tastiera interattiva
+                    edit_message(cid, mid, f"⏳ Elaborazione per {ast_name} ({exp_key.upper()})...", markup={"inline_keyboard": []})
                     
                     threading.Thread(target=process_analysis_background, args=(cid, mid, ast_name, exp_key)).start()
                     return "ok", 200
@@ -417,7 +423,6 @@ def webhook():
                 cid = up["message"]["chat"]["id"]
                 txt = up["message"]["text"].strip()
                 if txt.startswith("/start"):
-                    # Elimina il messaggio /start dell'utente per mantenere la chat pulita (opzionale)
                     try:
                         api_call("deleteMessage", {"chat_id": cid, "message_id": up["message"]["message_id"]})
                     except:
