@@ -21,9 +21,8 @@ BASE_URL = "https://api.telegram.org/bot" + TG_TOKEN
 
 market_cache = {}
 CACHE_DURATION = 300
-chart_lock = threading.Lock() # Sicurezza anti-blocco per i grafici
+chart_lock = threading.Lock()
 
-# Asset reali e OTC della stessa valuta affiancati
 ALL_ASSETS = [
     # Forex principali & FX minori
     "EUR/USD", "EUR/USD OTC",
@@ -102,7 +101,7 @@ def api_call(method, data):
         return None
 
 def send_message(chat_id, text, markup=None):
-    p = {"chat_id": chat_id, "text": text}
+    p = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
     if markup: p["reply_markup"] = markup
     res = api_call("sendMessage", p)
     return res.get("result", {}).get("message_id") if res and res.get("ok") else None
@@ -212,8 +211,7 @@ def generate_chart_image(df, asset_name):
             plt.close(fig)
             return buf
         except Exception as e:
-            print("ERRORE NELLA GENERAZIONE DEL GRAFICO:")
-            traceback.print_exc()
+            print("ERRORE NELLA GENERAZIONE DEL GRAFICO:", e)
             plt.close('all')
             return None
 
@@ -259,9 +257,9 @@ def fetch_yahoo_real_data(asset_name):
     }
     
     try:
-        response = requests.get(url, headers=headers, timeout=3.0)
+        response = requests.get(url, headers=headers, timeout=(2.0, 3.0))
         if response.status_code != 200:
-            raise Exception("Errore HTTP Yahoo")
+            raise Exception(f"HTTP {response.status_code}")
             
         data = response.json()
         result = data['chart']['result'][0]
@@ -288,7 +286,7 @@ def fetch_yahoo_real_data(asset_name):
         market_cache[asset_name] = (current_time, clean_df)
         return clean_df
     except Exception as e:
-        print(f"Errore o mercato chiuso per {asset_name}: {e}")
+        print(f"Errore Yahoo per {asset_name}: {e}")
         if str(e) == "MERCATO_CHIUSO":
             return "MERCATO_CHIUSO"
         if asset_name in market_cache:
@@ -426,6 +424,7 @@ def webhook():
                     if chart_buf:
                         send_photo_message(cid, chart_buf, text, kb)
                     else:
+                        # FALLBACK DI SICUREZZA: se il grafico fallisce, invia comunque il messaggio di testo con il segnale!
                         send_message(cid, text, kb)
 
                 elif val.startswith("pg_"):
