@@ -259,7 +259,10 @@ def fetch_yahoo_real_data(asset_name):
     }
     
     try:
-        response = requests.get(url, headers=headers, timeout=4.0)
+        response = requests.get(url, headers=headers, timeout=3.0)
+        if response.status_code != 200:
+            raise Exception("Errore HTTP Yahoo")
+            
         data = response.json()
         result = data['chart']['result'][0]
         timestamps = result['timestamp']
