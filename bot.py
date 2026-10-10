@@ -647,7 +647,7 @@ def process_analysis_background(cid, mid, ast_name, exp_key):
         trend_reversal_status,
     ) = calculate_indicators(data)
 
-    # Calcolo del punteggio diretto senza filtro anti-rumore
+    # Calcolo del punteggio standard
     score = 0
     score += structure_score
     score += 1 if current_close > prev_close else -1
@@ -658,13 +658,21 @@ def process_analysis_background(cid, mid, ast_name, exp_key):
     elif rsi_val < 45:
       score -= 1
 
-    # Definizione del segnale basata sullo score (gestisce anche l'eventuale pareggio a 0)
-    if score > 0:
-      sig_type = 'ACQUISTA (BUY)'
-    elif score < 0:
-      sig_type = 'VENDI (SELL)'
+    # LOGICA SMART RSI: Invece di bloccare, se l'RSI è estremo inverte/forza il segnale per rimbalzo/storno
+    if rsi_val < 20:
+      sig_type = 'ACQUISTA (BUY)'  # Rimbalzo da ipervenduto estremo
+      filter_note = 'Rimbalzo Ipervenduto (RSI < 20) 🟢'
+    elif rsi_val > 80:
+      sig_type = 'VENDI (SELL)'  # Storno da ipercomprato estremo
+      filter_note = 'Storno Ipercomprato (RSI > 80) 🔴'
     else:
-      sig_type = 'ACQUISTA (BUY)'  # In caso di perfetto pareggio forza un'indicazione o gestiscila a favore del trend
+      filter_note = 'Filtro RSI Normale ✅'
+      if score > 0:
+        sig_type = 'ACQUISTA (BUY)'
+      elif score < 0:
+        sig_type = 'VENDI (SELL)'
+      else:
+        sig_type = 'ACQUISTA (BUY)'
 
     conf = round(
         70.0
@@ -693,7 +701,7 @@ def process_analysis_background(cid, mid, ast_name, exp_key):
     text += f'• Stato: {trend_reversal_status}\n\n'
     text += '🕯️ Candela Attuale (1M):\n'
     text += f'• Pattern: {candlestick_pattern}\n'
-    text += '• Filtro Rumore: Disattivato ✅\n\n'
+    text += f'• Gestione RSI: {filter_note}\n\n'
     text += '🛠️ Indicatori:\n'
     text += f'• RSI (9): {rsi_val}\n'
     text += f'• Istogramma MACD: {macd_hist}\n\n'
@@ -731,7 +739,7 @@ def process_analysis_background(cid, mid, ast_name, exp_key):
 
 @app.route('/')
 def index():
-  return 'Bot operativo al 100% su timeframe 1m (Senza filtri No-Signal)!', 200
+  return 'Bot operativo con Logica Smart RSI (Anti-No-Signal)!', 200
 
 
 @app.route('/webhook', methods=['POST'])
