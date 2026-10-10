@@ -1,9 +1,9 @@
 import os
-import json
 import math
 import time
 import io
 import traceback
+import threading
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -18,56 +18,78 @@ app = Flask(__name__)
 
 TG_TOKEN = "8585533636:AAE_J2ospaddCWva9gPHzE26dCp2_WaziLk"
 BASE_URL = "https://api.telegram.org/bot" + TG_TOKEN
-SUPER_USER_CHAT_ID = 6121337831
-USERS_FILE = "users.json"
 
 market_cache = {}
 CACHE_DURATION = 300
+chart_lock = threading.Lock() # Lock di sicurezza per Matplotlib
 
+# Lista riorganizzata: Asset Reale e OTC affiancati
 ALL_ASSETS = [
-    "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD", "AUD/CAD","USD/MXN",
-    "USD/PKR", "EUR/RUB", "EUR/TRY", "JOD/CNY", "NGN/USD", "LBP/USD", "TND/USD",
-    "AUD/CHF", "NZD/USD", "USD/CHF", "EUR/GBP", "EUR/JPY", "GBP/JPY",
-    "AUD/JPY", "EUR/AUD", "EUR/CAD", "EUR/NZD", "GBP/NZD", "AUD/NZD", "QAR/CNY",
-    "CAD/JPY", "CHF/JPY", "GBP/CAD", "GBP/AUD", "USD/ARS", "UAH/USD", "SAR/CNY",
-    "EUR/USD OTC", "GBP/USD OTC", "USD/ARS OTC", "QAR/CNY OTC", "LBP/USD OTC",
-    "USD/JPY OTC", "AUD/USD OTC", "NGN/USD OTC", "USD/CAD OTC", "AUD/CAD OTC", "NZD/USD OTC",
-    "USD/MXN OTC", "USD/PKR OTC", "EUR/RUB OTC", "EUR/TRY OTC", "JOD/CNY OTC",
-    "USD/CHF OTC", "EUR/GBP OTC", "EUR/JPY OTC", "GBP/JPY OTC", "AUD/JPY OTC", 
-    "AUD/CHF OTC", "EUR/AUD OTC", "EUR/CAD OTC", "EUR/NZD OTC", "GBP/NZD OTC", 
-    "AUD/NZD OTC", "CAD/JPY OTC", "CHF/JPY OTC", "GBP/CAD OTC", "GBP/AUD OTC",
-    "TND/USD OTC", "UAH/USD OTC", "SAR/CNY OTC", "Bitcoin OTC",
-    "Cardano OTC", "Polkadot OTC", "Toncoin OTC", "Bitcoin ETF OTC", "TRON OTC",
-    "Dogecoin OTC", "Litecoin OTC", "Chainlink OTC", "Solana OTC", "BNB OTC", "Polygon OTC",
-    "Ethereum OTC", "Avalanche OTC", "Dash", "BCH/EUR", "BCH/GBP", "BCH/JPY", "BTC/GBP", "BTC/JPY", "Bitcoin",
-    "Chainlink", "Ethereum", "APPLE", "MICROSOFT", "TESLA", "AMAZON", "NETFLIX", "GOOGLE", "META", "MCDONALD'S",
-    "APPLE OTC", "MICROSOFT OTC", "TESLA OTC", "AMAZON OTC", "NETFLIX OTC", "GOOGLE OTC", "META OTC", "COCA COLA OTC",
+    # Forex principali & FX minori
+    "EUR/USD", "EUR/USD OTC",
+    "GBP/USD", "GBP/USD OTC",
+    "USD/JPY", "USD/JPY OTC",
+    "AUD/USD", "AUD/USD OTC",
+    "USD/CAD", "USD/CAD OTC",
+    "AUD/CAD", "AUD/CAD OTC",
+    "USD/MXN", "USD/MXN OTC",
+    "USD/PKR", "USD/PKR OTC",
+    "EUR/RUB", "EUR/RUB OTC",
+    "EUR/TRY", "EUR/TRY OTC",
+    "JOD/CNY", "JOD/CNY OTC",
+    "USD/CHF", "USD/CHF OTC",
+    "EUR/GBP", "EUR/GBP OTC",
+    "EUR/JPY", "EUR/JPY OTC",
+    "GBP/JPY", "GBP/JPY OTC",
+    "AUD/JPY", "AUD/JPY OTC",
+    "AUD/CHF", "AUD/CHF OTC",
+    "EUR/AUD", "EUR/AUD OTC",
+    "EUR/CAD", "EUR/CAD OTC",
+    "EUR/NZD", "EUR/NZD OTC",
+    "GBP/NZD", "GBP/NZD OTC",
+    "AUD/NZD", "AUD/NZD OTC",
+    "CAD/JPY", "CAD/JPY OTC",
+    "CHF/JPY", "CHF/JPY OTC",
+    "GBP/CAD", "GBP/CAD OTC",
+    "GBP/AUD", "GBP/AUD OTC",
+    "NZD/USD", "NZD/USD OTC",
+    "USD/ARS", "USD/ARS OTC",
+    "QAR/CNY", "QAR/CNY OTC",
+    "LBP/USD", "LBP/USD OTC",
+    "NGN/USD", "NGN/USD OTC",
+    "TND/USD", "TND/USD OTC",
+    "UAH/USD", "UAH/USD OTC",
+    "SAR/CNY", "SAR/CNY OTC",
+    
+    # Criptovalute
+    "Bitcoin", "Bitcoin OTC",
+    "Ethereum", "Ethereum OTC",
+    "Cardano", "Cardano OTC",
+    "Polkadot", "Polkadot OTC",
+    "Toncoin", "Toncoin OTC",
+    "TRON", "TRON OTC",
+    "Dogecoin", "Dogecoin OTC",
+    "Litecoin", "Litecoin OTC",
+    "Chainlink", "Chainlink OTC",
+    "Solana", "Solana OTC",
+    "BNB", "BNB OTC",
+    "Polygon", "Polygon OTC",
+    "Avalanche", "Avalanche OTC",
+    "Bitcoin ETF OTC", "Dash", "BCH/EUR", "BCH/GBP", "BCH/JPY", "BTC/GBP", "BTC/JPY",
+
+    # Azioni
+    "APPLE", "APPLE OTC",
+    "MICROSOFT", "MICROSOFT OTC",
+    "TESLA", "TESLA OTC",
+    "AMAZON", "AMAZON OTC",
+    "NETFLIX", "NETFLIX OTC",
+    "GOOGLE", "GOOGLE OTC",
+    "META", "META OTC",
+    "MCDONALD'S", "COCA COLA OTC",
     "INTEL OTC", "BOEING COMPANY OTC", "ALIBABA OTC", "CITIGROUP INC OTC", "EXXONMOBIL OTC"
 ]
 
 user_selection = {}
-pending_approval = {}
-
-def load_users():
-    users = {SUPER_USER_CHAT_ID}
-    if os.path.exists(USERS_FILE):
-        try:
-            with open(USERS_FILE, "r") as f:
-                data = json.load(f)
-                for uid in data:
-                    users.add(int(uid))
-        except Exception as e:
-            print("Errore caricamento utenti:", e)
-    return users
-
-def save_users():
-    try:
-        with open(USERS_FILE, "w") as f:
-            json.dump(list(authorized_users), f)
-    except Exception as e:
-        print("Errore salvataggio utenti:", e)
-
-authorized_users = load_users()
 
 def api_call(method, data):
     try:
@@ -138,60 +160,62 @@ def calculate_indicators(df):
     return current_rsi, m_line, m_sig, m_hist, current_close, current_ema
 
 def generate_chart_image(df, asset_name):
-    try:
-        df_clean = df.copy()
-        df_clean.index = df_clean.index + timedelta(hours=2)
+    with chart_lock:
+        try:
+            plt.close('all')
+            df_clean = df.copy()
+            df_clean.index = df_clean.index + timedelta(hours=2)
 
-        for col in ['Open', 'High', 'Low', 'Close']:
-            df_clean[col] = df_clean[col].astype(float)
+            for col in ['Open', 'High', 'Low', 'Close']:
+                df_clean[col] = df_clean[col].astype(float)
 
-        close_series = df_clean['Close'].iloc[:, 0] if isinstance(df_clean['Close'], pd.DataFrame) else df_clean['Close']
-        ema20_full = close_series.ewm(span=20, adjust=False).mean()
+            close_series = df_clean['Close'].iloc[:, 0] if isinstance(df_clean['Close'], pd.DataFrame) else df_clean['Close']
+            ema20_full = close_series.ewm(span=20, adjust=False).mean()
 
-        df_plot = df_clean.tail(30).copy()
-        ema20_plot = ema20_full.tail(30)
+            df_plot = df_clean.tail(30).copy()
+            ema20_plot = ema20_full.tail(30)
 
-        market_colors = mpf.make_marketcolors(
-            up='#00E676', 
-            down='#FF5252', 
-            wick={'up': '#00E676', 'down': '#FF5252'}, 
-            edge='inherit',
-            volume='inherit'
-        )
-        custom_style = mpf.make_mpf_style(
-            base_mpf_style='nightclouds', 
-            marketcolors=market_colors, 
-            facecolor='#1e1e1e', 
-            edgecolor='#333333', 
-            figcolor='#1e1e1e'
-        )
+            market_colors = mpf.make_marketcolors(
+                up='#00E676', 
+                down='#FF5252', 
+                wick={'up': '#00E676', 'down': '#FF5252'}, 
+                edge='inherit',
+                volume='inherit'
+            )
+            custom_style = mpf.make_mpf_style(
+                base_mpf_style='nightclouds', 
+                marketcolors=market_colors, 
+                facecolor='#1e1e1e', 
+                edgecolor='#333333', 
+                figcolor='#1e1e1e'
+            )
 
-        add_plots = [
-            mpf.make_addplot(ema20_plot, color='#FFC107', width=1.5, linestyle='--')
-        ]
+            add_plots = [
+                mpf.make_addplot(ema20_plot, color='#FFC107', width=1.5, linestyle='--')
+            ]
 
-        buf = io.BytesIO()
-        fig, axes = mpf.plot(
-            df_plot,
-            type='candle',
-            style=custom_style,
-            addplot=add_plots,
-            title=f"\nAnalisi Tecnica: {asset_name}",
-            volume=False,
-            figsize=(8, 4.5),
-            returnfig=True,
-            panel_ratios=(1,)
-        )
-        
-        fig.savefig(buf, format='png', facecolor='#1e1e1e', edgecolor='none', bbox_inches='tight', dpi=100)
-        buf.seek(0)
-        plt.close(fig)
-        return buf
-    except Exception as e:
-        print("ERRORE NELLA GENERAZIONE DEL GRAFICO:")
-        traceback.print_exc()
-        plt.close('all')
-        return None
+            buf = io.BytesIO()
+            fig, axes = mpf.plot(
+                df_plot,
+                type='candle',
+                style=custom_style,
+                addplot=add_plots,
+                title=f"\nAnalisi Tecnica: {asset_name}",
+                volume=False,
+                figsize=(8, 4.5),
+                returnfig=True,
+                panel_ratios=(1,)
+            )
+            
+            fig.savefig(buf, format='png', facecolor='#1e1e1e', edgecolor='none', bbox_inches='tight', dpi=100)
+            buf.seek(0)
+            plt.close(fig)
+            return buf
+        except Exception as e:
+            print("ERRORE NELLA GENERAZIONE DEL GRAFICO:")
+            traceback.print_exc()
+            plt.close('all')
+            return None
 
 def get_yahoo_ticker(asset_name):
     clean = asset_name.replace(" OTC", "").replace("'", "").strip()
@@ -235,7 +259,7 @@ def fetch_yahoo_real_data(asset_name):
     }
     
     try:
-        response = requests.get(url, headers=headers, timeout=2.0)
+        response = requests.get(url, headers=headers, timeout=4.0)
         data = response.json()
         result = data['chart']['result'][0]
         timestamps = result['timestamp']
@@ -270,20 +294,20 @@ def fetch_yahoo_real_data(asset_name):
         return None
 
 def send_assets_menu(chat_id, page=0, msg_id=None):
-    per_page = 9
+    per_page = 8
     sub = ALL_ASSETS[page*per_page:(page+1)*per_page]
     kb = []
-    for i in range(0, len(sub), 3):
+    for i in range(0, len(sub), 2):
         row = []
-        for j in range(3):
+        for j in range(2):
             if i + j < len(sub):
                 asset_item = sub[i+j]
                 row.append({"text": asset_item, "callback_data": "ast_" + str(ALL_ASSETS.index(asset_item))})
         kb.append(row)
         
     nav = []
-    if page > 0: nav.append({"text": "Indietro", "callback_data": "pg_" + str(page-1)})
-    if (page + 1) * per_page < len(ALL_ASSETS): nav.append({"text": "Avanti", "callback_data": "pg_" + str(page+1)})
+    if page > 0: nav.append({"text": "◀️ Indietro", "callback_data": "pg_" + str(page-1)})
+    if (page + 1) * per_page < len(ALL_ASSETS): nav.append({"text": "Avanti ▶️", "callback_data": "pg_" + str(page+1)})
     if nav: kb.append(nav)
         
     text = "👋 Scegli un asset:"
@@ -311,26 +335,6 @@ def webhook():
                 cid, mid, val = cq["message"]["chat"]["id"], cq["message"]["message_id"], cq["data"]
                 answer_callback(cq["id"])
                 
-                if val.startswith("approve_") or val.startswith("reject_"):
-                    if cid == SUPER_USER_CHAT_ID:
-                        target = int(val.split("_")[1])
-                        if val.startswith("approve_"):
-                            authorized_users.add(target)
-                            save_users() # Salvataggio permanente su users.json
-                            pocket_id = pending_approval.pop(target, "Non specificato")
-                            send_message(target, "✅ Account approvato con successo! Benvenuto.")
-                            send_assets_menu(target, 0)
-                            edit_message(cid, mid, f"Approvato ✅ (ID Pocket Option: {pocket_id})")
-                        else:
-                            pending_approval.pop(target, None)
-                            send_message(target, "❌ Richiesta rifiutata dall'amministratore.")
-                            edit_message(cid, mid, "Rifiutato ❌")
-                    return "ok", 200
-                    
-                if cid != SUPER_USER_CHAT_ID and cid not in authorized_users:
-                    send_message(cid, "⚠️ Non autorizzato.")
-                    return "ok", 200
-                    
                 if val.startswith("ast_"):
                     ast = ALL_ASSETS[int(val.split("_")[1])]
                     user_selection[cid] = {"asset": ast}
@@ -430,21 +434,9 @@ def webhook():
                     
             elif "message" in up and "text" in up["message"]:
                 cid = up["message"]["chat"]["id"]
-                txt_msg = up["message"]["text"].strip()
-                
-                if cid == SUPER_USER_CHAT_ID or cid in authorized_users:
-                    send_assets_menu(cid, 0)
-                    return "ok", 200
-                    
-                if cid in pending_approval:
-                    send_message(cid, "⏳ Il tuo ID Pocket Option è già in attesa di approvazione.")
-                    return "ok", 200
-                
-                # Primo messaggio inviato dall'utente: viene registrato come ID Pocket Option
-                pending_approval[cid] = txt_msg
-                admin_text = f"🔔 **Nuova richiesta di accesso!**\n\n• **Chat ID Telegram:** `{cid}`\n• **ID Pocket Option:** `{txt_msg}`"
-                send_message(SUPER_USER_CHAT_ID, admin_text, {"inline_keyboard": [[{"text": "SI", "callback_data": "approve_" + str(cid)}, {"text": "NO", "callback_data": "reject_" + str(cid)}]]})
-                send_message(cid, "⏳ ID Pocket Option ricevuto. In attesa di approvazione da parte dell'amministratore...")
+                # Mostra direttamente il menu asset a qualsiasi utente scriva al bot
+                send_assets_menu(cid, 0)
+                return "ok", 200
         except Exception as e:
             print("Errore nel webhook:", e)
     return "ok", 200
