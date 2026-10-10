@@ -322,6 +322,85 @@ def send_expiry_menu(chat_id, asset_name, msg_id):
     kb = {"inline_keyboard": [[{"text": "1 Minuto", "callback_data": "exp_1m"}], [{"text": "2 Minuti", "callback_data": "exp_2m"}], [{"text": "3 Minuti", "callback_data": "exp_3m"}], [{"text": "5 Minuti", "callback_data": "exp_5m"}], [{"text": "≡ Cambia Asset", "callback_data": "back_assets"}]]}
     edit_message(chat_id, msg_id, f"💲💹 Asset: {asset_name}\n\nSeleziona la scadenza:", kb)
 
+def process_analysis_background(cid, mid, ast_name, exp_key):
+    try:
+        data = fetch_yahoo_real_data(ast_name)
+
+        if data == "MERCATO_CHIUSO":
+            closed_text = f"⚠️ **Mercato Chiuso per {ast_name}!**\n\nQuesto asset reale è attualmente chiuso. Scegli un altro asset oppure un asset con dicitura **OTC**."
+            closed_kb = {"inline_keyboard": [[{"text": "≡ Cambia Asset", "callback_data": "back_assets"}]]}
+            edit_message(cid, mid, closed_text, closed_kb)
+            return
+
+        if data is None or data.empty:
+            error_text = f"⚠️ **Yahoo Finance non risponde per {ast_name}.**\n\nIl server è temporaneamente occupato. Clicca su Aggiorna per riprovare."
+            error_kb = {"inline_keyboard": [[{"text": "🔄 Aggiorna", "callback_data": "retry_" + ast_name + "_" + exp_key}], [{"text": "≡ Cambia Asset", "callback_data": "back_assets"}]]}
+            edit_message(cid, mid, error_text, error_kb)
+            return
+
+        italian_tz = timezone(timedelta(hours=2))
+        current_it_time = datetime.now(italian_tz)
+        next_entry_dt = current_it_time + timedelta(minutes=1)
+        entry_time = next_entry_dt.replace(second=0, microsecond=0).strftime('%H:%M:%S')
+        
+        rsi_val, macd_line, macd_signal, macd_hist, current_close, current_ema = calculate_indicators(data)
+        
+        trend_bullish = current_close > current_ema
+        
+        cond_buy = (
+            trend_bullish and 
+            macd_line > macd_signal and 
+            macd_hist > 0 and 
+            rsi_val >= 50 and rsi_val <= 70
+        )
+        
+        cond_sell = (
+            not trend_bullish and 
+            macd_line < macd_signal and 
+            macd_hist < 0 and 
+            rsi_val <= 50 and rsi_val >= 30
+        )
+
+        if cond_buy:
+            sig_type = "ACQUISTA (BUY)"
+        elif cond_sell:
+            sig_type = "VENDI (SELL)"
+        else:
+            sig_type = "ACQUISTA (BUY)" if macd_line >= macd_signal else "VENDI (SELL)"
+            
+        conf = round(79.0 + abs(macd_hist) * 800, 1)
+        conf = min(97.0, max(68.0, conf))
+
+        sig_emoji = "🟢" if "ACQUISTA" in sig_type else "🔴"
+        exp_map = {"1m": "1 Minuto (1M)", "2m": "2 Minuti (2M)", "3m": "3 Minuti (3M)", "5m": "5 Minuti (5M)"}
+        expiry_name = exp_map.get(exp_key, "1 Minuto (1M)")
+
+        text = "🐂🐻 ANALISI EASY TRACK\n\n"
+        text += f"💲💹 Asset: {ast_name}\n"
+        text += f"💵 Prezzo Reale: `{round(current_close, 5)}`\n"
+        text += f"🎯 Segnale: {sig_type} {sig_emoji}\n\n"
+        text += "🛠️ Indicatori:\n"
+        text += f"• RSI (9): {rsi_val}\n"
+        text += f"• Linea MACD: {macd_line}\n"
+        text += f"• Segnale MACD: {macd_signal}\n"
+        text += f"• Istogramma: {macd_hist}\n\n"
+        text += f"⚖️ Affidabilità: {conf}%\n"
+        text += f"⏳ Scadenza: {expiry_name}\n"
+        text += f"📌 Entrata: {entry_time}"
+        
+        kb = {"inline_keyboard": [[{"text": "🔄 Aggiorna", "callback_data": "retry_" + ast_name + "_" + exp_key}], [{"text": "≡ Cambia Asset", "callback_data": "back_assets"}]]}
+        
+        chart_buf = generate_chart_image(data, ast_name)
+        
+        api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
+        if chart_buf:
+            send_photo_message(cid, chart_buf, text, kb)
+        else:
+            send_message(cid, text, kb)
+    except Exception as e:
+        print("Errore nel background thread:", e)
+        edit_message(cid, mid, "⚠️ Si è verificato un errore durante l'elaborazione. Riprova.", {"inline_keyboard": [[{"text": "≡ Cambia Asset", "callback_data": "back_assets"}]]})
+
 @app.route('/')
 def index():
     return "Bot operativo al 100%!", 200
@@ -352,80 +431,9 @@ def webhook():
                     
                     edit_message(cid, mid, f"⏳ Elaborazione per {ast_name} ({exp_key.upper()})...")
                     
-                    data = fetch_yahoo_real_data(ast_name)
-
-                    if data == "MERCATO_CHIUSO":
-                        closed_text = f"⚠️ **Mercato Chiuso per {ast_name}!**\n\nQuesto asset reale è attualmente chiuso. Scegli un altro asset oppure un asset con dicitura **OTC**."
-                        closed_kb = {"inline_keyboard": [[{"text": "≡ Cambia Asset", "callback_data": "back_assets"}]]}
-                        edit_message(cid, mid, closed_text, closed_kb)
-                        return "ok", 200
-
-                    if data is None or data.empty:
-                        error_text = f"⚠️ **Yahoo Finance non risponde per {ast_name}.**\n\nIl server è temporaneamente occupato. Clicca su Aggiorna per riprovare."
-                        error_kb = {"inline_keyboard": [[{"text": "🔄 Aggiorna", "callback_data": "retry_" + ast_name + "_" + exp_key}], [{"text": "≡ Cambia Asset", "callback_data": "back_assets"}]]}
-                        edit_message(cid, mid, error_text, error_kb)
-                        return "ok", 200
-
-                    italian_tz = timezone(timedelta(hours=2))
-                    current_it_time = datetime.now(italian_tz)
-                    next_entry_dt = current_it_time + timedelta(minutes=1)
-                    entry_time = next_entry_dt.replace(second=0, microsecond=0).strftime('%H:%M:%S')
-                    
-                    rsi_val, macd_line, macd_signal, macd_hist, current_close, current_ema = calculate_indicators(data)
-                    
-                    trend_bullish = current_close > current_ema
-                    
-                    cond_buy = (
-                        trend_bullish and 
-                        macd_line > macd_signal and 
-                        macd_hist > 0 and 
-                        rsi_val >= 50 and rsi_val <= 70
-                    )
-                    
-                    cond_sell = (
-                        not trend_bullish and 
-                        macd_line < macd_signal and 
-                        macd_hist < 0 and 
-                        rsi_val <= 50 and rsi_val >= 30
-                    )
-
-                    if cond_buy:
-                        sig_type = "ACQUISTA (BUY)"
-                    elif cond_sell:
-                        sig_type = "VENDI (SELL)"
-                    else:
-                        sig_type = "ACQUISTA (BUY)" if macd_line >= macd_signal else "VENDI (SELL)"
-                        
-                    conf = round(79.0 + abs(macd_hist) * 800, 1)
-                    conf = min(97.0, max(68.0, conf))
-
-                    sig_emoji = "🟢" if "ACQUISTA" in sig_type else "🔴"
-                    exp_map = {"1m": "1 Minuto (1M)", "2m": "2 Minuti (2M)", "3m": "3 Minuti (3M)", "5m": "5 Minuti (5M)"}
-                    expiry_name = exp_map.get(exp_key, "1 Minuto (1M)")
-
-                    text = "🐂🐻 ANALISI EASY TRACK\n\n"
-                    text += f"💲💹 Asset: {ast_name}\n"
-                    text += f"💵 Prezzo Reale: `{round(current_close, 5)}`\n"
-                    text += f"🎯 Segnale: {sig_type} {sig_emoji}\n\n"
-                    text += "🛠️ Indicatori:\n"
-                    text += f"• RSI (9): {rsi_val}\n"
-                    text += f"• Linea MACD: {macd_line}\n"
-                    text += f"• Segnale MACD: {macd_signal}\n"
-                    text += f"• Istogramma: {macd_hist}\n\n"
-                    text += f"⚖️ Affidabilità: {conf}%\n"
-                    text += f"⏳ Scadenza: {expiry_name}\n"
-                    text += f"📌 Entrata: {entry_time}"
-                    
-                    kb = {"inline_keyboard": [[{"text": "🔄 Aggiorna", "callback_data": "retry_" + ast_name + "_" + exp_key}], [{"text": "≡ Cambia Asset", "callback_data": "back_assets"}]]}
-                    
-                    chart_buf = generate_chart_image(data, ast_name)
-                    
-                    api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
-                    if chart_buf:
-                        send_photo_message(cid, chart_buf, text, kb)
-                    else:
-                        # FALLBACK DI SICUREZZA: se il grafico fallisce, invia comunque il messaggio di testo con il segnale!
-                        send_message(cid, text, kb)
+                    # Avvia l'analisi in background thread per liberare subito il webhook
+                    threading.Thread(target=process_analysis_background, args=(cid, mid, ast_name, exp_key)).start()
+                    return "ok", 200
 
                 elif val.startswith("pg_"):
                     api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
