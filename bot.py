@@ -121,7 +121,6 @@ def answer_callback(cq_id):
     api_call("answerCallbackQuery", {"callback_query_id": cq_id})
 
 def analyze_market_structure(df):
-    """Analisi della struttura di mercato (Higher Highs / Higher Lows)"""
     highs = df['High']
     lows = df['Low']
     if isinstance(highs, pd.DataFrame):
@@ -150,7 +149,6 @@ def calculate_indicators(df):
     current_close = float(close.iloc[-1])
     prev_close = float(close.iloc[-2]) if len(close) > 1 else current_close
 
-    # RSI (9)
     delta = close.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=9).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=9).mean()
@@ -161,7 +159,6 @@ def calculate_indicators(df):
     if math.isnan(current_rsi): 
         current_rsi = 50.0
 
-    # MACD (12, 26, 9)
     exp1 = close.ewm(span=12, adjust=False).mean()
     exp2 = close.ewm(span=26, adjust=False).mean()
     macd = exp1 - exp2
@@ -263,49 +260,88 @@ def get_yahoo_ticker(asset_name):
         return clean.replace("/", "") + "=X"
     return clean
 
-def fetch_yahoo_real_data(asset_name):
+def fetch_binance_real_data(asset_name):
+    clean = asset_name.replace(" OTC", "").replace("'", "").strip()
+    mapping = {
+        "Bitcoin": "BTCUSDT", "Ethereum": "ETHUSDT", "Cardano": "ADAUSDT",
+        "Polkadot": "DOTUSDT", "Toncoin": "TONUSDT", "TRON": "TRXUSDT",
+        "Dogecoin": "DOGEUSDT", "Litecoin": "LTCUSDT", "Chainlink": "LINKUSDT",
+        "Solana": "SOLUSDT", "BNB": "BNBUSDT", "Polygon": "MATICUSDT",
+        "Avalanche": "AVAXUSDT", "Dash": "DASHUSDT"
+    }
+    if clean not in mapping:
+        return None
+        
+    symbol = mapping[clean]
+    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=50"
+    try:
+        response = requests.get(url, timeout=3.0)
+        if response.status_code != 200:
+            return None
+            
+        data = response.json()
+        timestamps = [x[0] / 1000.0 for x in data]
+        opens = [float(x[1]) for x in data]
+        highs = [float(x[2]) for x in data]
+        lows = [float(x[3]) for x in data]
+        closes = [float(x[4]) for x in data]
+        
+        df = pd.DataFrame({
+            'Open': opens,
+            'High': highs,
+            'Low': lows,
+            'Close': closes
+        }, index=pd.to_datetime(timestamps, unit='s'))
+        
+        return df.dropna()
+    except Exception as e:
+        print(f"Errore API Binance per {asset_name}: {e}")
+        return None
+
+def fetch_market_data(asset_name):
     current_time = time.time()
     if asset_name in market_cache:
         ts, cached_df = market_cache[asset_name]
         if current_time - ts < CACHE_DURATION:
             return cached_df
 
-    ticker_symbol = get_yahoo_ticker(asset_name)
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker_symbol}?interval=1m&range=1d"
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-        'Accept': 'application/json'
-    }
+    # Prova prima Binance per le cripto reali (match perfetto con Pocket Option)
+    df = fetch_binance_real_data(asset_name)
     
-    try:
-        response = requests.get(url, headers=headers, timeout=3.0)
-        if response.status_code != 200:
-            raise Exception(f"HTTP {response.status_code}")
-            
-        data = response.json()
-        result = data['chart']['result'][0]
-        timestamps = result['timestamp']
-        quote = result['indicators']['quote'][0]
-        
-        df = pd.DataFrame({
-            'Open': quote['open'],
-            'High': quote['high'],
-            'Low': quote['low'],
-            'Close': quote['close']
-        }, index=pd.to_datetime(timestamps, unit='s'))
-        
-        clean_df = df.dropna()
-        if clean_df.empty:
-            raise Exception("Dati vuoti")
+    # Se non è una crypto o Binance fallisce, usa Yahoo Finance
+    if df is None or df.empty:
+        ticker_symbol = get_yahoo_ticker(asset_name)
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker_symbol}?interval=1m&range=1d"
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'application/json'
+        }
+        try:
+            response = requests.get(url, headers=headers, timeout=3.0)
+            if response.status_code == 200:
+                data = response.json()
+                result = data['chart']['result'][0]
+                timestamps = result['timestamp']
+                quote = result['indicators']['quote'][0]
+                
+                df = pd.DataFrame({
+                    'Open': quote['open'],
+                    'High': quote['high'],
+                    'Low': quote['low'],
+                    'Close': quote['close']
+                }, index=pd.to_datetime(timestamps, unit='s'))
+                df = df.dropna()
+        except Exception as e:
+            print(f"Errore Yahoo per {asset_name}: {e}")
 
-        market_cache[asset_name] = (current_time, clean_df)
-        return clean_df
-    except Exception as e:
-        print(f"Errore caricamento dati per {asset_name}: {e}")
-        if asset_name in market_cache:
-            _, old_df = market_cache[asset_name]
-            return old_df
-        return None
+    if df is not None and not df.empty:
+        market_cache[asset_name] = (current_time, df)
+        return df
+
+    if asset_name in market_cache:
+        _, old_df = market_cache[asset_name]
+        return old_df
+    return None
 
 def send_assets_menu(chat_id, page=0, msg_id=None):
     if msg_id:
@@ -342,7 +378,7 @@ def send_expiry_menu(chat_id, asset_name, msg_id):
 
 def process_analysis_background(cid, mid, ast_name, exp_key):
     try:
-        data = fetch_yahoo_real_data(ast_name)
+        data = fetch_market_data(ast_name)
 
         if data is None or data.empty:
             error_text = f"⚠️ **Impossibile recuperare i dati per {ast_name}.**\n\nIl server è temporaneamente occupato."
@@ -357,9 +393,8 @@ def process_analysis_background(cid, mid, ast_name, exp_key):
         
         rsi_val, macd_line, macd_signal, macd_hist, current_close, prev_close, current_ema, structure_name, structure_score = calculate_indicators(data)
         
-        # LOGICA POTENZIATA CON STRUTTURA DI MERCATO
         score = 0
-        score += structure_score  # La struttura ha un peso maggiore sul segnale
+        score += structure_score
 
         if current_close > prev_close: score += 1
         else: score -= 1
