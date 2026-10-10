@@ -174,19 +174,8 @@ def answer_callback(cq_id):
   api_call('answerCallbackQuery', {'callback_query_id': cq_id})
 
 
-def get_telegram_file_url(file_id):
-  try:
-    res = api_call('getFile', {'file_id': file_id})
-    if res and res.get('ok'):
-      file_path = res['result']['file_path']
-      return f'https://api.telegram.org/file/bot{TG_TOKEN}/{file_path}'
-  except Exception as e:
-    print('Errore recupero file Telegram:', e)
-  return None
-
-
 # =====================================================================
-# 1. MOTORE MERCATI REALI (AUTOMATICO CON GRAFICO)
+# MOTORE ANALISI TECNICA AUTOMATICA
 # =====================================================================
 def analyze_market_structure(df):
   highs = df['High']
@@ -394,37 +383,6 @@ def calculate_indicators(df):
   )
 
 
-# =====================================================================
-# 2. SPALLA OTC SMART (ANALISI VISIVA CON CONTROLLO QUALITÀ E IA)
-# =====================================================================
-def analyze_otc_screenshot_with_ai(image_url, asset_name):
-  try:
-    # Controllo validità immagine (motore di visione)
-    image_is_valid = True
-    if not image_is_valid:
-      return None
-
-    return {
-        'signal': (
-            'ACQUISTA (BUY)'
-            if 'EUR' in asset_name or 'GBP' in asset_name
-            else 'VENDI (SELL)'
-        ),
-        'rsi': '28.1 (Reazione da livello chiave)',
-        'ema_status': 'Prezzo testando EMA 20 🟢',
-        'macd_status': 'Incrocio rialzista confermato',
-        'suggested_expiry': '1 Minuto (1M)',
-        'reliability': '91.2%',
-        'note': (
-            'Immagine nitida. Confluenza perfetta tra EMA 20 e RSI in'
-            ' ipervenduto.'
-        ),
-    }
-  except Exception as e:
-    print("Errore nell'analisi visiva dell'immagine:", e)
-    return None
-
-
 def generate_chart_image(df, asset_name):
   with chart_lock:
     try:
@@ -500,6 +458,7 @@ def generate_chart_image(df, asset_name):
 
 
 def get_yahoo_ticker(asset_name):
+  # Pulisce la stringa rimuovendo eventuale "(OTC)" per la ricerca dati
   clean = asset_name.replace("'", '').replace('(OTC)', '').strip()
   mapping = {
       'EUR/USD': 'EURUSD=X',
@@ -696,7 +655,7 @@ def send_assets_menu(chat_id, page=0, msg_id=None):
   if nav:
     kb.append(nav)
 
-  text = '👋 Scegli un asset (Reale con grafico / OTC smart con foto):'
+  text = '👋 Scegli un asset per ricevere l\'analisi e il grafico:'
   send_message(chat_id, text, {'inline_keyboard': kb})
 
 
@@ -755,7 +714,7 @@ def process_analysis_background(cid, mid, ast_name, exp_key):
         sig_type,
         conf,
     ) = calculate_indicators(data)
-    engine_label = '🐂🐻 ANALISI EASY TRACK (1M)'
+    engine_label = '🐂🐻 ANALISI SEGNALE'
 
     sig_emoji = '🟢' if 'ACQUISTA' in sig_type else '🔴'
     exp_map = {
@@ -813,7 +772,7 @@ def process_analysis_background(cid, mid, ast_name, exp_key):
 
 @app.route('/')
 def index():
-  return 'Bot operativo: Architettura duale Reali + OTC Smart con IA!', 200
+  return 'Bot operativo!', 200
 
 
 @app.route('/webhook', methods=['POST'])
@@ -833,26 +792,8 @@ def webhook():
         if val.startswith('ast_'):
           ast = ALL_ASSETS[int(val.split('_')[1])]
           user_selection[cid] = {'asset': ast}
-
-          # SE È OTC -> SALTO MENU SCADENZA, ATTESA SCREENSHOT
-          if '(OTC)' in ast:
-            delete_message(cid, mid)
-            user_selection[cid]['waiting_for_photo'] = True
-            text = (
-                f'🎰 **SPALLA OTC - ANALISI SMART**\n\nAsset: `{ast}`\n\n📸 **Fai'
-                ' con calma:** Invia lo screenshot del tuo grafico Pocket'
-                ' Option.\n*(Assicurati che l\'immagine sia nitida con candele,'
-                ' EMA 20, RSI e MACD visibili)*'
-            )
-            kb = {
-                'inline_keyboard': [
-                    [{'text': '❌ Annulla', 'callback_data': 'back_assets'}]
-                ]
-            }
-            send_message(cid, text, kb)
-          else:
-            # SE È REALE -> MENU SCADENZE CLASSICO
-            send_expiry_menu(cid, ast, mid)
+          # Ora qualsiasi asset (incluso OTC) apre direttamente il menu delle scadenze
+          send_expiry_menu(cid, ast, mid)
 
         elif val.startswith('exp_') or val.startswith('retry_'):
           if val.startswith('exp_'):
@@ -880,89 +821,15 @@ def webhook():
         elif val.startswith('pg_'):
           send_assets_menu(cid, int(val.split('_')[1]), msg_id=mid)
         elif val == 'back_assets':
-          if cid in user_selection:
-            user_selection[cid]['waiting_for_photo'] = False
           send_assets_menu(cid, 0, msg_id=mid)
 
       elif 'message' in up:
         msg = up['message']
         cid = msg['chat']['id']
-
-        if 'photo' in msg and cid in user_selection and user_selection[cid].get('waiting_for_photo'):
-          ast_name = user_selection[cid].get('asset', 'EUR/USD (OTC)')
-          photo_list = msg['photo']
-          file_id = photo_list[-1]['file_id']
-          img_url = get_telegram_file_url(file_id)
-          user_photo_msg_id = msg['message_id']
-
-          temp_mid = send_message(
-              cid,
-              '🤖 *Controllo qualità e lettura indicatori in corso...*',
-          )
-
-          ai_res = analyze_otc_screenshot_with_ai(img_url, ast_name)
-          delete_message(cid, temp_mid)
-          
-          # 🗑️ Elimina subito la foto inviata dall'utente per pulire la chat
-          delete_message(cid, user_photo_msg_id)
-
-          # PROTEZIONE ERRORI / FOTO ILLEGGIBILE
-          if not ai_res:
-            user_selection[cid]['waiting_for_photo'] = True
-            error_text = (
-                '⚠️ **Screenshot non leggibile o sfocato.**\n\nImpossibile'
-                ' rilevare con precisione la EMA 20, l\'RSI 9 o il MACD.\n\n📸'
-                ' *Per favore, scatta e invia un nuovo screenshot più nitido.*'
-            )
-            kb = {
-                'inline_keyboard': [
-                    [{'text': '❌ Cambia Asset', 'callback_data': 'back_assets'}]
-                ]
-            }
-            send_message(cid, error_text, kb)
-            return 'ok', 200
-
-          user_selection[cid]['waiting_for_photo'] = False
-
-          now_it = datetime.now(ITALY_TZ)
-          next_entry_dt = now_it.replace(
-              second=0, microsecond=0
-          ) + timedelta(minutes=1)
-          entry_time = next_entry_dt.strftime('%H:%M:%S')
-
-          sig_emoji = '🟢' if 'ACQUISTA' in ai_res['signal'].upper() else '🔴'
-          text = (
-              '🎰 *SPALLA OTC - VERDETTO SMART (IA)*\n\n'
-              f'💲💹 Asset: {ast_name}\n'
-              f'🎯 Direzione Consigliata: {ai_res["signal"]} {sig_emoji}\n\n'
-              '📊 Quadro Tecnico (da Screenshot):\n'
-              f'• RSI (9): `{ai_res["rsi"]}`\n'
-              f'• EMA 20: `{ai_res["ema_status"]}`\n'
-              f'• MACD: `{ai_res["macd_status"]}`\n\n'
-              f'💡 Motivazione: {ai_res["note"]}\n'
-              f'⏳ **Scadenza Consigliata dall IA:** `{ai_res["suggested_expiry"]}`\n'
-              f'📌 **Orario Esatto di Ingresso:** `{entry_time}`\n'
-              f'⚖️ Affidabilità: {ai_res["reliability"]}\n\n'
-              '*Prendi tutto il tempo: imposta la scadenza e l\'importo'
-              ' consigliati, poi entra in sincronia all\'orario esatto indicato'
-              ' sopra!*'
-          )
-
-          kb = {
-              'inline_keyboard': [
-                  [{'text': '≡ Cambia Asset', 'callback_data': 'back_assets'}]
-              ]
-          }
-          send_message(cid, text, kb)
-          return 'ok', 200
-
-        elif 'text' in msg:
-          mid = msg['message_id']
-          delete_message(cid, mid)
-          if cid in user_selection:
-            user_selection[cid]['waiting_for_photo'] = False
-          send_assets_menu(cid, 0)
-          return 'ok', 200
+        mid = msg['message_id']
+        delete_message(cid, mid)
+        send_assets_menu(cid, 0)
+        return 'ok', 200
 
     except Exception as e:
       print('Errore nel webhook:', e)
