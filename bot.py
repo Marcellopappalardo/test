@@ -294,7 +294,7 @@ def fetch_yahoo_real_data(asset_name):
         return None
 
 def send_assets_menu(chat_id, page=0, msg_id=None):
-    per_page = 8  # 4 coppie (reale + OTC) per pagina su 2 colonne
+    per_page = 8
     sub = ALL_ASSETS[page*per_page:(page+1)*per_page]
     kb = []
     for i in range(0, len(sub), 2):
@@ -434,7 +434,6 @@ def webhook():
                     
             elif "message" in up and "text" in up["message"]:
                 cid = up["message"]["chat"]["id"]
-                # Accesso immediato per chiunque scriva al bot
                 send_assets_menu(cid, 0)
                 return "ok", 200
         except Exception as e:
