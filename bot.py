@@ -20,7 +20,7 @@ TG_TOKEN = "8585533636:AAE_J2ospaddCWva9gPHzE26dCp2_WaziLk"
 BASE_URL = "https://api.telegram.org/bot" + TG_TOKEN
 
 market_cache = {}
-CACHE_DURATION = 300
+CACHE_DURATION = 3600 # Durata cache estesa per mantenere stabili gli ultimi dati reali
 chart_lock = threading.Lock()
 
 ALL_ASSETS = [
@@ -244,11 +244,8 @@ def get_yahoo_ticker(asset_name):
 
 def fetch_yahoo_real_data(asset_name):
     current_time = time.time()
-    if asset_name in market_cache:
-        ts, cached_df = market_cache[asset_name]
-        if current_time - ts < CACHE_DURATION:
-            return cached_df
-
+    
+    # Tentativo di prelievo live da Yahoo Finance
     ticker_symbol = get_yahoo_ticker(asset_name)
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker_symbol}?interval=1m&range=1d"
     headers = {
@@ -258,39 +255,33 @@ def fetch_yahoo_real_data(asset_name):
     
     try:
         response = requests.get(url, headers=headers, timeout=3.0)
-        if response.status_code != 200:
-            raise Exception(f"HTTP {response.status_code}")
+        if response.status_code == 200:
+            data = response.json()
+            result = data['chart']['result'][0]
+            timestamps = result['timestamp']
+            quote = result['indicators']['quote'][0]
             
-        data = response.json()
-        result = data['chart']['result'][0]
-        timestamps = result['timestamp']
-        quote = result['indicators']['quote'][0]
-        
-        df = pd.DataFrame({
-            'Open': quote['open'],
-            'High': quote['high'],
-            'Low': quote['low'],
-            'Close': quote['close']
-        }, index=pd.to_datetime(timestamps, unit='s'))
-        
-        clean_df = df.dropna()
-        if clean_df.empty:
-            raise Exception("Dati vuoti")
+            df = pd.DataFrame({
+                'Open': quote['open'],
+                'High': quote['high'],
+                'Low': quote['low'],
+                'Close': quote['close']
+            }, index=pd.to_datetime(timestamps, unit='s'))
             
-        last_candle_time = clean_df.index[-1]
-        now_utc = pd.Timestamp.now(tz='UTC').tz_localize(None)
-        if (now_utc - last_candle_time).total_seconds() > 5400:
-            if "OTC" not in asset_name and "BTC" not in asset_name and "ETH" not in asset_name and "Bitcoin" not in asset_name and "Ethereum" not in asset_name:
-                return "MERCATO_CHIUSO"
-
-        market_cache[asset_name] = (current_time, clean_df)
-        return clean_df
+            clean_df = df.dropna()
+            if not clean_df.empty:
+                market_cache[asset_name] = (current_time, clean_df)
+                return clean_df
     except Exception as e:
-        print(f"Errore dati reali per {asset_name}: {e}")
-        if asset_name in market_cache:
-            _, old_df = market_cache[asset_name]
-            return old_df
-        return None
+        print(f"Fetch live non riuscito per {asset_name}: {e}")
+
+    # Fallback intelligente: se il mercato è chiuso o la richiesta fallisce, 
+    # restituisce l'ultimo storico reale salvato in cache per calcolare gli indicatori reali.
+    if asset_name in market_cache:
+        _, old_df = market_cache[asset_name]
+        return old_df
+        
+    return None
 
 def send_assets_menu(chat_id, page=0, msg_id=None):
     per_page = 8
@@ -324,14 +315,8 @@ def process_analysis_background(cid, mid, ast_name, exp_key):
     try:
         data = fetch_yahoo_real_data(ast_name)
 
-        if data == "MERCATO_CHIUSO":
-            closed_text = f"⚠️ **Mercato Chiuso per {ast_name}!**\n\nQuesto asset reale è attualmente chiuso. Scegli un altro asset oppure un asset con dicitura **OTC**."
-            closed_kb = {"inline_keyboard": [[{"text": "≡ Cambia Asset", "callback_data": "back_assets"}]]}
-            edit_message(cid, mid, closed_text, closed_kb)
-            return
-
         if data is None or data.empty:
-            error_text = f"⚠️ **Impossibile recuperare i dati reali per {ast_name}.**\n\nIl server è temporaneamente occupato. Clicca su Aggiorna per riprovare."
+            error_text = f"⚠️ **Nessun dato storico disponibile per {ast_name}.**\n\nIl server è temporaneamente occupato. Clicca su Aggiorna per riprovare."
             error_kb = {"inline_keyboard": [[{"text": "🔄 Aggiorna", "callback_data": "retry_" + ast_name + "_" + exp_key}], [{"text": "≡ Cambia Asset", "callback_data": "back_assets"}]]}
             edit_message(cid, mid, error_text, error_kb)
             return
