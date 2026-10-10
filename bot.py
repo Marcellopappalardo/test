@@ -305,15 +305,15 @@ def fetch_market_data(asset_name):
         if current_time - ts < CACHE_DURATION:
             return cached_df
 
-    # Prova prima Binance per le cripto reali (match perfetto con Pocket Option)
+    # 1. Prova prima Binance per le cripto
     df = fetch_binance_real_data(asset_name)
     
-    # Se non è una crypto o Binance fallisce, usa Yahoo Finance
+    # 2. Se non è crypto, usa Yahoo Finance con Resampling rigoroso a 1 minuto
     if df is None or df.empty:
         ticker_symbol = get_yahoo_ticker(asset_name)
         url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker_symbol}?interval=1m&range=1d"
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
             'Accept': 'application/json'
         }
         try:
@@ -324,15 +324,32 @@ def fetch_market_data(asset_name):
                 timestamps = result['timestamp']
                 quote = result['indicators']['quote'][0]
                 
-                df = pd.DataFrame({
+                df_raw = pd.DataFrame({
                     'Open': quote['open'],
                     'High': quote['high'],
                     'Low': quote['low'],
                     'Close': quote['close']
                 }, index=pd.to_datetime(timestamps, unit='s'))
+                
+                df_raw = df_raw[~df_raw.index.duplicated(keep='first')]
+                df_raw = df_raw.dropna()
+                
+                # RESAMPLING RIGOROSO A 1 MINUTO (Evita buchi e allinea le candele)
+                df = df_raw.resample('1min').agg({
+                    'Open': 'first',
+                    'High': 'max',
+                    'Low': 'min',
+                    'Close': 'last'
+                })
+                
+                df['Close'] = df['Close'].ffill()
+                df['Open'] = df['Open'].fillna(df['Close'])
+                df['High'] = df['High'].fillna(df['Close'])
+                df['Low'] = df['Low'].fillna(df['Close'])
                 df = df.dropna()
+                
         except Exception as e:
-            print(f"Errore Yahoo per {asset_name}: {e}")
+            print(f"Errore Yahoo ottimizzato per {asset_name}: {e}")
 
     if df is not None and not df.empty:
         market_cache[asset_name] = (current_time, df)
