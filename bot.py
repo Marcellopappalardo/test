@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta
 import io
 import json
 import math
@@ -5,7 +6,7 @@ import os
 import threading
 import time
 import traceback
-from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from flask import Flask, request
 import matplotlib
 import mplfinance as mpf
@@ -22,10 +23,11 @@ TG_TOKEN = '8585533636:AAE_J2ospaddCWva9gPHzE26dCp2_WaziLk'
 BASE_URL = 'https://api.telegram.org/bot' + TG_TOKEN
 
 market_cache = {}
-CACHE_DURATION = 10  # Cache a 10 secondi per dati sempre freschi
+CACHE_DURATION = 5  # Ridotto a 5 secondi per massimizzare la freschezza dei dati
 chart_lock = threading.Lock()
 
-# Lista pulita ed esclusiva solo per i MERCATI REALI (senza alcun asset OTC)
+ITALY_TZ = ZoneInfo('Europe/Rome')
+
 ALL_ASSETS = [
     'EUR/USD',
     'GBP/USD',
@@ -54,7 +56,6 @@ ALL_ASSETS = [
     'GBP/CAD',
     'GBP/AUD',
     'USD/ARS',
-    # Criptovalute Reali
     'Bitcoin',
     'Ethereum',
     'Cardano',
@@ -74,7 +75,6 @@ ALL_ASSETS = [
     'BCH/JPY',
     'BTC/GBP',
     'BTC/JPY',
-    # Azioni Reali
     'APPLE',
     'MICROSOFT',
     'TESLA',
@@ -138,10 +138,9 @@ def edit_message(chat_id, msg_id, text, markup=None):
       'text': text,
       'parse_mode': 'Markdown',
   }
-  if markup is not None:
-    p['reply_markup'] = markup
-  else:
-    p['reply_markup'] = {'inline_keyboard': []}
+  p['reply_markup'] = (
+      markup if markup is not None else {'inline_keyboard': []}
+  )
   api_call('editMessageText', p)
 
 
@@ -215,10 +214,11 @@ def detect_candlestick_pattern(df):
   if upper_shadow >= body * 2 and lower_shadow <= body * 0.5 and cl < o:
     return 'Stella Cadente / Shooting Star 🔴'
 
-  if cl > o:
-    return 'Candela Rialzista Standard 📈'
-  else:
-    return 'Candela Ribassista Standard 📉'
+  return (
+      'Candela Rialzista Standard 📈'
+      if cl > o
+      else 'Candela Ribassista Standard 📉'
+  )
 
 
 def check_trend_reversal(df, macd_hist):
@@ -259,9 +259,11 @@ def check_trend_reversal(df, macd_hist):
   elif prev_close >= prev_ema and curr_close < curr_ema:
     reversal_messages.append('Rottura Ribassista EMA 20 🔻')
 
-  if reversal_messages:
-    return ' | '.join(reversal_messages)
-  return 'Nessuna inversione immediata (Trend stabile)'
+  return (
+      ' | '.join(reversal_messages)
+      if reversal_messages
+      else 'Nessuna inversione immediata (Trend stabile)'
+  )
 
 
 def calculate_indicators(df):
@@ -321,7 +323,10 @@ def generate_chart_image(df, asset_name):
     try:
       plt.close('all')
       df_clean = df.copy()
-      df_clean.index = df_clean.index + timedelta(hours=2)
+
+      if df_clean.index.tz is None:
+        df_clean.index = df_clean.index.tz_localize('UTC')
+      df_clean.index = df_clean.index.tz_convert(ITALY_TZ)
 
       for col in ['Open', 'High', 'Low', 'Close']:
         df_clean[col] = df_clean[col].astype(float)
@@ -430,6 +435,7 @@ def get_yahoo_ticker(asset_name):
       'Avalanche': 'AVAX-USD',
       'Polygon': 'MATIC-USD',
       'BNB': 'BNB-USD',
+      'Dash': 'DASH-USD',
       'APPLE': 'AAPL',
       'MICROSOFT': 'MSFT',
       'TESLA': 'TSLA',
@@ -483,7 +489,7 @@ def fetch_binance_real_data(asset_name):
 
     df = pd.DataFrame(
         {'Open': opens, 'High': highs, 'Low': lows, 'Close': closes},
-        index=pd.to_datetime(timestamps, unit='s'),
+        index=pd.to_datetime(timestamps, unit='s', utc=True),
     )
 
     df = df[~df.index.duplicated(keep='first')]
@@ -528,7 +534,7 @@ def fetch_market_data(asset_name):
                 'Low': quote['low'],
                 'Close': quote['close'],
             },
-            index=pd.to_datetime(timestamps, unit='s'),
+            index=pd.to_datetime(timestamps, unit='s', utc=True),
         )
 
         df_raw = df_raw[~df_raw.index.duplicated(keep='first')]
@@ -545,7 +551,7 @@ def fetch_market_data(asset_name):
         df = df.dropna()
 
     except Exception as e:
-      print(f'Errore Yahoo ottimizzato per {asset_name}: {e}')
+      print(f'Errore Yahoo per {asset_name}: {e}')
 
   if df is not None and not df.empty:
     market_cache[asset_name] = (current_time, df)
@@ -561,7 +567,7 @@ def send_assets_menu(chat_id, page=0, msg_id=None):
   if msg_id:
     delete_message(chat_id, msg_id)
 
-  per_page = 9  # 3x3
+  per_page = 9
   sub = ALL_ASSETS[page * per_page : (page + 1) * per_page]
   kb = []
   for i in range(0, len(sub), 3):
@@ -623,12 +629,15 @@ def process_analysis_background(cid, mid, ast_name, exp_key):
       send_message(cid, error_text, error_kb)
       return
 
-    italian_tz = timezone(timedelta(hours=2))
-    current_it_time = datetime.now(italian_tz)
-    next_entry_dt = current_it_time + timedelta(minutes=1)
-    entry_time = (
-        next_entry_dt.replace(second=0, microsecond=0).strftime('%H:%M:%S')
-    )
+    # SINCRONIZZAZIONE PERFETTA DELL'ORARIO D'ENTRATA (SENZA RITARDO)
+    # Prende l'orario dell'ultima candela reale ricevuta e calcola il minuto successivo esatto in Italia
+    last_candle_time_utc = data.index[-1]
+    if last_candle_time_utc.tzinfo is None:
+      last_candle_time_utc = last_candle_time_utc.tz_localize('UTC')
+
+    last_candle_time_it = last_candle_time_utc.tz_convert(ITALY_TZ)
+    next_entry_dt = last_candle_time_it + timedelta(minutes=1)
+    entry_time = next_entry_dt.strftime('%H:%M:%S')
 
     (
         rsi_val,
@@ -646,29 +655,13 @@ def process_analysis_background(cid, mid, ast_name, exp_key):
 
     score = 0
     score += structure_score
-
-    if current_close > prev_close:
-      score += 1
-    else:
-      score -= 1
-
-    if macd_line > macd_signal:
-      score += 1
-    else:
-      score -= 1
-
-    if macd_hist > 0:
-      score += 1
-    else:
-      score -= 1
-
-    if rsi_val > 50:
-      score += 1
-    else:
-      score -= 1
+    score += 1 if current_close > prev_close else -1
+    score += 1 if macd_line > macd_signal else -1
+    score += 1 if macd_hist > 0 else -1
+    score += 1 if rsi_val > 50 else -1
 
     if abs(rsi_val - 50) < 2.5:
-      score = 0 if score > 0 else (0 if score < 0 else score)
+      score = 0 if score != 0 else score
 
     if score > 0:
       sig_type = 'ACQUISTA (BUY)'
@@ -723,7 +716,6 @@ def process_analysis_background(cid, mid, ast_name, exp_key):
     }
 
     chart_buf = generate_chart_image(data, ast_name)
-
     delete_message(cid, mid)
 
     if chart_buf:
