@@ -86,7 +86,6 @@ def api_call(method, data):
         return None
 
 def delete_message(chat_id, msg_id):
-    """Cancella un messaggio dal canale/chat."""
     if chat_id and msg_id:
         api_call("deleteMessage", {"chat_id": chat_id, "message_id": msg_id})
 
@@ -127,13 +126,12 @@ def calculate_indicators(df):
         close = close.iloc[:, 0]
         
     current_close = float(close.iloc[-1])
+    prev_close = float(close.iloc[-2]) if len(close) > 1 else current_close
 
-    # Calcolo RSI (9)
+    # RSI (9)
     delta = close.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=9).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=9).mean()
-    
-    # Prevenzione divisione per zero
     loss = loss.replace(0, 1e-10)
     rs = gain / loss
     rsi = 100 - (100 / (1 + rs))
@@ -141,7 +139,7 @@ def calculate_indicators(df):
     if math.isnan(current_rsi): 
         current_rsi = 50.0
 
-    # Calcolo MACD (12, 26, 9)
+    # MACD (12, 26, 9)
     exp1 = close.ewm(span=12, adjust=False).mean()
     exp2 = close.ewm(span=26, adjust=False).mean()
     macd = exp1 - exp2
@@ -152,11 +150,10 @@ def calculate_indicators(df):
     m_sig = round(float(signal.iloc[-1]) if not math.isnan(signal.iloc[-1]) else 0, 5)
     m_hist = round(float(hist.iloc[-1]), 5)
 
-    # EMA 20 per Trend
     ema20 = close.ewm(span=20, adjust=False).mean()
     current_ema = round(float(ema20.iloc[-1]), 5)
     
-    return current_rsi, m_line, m_sig, m_hist, current_close, current_ema
+    return current_rsi, m_line, m_sig, m_hist, current_close, prev_close, current_ema
 
 def generate_chart_image(df, asset_name):
     with chart_lock:
@@ -324,9 +321,9 @@ def process_analysis_background(cid, mid, ast_name, exp_key):
         data = fetch_yahoo_real_data(ast_name)
 
         if data is None or data.empty:
-            error_text = f"⚠️ **Impossibile recuperare i dati per {ast_name}.**\n\nIl server è temporaneamente occupato. Clicca su Aggiorna per riprovare."
+            error_text = f"⚠️ **Impossibile recuperare i dati per {ast_name}.**\n\nIl server è temporaneamente occupato."
             error_kb = {"inline_keyboard": [[{"text": "🔄 Aggiorna", "callback_data": "retry_" + ast_name + "_" + exp_key}], [{"text": "≡ Cambia Asset", "callback_data": "back_assets"}]]}
-            edit_message(cid, mid, error_text, error_kb)
+            send_message(cid, error_text, error_kb)
             return
 
         italian_tz = timezone(timedelta(hours=2))
@@ -334,34 +331,31 @@ def process_analysis_background(cid, mid, ast_name, exp_key):
         next_entry_dt = current_it_time + timedelta(minutes=1)
         entry_time = next_entry_dt.replace(second=0, microsecond=0).strftime('%H:%M:%S')
         
-        rsi_val, macd_line, macd_signal, macd_hist, current_close, current_ema = calculate_indicators(data)
+        rsi_val, macd_line, macd_signal, macd_hist, current_close, prev_close, current_ema = calculate_indicators(data)
         
-        # LOGICA BILANCIATA BUY / SELL
-        trend_bullish = current_close > current_ema
-        
+        # LOGICA BILANCIATA REALE (CONSENTE SIA BUY CHE SELL)
         score = 0
-        if trend_bullish: score += 1
+        if current_close > prev_close: score += 1
         else: score -= 1
-            
+
         if macd_line > macd_signal: score += 1
         else: score -= 1
-            
+
         if macd_hist > 0: score += 1
         else: score -= 1
-            
-        if rsi_val > 52: score += 1
-        elif rsi_val < 48: score -= 1
 
-        # Generazione Segnale (Equilibrata)
+        if rsi_val > 50: score += 1
+        else: score -= 1
+
         if score > 0:
             sig_type = "ACQUISTA (BUY)"
         elif score < 0:
             sig_type = "VENDI (SELL)"
         else:
-            sig_type = "ACQUISTA (BUY)" if macd_hist >= 0 else "VENDI (SELL)"
+            sig_type = "ACQUISTA (BUY)" if current_close >= prev_close else "VENDI (SELL)"
             
-        conf = round(75.0 + abs(macd_hist) * 800 + abs(rsi_val - 50) * 0.4, 1)
-        conf = min(97.0, max(68.0, conf))
+        conf = round(72.0 + abs(macd_hist * 1000) + abs(rsi_val - 50) * 0.3, 1)
+        conf = min(96.0, max(65.0, conf))
 
         sig_emoji = "🟢" if "ACQUISTA" in sig_type else "🔴"
         exp_map = {"1m": "1 Minuto (1M)", "2m": "2 Minuti (2M)", "3m": "3 Minuti (3M)", "5m": "5 Minuti (5M)"}
@@ -384,7 +378,7 @@ def process_analysis_background(cid, mid, ast_name, exp_key):
         
         chart_buf = generate_chart_image(data, ast_name)
         
-        # Elimina il messaggio con "In elaborazione..." prima di inviare il segnale
+        # Elimina definitivamente il messaggio precedente (effetto scomparsa istantanea)
         delete_message(cid, mid)
 
         if chart_buf:
@@ -393,7 +387,8 @@ def process_analysis_background(cid, mid, ast_name, exp_key):
             send_message(cid, text, kb)
     except Exception as e:
         print("Errore nel background thread:", e)
-        edit_message(cid, mid, "⚠️ Si è verificato un errore durante l'elaborazione. Riprova.", {"inline_keyboard": [[{"text": "≡ Cambia Asset", "callback_data": "back_assets"}]]})
+        delete_message(cid, mid)
+        send_message(cid, "⚠️ Si è verificato un errore durante l'elaborazione. Riprova.", {"inline_keyboard": [[{"text": "≡ Cambia Asset", "callback_data": "back_assets"}]]})
 
 @app.route('/')
 def index():
@@ -423,10 +418,13 @@ def webhook():
                         exp_key = parts[-1]
                         ast_name = "_".join(parts[1:-1])
                     
-                    # Elimina o aggiorna il messaggio creando l'effetto di transizione
-                    edit_message(cid, mid, f"⏳ Elaborazione per {ast_name} ({exp_key.upper()})...", markup={"inline_keyboard": []})
+                    # Elimina SUBITO il messaggio per farlo sparire all'istante
+                    delete_message(cid, mid)
                     
-                    threading.Thread(target=process_analysis_background, args=(cid, mid, ast_name, exp_key)).start()
+                    # Invia un messaggio temporaneo di elaborazione che poi verrà rimpiazzato dal grafico
+                    temp_mid = send_message(cid, f"⏳ Elaborazione per {ast_name} ({exp_key.upper()})...")
+
+                    threading.Thread(target=process_analysis_background, args=(cid, temp_mid, ast_name, exp_key)).start()
                     return "ok", 200
 
                 elif val.startswith("pg_"):
@@ -437,8 +435,6 @@ def webhook():
             elif "message" in up and "text" in up["message"]:
                 cid = up["message"]["chat"]["id"]
                 mid = up["message"]["message_id"]
-                txt = up["message"]["text"].strip()
-                
                 delete_message(cid, mid)
                 send_assets_menu(cid, 0)
                 return "ok", 200
