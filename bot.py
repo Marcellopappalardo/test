@@ -23,64 +23,39 @@ TG_TOKEN = '8585533636:AAE_J2ospaddCWva9gPHzE26dCp2_WaziLk'
 BASE_URL = 'https://api.telegram.org/bot' + TG_TOKEN
 
 market_cache = {}
-CACHE_DURATION = 5
+CACHE_DURATION = 5  # 5 secondi per mantenere i dati freschi su 1M
 chart_lock = threading.Lock()
 
 ITALY_TZ = ZoneInfo('Europe/Rome')
 
 ALL_ASSETS = [
-    # Coppie Forex Reali & relative OTC affiancate
     'EUR/USD',
-    'EUR/USD (OTC)',
     'GBP/USD',
-    'GBP/USD (OTC)',
     'USD/JPY',
-    'USD/JPY (OTC)',
     'AUD/USD',
-    'AUD/USD (OTC)',
     'USD/CAD',
-    'USD/CAD (OTC)',
     'AUD/CAD',
-    'AUD/CAD (OTC)',
     'USD/MXN',
-    'USD/MXN (OTC)',
     'USD/PKR',
     'EUR/RUB',
     'EUR/TRY',
     'AUD/CHF',
-    'AUD/CHF (OTC)',
     'NZD/USD',
-    'NZD/USD (OTC)',
     'USD/CHF',
-    'USD/CHF (OTC)',
     'EUR/GBP',
-    'EUR/GBP (OTC)',
     'EUR/JPY',
-    'EUR/JPY (OTC)',
     'GBP/JPY',
-    'GBP/JPY (OTC)',
     'AUD/JPY',
-    'AUD/JPY (OTC)',
     'EUR/AUD',
-    'EUR/AUD (OTC)',
     'EUR/CAD',
-    'EUR/CAD (OTC)',
     'EUR/NZD',
-    'EUR/NZD (OTC)',
     'GBP/NZD',
-    'GBP/NZD (OTC)',
     'AUD/NZD',
-    'AUD/NZD (OTC)',
     'CAD/JPY',
-    'CAD/JPY (OTC)',
     'CHF/JPY',
-    'CHF/JPY (OTC)',
     'GBP/CAD',
-    'GBP/CAD (OTC)',
     'GBP/AUD',
-    'GBP/AUD (OTC)',
     'USD/ARS',
-    # Crypto & Azionari
     'Bitcoin',
     'Ethereum',
     'Cardano',
@@ -110,7 +85,6 @@ ALL_ASSETS = [
     "MCDONALD'S",
 ]
 
-# Stato delle selezioni degli utenti
 user_selection = {}
 
 
@@ -174,9 +148,6 @@ def answer_callback(cq_id):
   api_call('answerCallbackQuery', {'callback_query_id': cq_id})
 
 
-# =====================================================================
-# MOTORE ANALISI TECNICA AUTOMATICA
-# =====================================================================
 def analyze_market_structure(df):
   highs = df['High']
   lows = df['Low']
@@ -332,40 +303,6 @@ def calculate_indicators(df):
   candlestick_pattern = detect_candlestick_pattern(df)
   trend_reversal_status = check_trend_reversal(df, m_hist)
 
-  score = 0
-  score += structure_score
-  score += 1 if current_close > prev_close else -1
-  score += 1 if m_hist > 0 else -1
-
-  if current_rsi > 55:
-    score += 1
-  elif current_rsi < 45:
-    score -= 1
-
-  if current_rsi < 20:
-    sig_type = 'ACQUISTA (BUY)'
-    filter_note = 'Rimbalzo Ipervenduto (RSI < 20) 🟢'
-  elif current_rsi > 80:
-    sig_type = 'VENDI (SELL)'
-    filter_note = 'Storno Ipercomprato (RSI > 80) 🔴'
-  else:
-    filter_note = 'Filtro RSI Normale ✅'
-    if score > 0:
-      sig_type = 'ACQUISTA (BUY)'
-    elif score < 0:
-      sig_type = 'VENDI (SELL)'
-    else:
-      sig_type = 'ACQUISTA (BUY)'
-
-  conf = round(
-      70.0
-      + abs(m_hist * 1000)
-      + abs(current_rsi - 50) * 0.3
-      + abs(structure_score) * 2,
-      1,
-  )
-  conf = min(95.0, max(60.0, conf))
-
   return (
       current_rsi,
       m_line,
@@ -377,9 +314,7 @@ def calculate_indicators(df):
       structure_name,
       structure_score,
       candlestick_pattern,
-      f'{filter_note} | {trend_reversal_status}',
-      sig_type,
-      conf,
+      trend_reversal_status,
   )
 
 
@@ -458,8 +393,7 @@ def generate_chart_image(df, asset_name):
 
 
 def get_yahoo_ticker(asset_name):
-  # Pulisce la stringa rimuovendo eventuale "(OTC)" per la ricerca dati
-  clean = asset_name.replace("'", '').replace('(OTC)', '').strip()
+  clean = asset_name.replace("'", '').strip()
   mapping = {
       'EUR/USD': 'EURUSD=X',
       'GBP/USD': 'GBPUSD=X',
@@ -519,7 +453,7 @@ def get_yahoo_ticker(asset_name):
 
 
 def fetch_binance_real_data(asset_name):
-  clean = asset_name.replace("'", '').replace('(OTC)', '').strip()
+  clean = asset_name.replace("'", '').strip()
   mapping = {
       'Bitcoin': 'BTCUSDT',
       'Ethereum': 'ETHUSDT',
@@ -655,7 +589,7 @@ def send_assets_menu(chat_id, page=0, msg_id=None):
   if nav:
     kb.append(nav)
 
-  text = '👋 Scegli un asset per ricevere l\'analisi e il grafico:'
+  text = '👋 Scegli un asset reale (Timeframe 1M):'
   send_message(chat_id, text, {'inline_keyboard': kb})
 
 
@@ -672,7 +606,7 @@ def send_expiry_menu(chat_id, asset_name, msg_id):
   edit_message(
       chat_id,
       msg_id,
-      f'💲💹 Asset Selezionato: {asset_name}\n\nSeleziona la scadenza:',
+      f'💲💹 Asset Reale: {asset_name}\n\nSeleziona la scadenza:',
       kb,
   )
 
@@ -711,10 +645,43 @@ def process_analysis_background(cid, mid, ast_name, exp_key):
         structure_score,
         candlestick_pattern,
         trend_reversal_status,
-        sig_type,
-        conf,
     ) = calculate_indicators(data)
-    engine_label = '🐂🐻 ANALISI SEGNALE'
+
+    # Calcolo del punteggio standard
+    score = 0
+    score += structure_score
+    score += 1 if current_close > prev_close else -1
+    score += 1 if macd_hist > 0 else -1
+
+    if rsi_val > 55:
+      score += 1
+    elif rsi_val < 45:
+      score -= 1
+
+    # LOGICA SMART RSI: Invece di bloccare, se l'RSI è estremo inverte/forza il segnale per rimbalzo/storno
+    if rsi_val < 20:
+      sig_type = 'ACQUISTA (BUY)'  # Rimbalzo da ipervenduto estremo
+      filter_note = 'Rimbalzo Ipervenduto (RSI < 20) 🟢'
+    elif rsi_val > 80:
+      sig_type = 'VENDI (SELL)'  # Storno da ipercomprato estremo
+      filter_note = 'Storno Ipercomprato (RSI > 80) 🔴'
+    else:
+      filter_note = 'Filtro RSI Normale ✅'
+      if score > 0:
+        sig_type = 'ACQUISTA (BUY)'
+      elif score < 0:
+        sig_type = 'VENDI (SELL)'
+      else:
+        sig_type = 'ACQUISTA (BUY)'
+
+    conf = round(
+        70.0
+        + abs(macd_hist * 1000)
+        + abs(rsi_val - 50) * 0.3
+        + abs(structure_score) * 2,
+        1,
+    )
+    conf = min(95.0, max(60.0, conf))
 
     sig_emoji = '🟢' if 'ACQUISTA' in sig_type else '🔴'
     exp_map = {
@@ -725,19 +692,19 @@ def process_analysis_background(cid, mid, ast_name, exp_key):
     }
     expiry_name = exp_map.get(exp_key, '1 Minuto (1M)')
 
-    text = f'{engine_label}\n\n'
+    text = '🐂🐻 ANALISI EASY TRACK (1M)\n\n'
     text += f'💲💹 Asset: {ast_name}\n'
-    text += f'💵 Prezzo: `{round(current_close, 5)}`\n'
+    text += f'💵 Prezzo Reale: `{round(current_close, 5)}`\n'
     text += f'🎯 Segnale: {sig_type} {sig_emoji}\n\n'
-    text += '📈 Struttura & Trend:\n'
+    text += '📈 Struttura di Mercato:\n'
     text += f'• Trend: {structure_name}\n'
-    text += f'• Dettaglio: {trend_reversal_status}\n\n'
+    text += f'• Stato: {trend_reversal_status}\n\n'
     text += '🕯️ Candela Attuale (1M):\n'
-    text += f'• Pattern: {candlestick_pattern}\n\n'
+    text += f'• Pattern: {candlestick_pattern}\n'
+    text += f'• Gestione RSI: {filter_note}\n\n'
     text += '🛠️ Indicatori:\n'
-    text += f'• RSI: {rsi_val}\n'
-    text += f'• Istogramma MACD: {macd_hist}\n'
-    text += f'• EMA 20: {current_ema}\n\n'
+    text += f'• RSI (9): {rsi_val}\n'
+    text += f'• Istogramma MACD: {macd_hist}\n\n'
     text += f'⚖️ Affidabilità: {conf}%\n'
     text += f'⏳ Scadenza: {expiry_name}\n'
     text += f'📌 Entrata: {entry_time}'
@@ -749,13 +716,13 @@ def process_analysis_background(cid, mid, ast_name, exp_key):
         ]
     }
 
-    delete_message(cid, mid)
     chart_buf = generate_chart_image(data, ast_name)
+    delete_message(cid, mid)
+
     if chart_buf:
       send_photo_message(cid, chart_buf, text, kb)
     else:
       send_message(cid, text, kb)
-
   except Exception as e:
     print('Errore nel background thread:', e)
     delete_message(cid, mid)
@@ -772,7 +739,7 @@ def process_analysis_background(cid, mid, ast_name, exp_key):
 
 @app.route('/')
 def index():
-  return 'Bot operativo!', 200
+  return 'Bot operativo con Logica Smart RSI (Anti-No-Signal)!', 200
 
 
 @app.route('/webhook', methods=['POST'])
@@ -792,9 +759,7 @@ def webhook():
         if val.startswith('ast_'):
           ast = ALL_ASSETS[int(val.split('_')[1])]
           user_selection[cid] = {'asset': ast}
-          # Ora qualsiasi asset (incluso OTC) apre direttamente il menu delle scadenze
           send_expiry_menu(cid, ast, mid)
-
         elif val.startswith('exp_') or val.startswith('retry_'):
           if val.startswith('exp_'):
             sel = user_selection.get(cid, {})
@@ -808,7 +773,7 @@ def webhook():
           delete_message(cid, mid)
           temp_mid = send_message(
               cid,
-              f'⏳ Elaborazione in tempo reale per {ast_name}'
+              f'⏳ Elaborazione in tempo reale (1M) per {ast_name}'
               f' ({exp_key.upper()})...',
           )
 
@@ -823,14 +788,12 @@ def webhook():
         elif val == 'back_assets':
           send_assets_menu(cid, 0, msg_id=mid)
 
-      elif 'message' in up:
-        msg = up['message']
-        cid = msg['chat']['id']
-        mid = msg['message_id']
+      elif 'message' in up and 'text' in up['message']:
+        cid = up['message']['chat']['id']
+        mid = up['message']['message_id']
         delete_message(cid, mid)
         send_assets_menu(cid, 0)
         return 'ok', 200
-
     except Exception as e:
       print('Errore nel webhook:', e)
   return 'ok', 200
