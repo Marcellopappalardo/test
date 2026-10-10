@@ -629,7 +629,6 @@ def process_analysis_background(cid, mid, ast_name, exp_key):
       send_message(cid, error_text, error_kb)
       return
 
-    # CORRETTO: Orario di entrata calcolato in tempo reale al minuto successivo esatto in Italia
     now_it = datetime.now(ITALY_TZ)
     next_entry_dt = now_it.replace(second=0, microsecond=0) + timedelta(minutes=1)
     entry_time = next_entry_dt.strftime('%H:%M:%S')
@@ -648,34 +647,24 @@ def process_analysis_background(cid, mid, ast_name, exp_key):
         trend_reversal_status,
     ) = calculate_indicators(data)
 
+    # Calcolo del punteggio diretto senza filtro anti-rumore
     score = 0
     score += structure_score
+    score += 1 if current_close > prev_close else -1
+    score += 1 if macd_hist > 0 else -1
 
-    body_sizes = abs(data['Close'] - data['Open'])
-    if isinstance(body_sizes, pd.DataFrame):
-      body_sizes = body_sizes.iloc[:, 0]
-    avg_body = body_sizes.tail(10).mean()
-    current_body = abs(current_close - float(data.iloc[-1]['Open']))
+    if rsi_val > 55:
+      score += 1
+    elif rsi_val < 45:
+      score -= 1
 
-    is_noise = current_body < (avg_body * 0.4)
-
-    if not is_noise:
-      score += 1 if current_close > prev_close else -1
-      score += 1 if macd_hist > 0 else -1
-
-      if rsi_val > 55:
-        score += 1
-      elif rsi_val < 45:
-        score -= 1
-    else:
-      score = 0
-
+    # Definizione del segnale basata sullo score (gestisce anche l'eventuale pareggio a 0)
     if score > 0:
       sig_type = 'ACQUISTA (BUY)'
     elif score < 0:
       sig_type = 'VENDI (SELL)'
     else:
-      sig_type = 'ATTESA / MERCATO LATERALE (NO SIGNAL)'
+      sig_type = 'ACQUISTA (BUY)'  # In caso di perfetto pareggio forza un'indicazione o gestiscila a favore del trend
 
     conf = round(
         70.0
@@ -685,12 +674,8 @@ def process_analysis_background(cid, mid, ast_name, exp_key):
         1,
     )
     conf = min(95.0, max(60.0, conf))
-    if 'ATTESA' in sig_type:
-      conf = 50.0
 
-    sig_emoji = (
-        '🟢' if 'ACQUISTA' in sig_type else ('🔴' if 'VENDI' in sig_type else '⚪')
-    )
+    sig_emoji = '🟢' if 'ACQUISTA' in sig_type else '🔴'
     exp_map = {
         '1m': '1 Minuto (1M)',
         '2m': '2 Minuti (2M)',
@@ -699,7 +684,7 @@ def process_analysis_background(cid, mid, ast_name, exp_key):
     }
     expiry_name = exp_map.get(exp_key, '1 Minuto (1M)')
 
-    text = '🐂🐻 ANALISI EASY TRACK (1M FILTRATO)\n\n'
+    text = '🐂🐻 ANALISI EASY TRACK (1M)\n\n'
     text += f'💲💹 Asset: {ast_name}\n'
     text += f'💵 Prezzo Reale: `{round(current_close, 5)}`\n'
     text += f'🎯 Segnale: {sig_type} {sig_emoji}\n\n'
@@ -708,10 +693,7 @@ def process_analysis_background(cid, mid, ast_name, exp_key):
     text += f'• Stato: {trend_reversal_status}\n\n'
     text += '🕯️ Candela Attuale (1M):\n'
     text += f'• Pattern: {candlestick_pattern}\n'
-    text += (
-        '• Filtro Rumore: ' + ('Attivo (Candela pulita)' if not is_noise else 'Rilevato Rumore ⚠️')
-        + '\n\n'
-    )
+    text += '• Filtro Rumore: Disattivato ✅\n\n'
     text += '🛠️ Indicatori:\n'
     text += f'• RSI (9): {rsi_val}\n'
     text += f'• Istogramma MACD: {macd_hist}\n\n'
@@ -749,7 +731,7 @@ def process_analysis_background(cid, mid, ast_name, exp_key):
 
 @app.route('/')
 def index():
-  return 'Bot operativo al 100% su timeframe 1m (Anti-Rumore e Orario Perfetto)!', 200
+  return 'Bot operativo al 100% su timeframe 1m (Senza filtri No-Signal)!', 200
 
 
 @app.route('/webhook', methods=['POST'])
