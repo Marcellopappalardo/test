@@ -24,7 +24,7 @@ market_cache = {}
 CACHE_DURATION = 300
 chart_lock = threading.Lock()
 
-# Asset reali e OTC disposti in griglia 3x3
+# Asset reali e OTC
 ALL_ASSETS = [
     "EUR/USD", "EUR/USD OTC", "GBP/USD", 
     "GBP/USD OTC", "USD/JPY", "USD/JPY OTC",
@@ -85,6 +85,11 @@ def api_call(method, data):
         print("Errore API Telegram:", e)
         return None
 
+def delete_message(chat_id, msg_id):
+    """Cancella un messaggio dal canale/chat."""
+    if chat_id and msg_id:
+        api_call("deleteMessage", {"chat_id": chat_id, "message_id": msg_id})
+
 def send_message(chat_id, text, markup=None):
     p = {"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}
     if markup: p["reply_markup"] = markup
@@ -110,7 +115,7 @@ def edit_message(chat_id, msg_id, text, markup=None):
     if markup is not None:
         p["reply_markup"] = markup
     else:
-        p["reply_markup"] = {"inline_keyboard": []} # Rimuove i tasti facendoli scompare
+        p["reply_markup"] = {"inline_keyboard": []} 
     api_call("editMessageText", p)
 
 def answer_callback(cq_id):
@@ -123,14 +128,20 @@ def calculate_indicators(df):
         
     current_close = float(close.iloc[-1])
 
+    # Calcolo RSI (9)
     delta = close.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=9).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=9).mean()
+    
+    # Prevenzione divisione per zero
+    loss = loss.replace(0, 1e-10)
     rs = gain / loss
     rsi = 100 - (100 / (1 + rs))
     current_rsi = round(float(rsi.iloc[-1]), 1)
-    if math.isnan(current_rsi): current_rsi = 50.0
+    if math.isnan(current_rsi): 
+        current_rsi = 50.0
 
+    # Calcolo MACD (12, 26, 9)
     exp1 = close.ewm(span=12, adjust=False).mean()
     exp2 = close.ewm(span=26, adjust=False).mean()
     macd = exp1 - exp2
@@ -141,6 +152,7 @@ def calculate_indicators(df):
     m_sig = round(float(signal.iloc[-1]) if not math.isnan(signal.iloc[-1]) else 0, 5)
     m_hist = round(float(hist.iloc[-1]), 5)
 
+    # EMA 20 per Trend
     ema20 = close.ewm(span=20, adjust=False).mean()
     current_ema = round(float(ema20.iloc[-1]), 5)
     
@@ -275,6 +287,9 @@ def fetch_yahoo_real_data(asset_name):
         return None
 
 def send_assets_menu(chat_id, page=0, msg_id=None):
+    if msg_id:
+        delete_message(chat_id, msg_id)
+
     per_page = 9  # 3x3
     sub = ALL_ASSETS[page*per_page:(page+1)*per_page]
     kb = []
@@ -292,14 +307,16 @@ def send_assets_menu(chat_id, page=0, msg_id=None):
     if nav: kb.append(nav)
         
     text = "👋 Scegli un asset:"
-    if msg_id:
-        try: edit_message(chat_id, msg_id, text, {"inline_keyboard": kb})
-        except: send_message(chat_id, text, {"inline_keyboard": kb})
-    else:
-        send_message(chat_id, text, {"inline_keyboard": kb})
+    send_message(chat_id, text, {"inline_keyboard": kb})
 
 def send_expiry_menu(chat_id, asset_name, msg_id):
-    kb = {"inline_keyboard": [[{"text": "1 Minuto", "callback_data": "exp_1m"}], [{"text": "2 Minuti", "callback_data": "exp_2m"}], [{"text": "3 Minuti", "callback_data": "exp_3m"}], [{"text": "5 Minuti", "callback_data": "exp_5m"}], [{"text": "≡ Cambia Asset", "callback_data": "back_assets"}]]}
+    kb = {"inline_keyboard": [
+        [{"text": "1 Minuto", "callback_data": "exp_1m"}], 
+        [{"text": "2 Minuti", "callback_data": "exp_2m"}], 
+        [{"text": "3 Minuti", "callback_data": "exp_3m"}], 
+        [{"text": "5 Minuti", "callback_data": "exp_5m"}], 
+        [{"text": "≡ Cambia Asset", "callback_data": "back_assets"}]
+    ]}
     edit_message(chat_id, msg_id, f"💲💹 Asset: {asset_name}\n\nSeleziona la scadenza:", kb)
 
 def process_analysis_background(cid, mid, ast_name, exp_key):
@@ -319,33 +336,31 @@ def process_analysis_background(cid, mid, ast_name, exp_key):
         
         rsi_val, macd_line, macd_signal, macd_hist, current_close, current_ema = calculate_indicators(data)
         
+        # LOGICA BILANCIATA BUY / SELL
         trend_bullish = current_close > current_ema
         
-        cond_buy = (
-            trend_bullish and 
-            macd_line > macd_signal and 
-            macd_hist > 0 and 
-            rsi_val >= 50 and rsi_val <= 70
-        )
-        
-        cond_sell = (
-            not trend_bullish and 
-            macd_line < macd_signal and 
-            macd_hist < 0 and 
-            rsi_val <= 50 and rsi_val >= 30
-        )
+        score = 0
+        if trend_bullish: score += 1
+        else: score -= 1
+            
+        if macd_line > macd_signal: score += 1
+        else: score -= 1
+            
+        if macd_hist > 0: score += 1
+        else: score -= 1
+            
+        if rsi_val > 52: score += 1
+        elif rsi_val < 48: score -= 1
 
-        if cond_buy:
+        # Generazione Segnale (Equilibrata)
+        if score > 0:
             sig_type = "ACQUISTA (BUY)"
-        elif cond_sell:
+        elif score < 0:
             sig_type = "VENDI (SELL)"
         else:
-            if macd_hist >= 0 and rsi_val >= 50:
-                sig_type = "ACQUISTA (BUY)"
-            else:
-                sig_type = "VENDI (SELL)"
+            sig_type = "ACQUISTA (BUY)" if macd_hist >= 0 else "VENDI (SELL)"
             
-        conf = round(79.0 + abs(macd_hist) * 800, 1)
+        conf = round(75.0 + abs(macd_hist) * 800 + abs(rsi_val - 50) * 0.4, 1)
         conf = min(97.0, max(68.0, conf))
 
         sig_emoji = "🟢" if "ACQUISTA" in sig_type else "🔴"
@@ -369,7 +384,9 @@ def process_analysis_background(cid, mid, ast_name, exp_key):
         
         chart_buf = generate_chart_image(data, ast_name)
         
-        api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
+        # Elimina il messaggio con "In elaborazione..." prima di inviare il segnale
+        delete_message(cid, mid)
+
         if chart_buf:
             send_photo_message(cid, chart_buf, text, kb)
         else:
@@ -406,27 +423,23 @@ def webhook():
                         exp_key = parts[-1]
                         ast_name = "_".join(parts[1:-1])
                     
-                    # Rimuove i pulsanti subito facendo svanire la tastiera interattiva
+                    # Elimina o aggiorna il messaggio creando l'effetto di transizione
                     edit_message(cid, mid, f"⏳ Elaborazione per {ast_name} ({exp_key.upper()})...", markup={"inline_keyboard": []})
                     
                     threading.Thread(target=process_analysis_background, args=(cid, mid, ast_name, exp_key)).start()
                     return "ok", 200
 
                 elif val.startswith("pg_"):
-                    api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
-                    send_assets_menu(cid, int(val.split("_")[1]))
+                    send_assets_menu(cid, int(val.split("_")[1]), msg_id=mid)
                 elif val == "back_assets":
-                    api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
-                    send_assets_menu(cid, 0)
+                    send_assets_menu(cid, 0, msg_id=mid)
                     
             elif "message" in up and "text" in up["message"]:
                 cid = up["message"]["chat"]["id"]
+                mid = up["message"]["message_id"]
                 txt = up["message"]["text"].strip()
-                if txt.startswith("/start"):
-                    try:
-                        api_call("deleteMessage", {"chat_id": cid, "message_id": up["message"]["message_id"]})
-                    except:
-                        pass
+                
+                delete_message(cid, mid)
                 send_assets_menu(cid, 0)
                 return "ok", 200
         except Exception as e:
