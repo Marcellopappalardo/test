@@ -28,64 +28,18 @@ chart_lock = threading.Lock()
 
 ITALY_TZ = ZoneInfo('Europe/Rome')
 
+# Lista completa degli Asset disponibili nei menu
 ALL_ASSETS = [
-    'EUR/USD',
-    'GBP/USD',
-    'USD/JPY',
-    'AUD/USD',
-    'USD/CAD',
-    'EUR/GBP',
-    'EUR/JPY',
-    'GBP/JPY',
-    'Bitcoin',
-    'Ethereum',
-    'Solana',
-    'Chainlink',
-    # --- MERCATI OTC AGGIUNTI ---
-    'EUR/USD (OTC)',
-    'GBP/USD (OTC)',
-    'USD/JPY (OTC)',
-    'EUR/GBP (OTC)',
-    'Bitcoin (OTC)',
-    'Ethereum (OTC)',
-    # ---------------------------
-    'AUD/CAD',
-    'USD/MXN',
-    'USD/PKR',
-    'EUR/RUB',
-    'EUR/TRY',
-    'AUD/CHF',
-    'NZD/USD',
-    'USD/CHF',
-    'AUD/JPY',
-    'EUR/AUD',
-    'EUR/CAD',
-    'EUR/NZD',
-    'GBP/NZD',
-    'AUD/NZD',
-    'CAD/JPY',
-    'CHF/JPY',
-    'GBP/CAD',
-    'GBP/AUD',
-    'USD/ARS',
-    'Cardano',
-    'Polkadot',
-    'Toncoin',
-    'TRON',
-    'Dogecoin',
-    'Litecoin',
-    'Avalanche',
-    'BNB',
-    'Polygon',
-    'Dash',
-    'APPLE',
-    'MICROSOFT',
-    'TESLA',
-    'AMAZON',
-    'NETFLIX',
-    'GOOGLE',
-    'META',
-    "MCDONALD'S",
+    'EUR/USD', 'GBP/USD', 'USD/JPY', 'AUD/USD', 'USD/CAD', 'AUD/CAD', 'USD/MXN', 
+    'USD/PKR', 'EUR/RUB', 'EUR/TRY', 'USD/CHF', 'EUR/GBP', 'EUR/JPY', 'GBP/JPY', 
+    'AUD/JPY', 'AUD/CHF', 'NZD/USD', 'EUR/AUD', 'EUR/CAD', 'EUR/NZD', 'GBP/NZD', 
+    'AUD/NZD', 'CAD/JPY', 'CHF/JPY', 'GBP/CAD', 'GBP/AUD', 'USD/ARS',
+    'Bitcoin', 'Ethereum', 'Cardano', 'Solana', 'Dogecoin', 'Litecoin', 
+    'Polkadot', 'Toncoin', 'TRON', 'Chainlink', 'Avalanche', 'Polygon', 'BNB', 'Dash',
+    'APPLE', 'MICROSOFT', 'TESLA', 'AMAZON', 'NETFLIX', 'GOOGLE', 'META', "MCDONALD'S",
+    # Versione OTC
+    'EUR/USD (OTC)', 'GBP/USD (OTC)', 'USD/JPY (OTC)', 'EUR/GBP (OTC)', 
+    'Bitcoin (OTC)', 'Ethereum (OTC)', 'Solana (OTC)', 'APPLE (OTC)'
 ]
 
 user_selection = {}
@@ -321,13 +275,8 @@ def calculate_indicators(df):
   )
 
 
-# --- NUOVA ANALISI DEDICATA AI MERCATI OTC ---
 def calculate_otc_indicators(df):
-  """Analisi specifica per i mercati OTC ( Pocket Option style ):
-
-  I mercati OTC sono sintetici e tendono a rispettare molto i livelli di
-  ipercomprato/ipervenduto estremo e i rimbalzi tecnici rapidi sulle chiusure.
-  """
+  """Analisi specifica per i mercati OTC (Pocket Option style)"""
   close = df['Close']
   if isinstance(close, pd.DataFrame):
     close = close.iloc[:, 0]
@@ -335,7 +284,6 @@ def calculate_otc_indicators(df):
   current_close = float(close.iloc[-1])
   prev_close = float(close.iloc[-2]) if len(close) > 1 else current_close
 
-  # RSI leggermente più reattivo per l'OTC
   delta = close.diff()
   gain = (delta.where(delta > 0, 0)).rolling(window=7).mean()
   loss = (-delta.where(delta < 0, 0)).rolling(window=7).mean()
@@ -364,7 +312,6 @@ def calculate_otc_indicators(df):
   structure_name, structure_score = analyze_market_structure(df)
   candlestick_pattern = detect_candlestick_pattern(df)
 
-  # Logica di segnale OTC personalizzata (massima reattività ai pattern e rimbalzi)
   if current_rsi < 28:
     sig_type = 'ACQUISTA (BUY) [OTC]'
     filter_note = 'Rimbalzo OTC da Ipervenduto Forte 🟢'
@@ -372,7 +319,6 @@ def calculate_otc_indicators(df):
     sig_type = 'VENDI (SELL) [OTC]'
     filter_note = 'Storno OTC da Ipercomprato Forte 🔴'
   else:
-    # Controllo pattern / trend per OTC
     if 'Engulfing Rialzista' in candlestick_pattern or (
         m_hist > 0 and current_close > current_ema
     ):
@@ -480,6 +426,7 @@ def generate_chart_image(df, asset_name):
       return None
 
 
+# --- MAPPING ASSET YAHOO FINANCE ---
 def get_yahoo_ticker(asset_name):
   clean = asset_name.replace("'", '').replace('(OTC)', '').strip()
   mapping = {
@@ -540,6 +487,7 @@ def get_yahoo_ticker(asset_name):
   return clean
 
 
+# --- MAPPING ASSET BINANCE ---
 def fetch_binance_real_data(asset_name):
   clean = asset_name.replace("'", '').replace('(OTC)', '').strip()
   mapping = {
@@ -641,9 +589,8 @@ def fetch_market_data(asset_name):
     except Exception as e:
       print(f'Errore Yahoo per {asset_name}: {e}')
 
-  # Se è OTC, applichiamo una leggera variazione sintetica coerente per simulare la natura dell'OTC broker
   if df is not None and not df.empty and '(OTC)' in asset_name:
-    np.random.seed(int(time.time() // 60))  # Cambia ogni minuto
+    np.random.seed(int(time.time() // 60))
     noise = np.random.normal(0, 0.00002, len(df))
     df['Close'] = df['Close'] * (1 + noise)
     df['Open'] = df['Open'] * (1 + noise)
@@ -686,9 +633,7 @@ def send_assets_menu(chat_id, page=0, msg_id=None):
   if nav:
     kb.append(nav)
 
-  text = (
-      '👋 Scegli un asset (Normali o 🟣 *OTC* supportati con analisi dedicata):'
-  )
+  text = '👋 Scegli un asset per l\'analisi:'
   send_message(chat_id, text, {'inline_keyboard': kb})
 
 
@@ -735,7 +680,6 @@ def process_analysis_background(cid, mid, ast_name, exp_key):
     is_otc = '(OTC)' in ast_name
 
     if is_otc:
-      # --- ESEGUI ANALISI DEDICATA PER MERCATI OTC ---
       (
           rsi_val,
           macd_line,
@@ -752,7 +696,6 @@ def process_analysis_background(cid, mid, ast_name, exp_key):
       ) = calculate_otc_indicators(data)
       trend_reversal_status = 'Analisi Dinamica OTC Attiva ⚡'
     else:
-      # --- ANALISI STANDARD (MERCATO REALE) ---
       (
           rsi_val,
           macd_line,
@@ -863,7 +806,7 @@ def process_analysis_background(cid, mid, ast_name, exp_key):
 
 @app.route('/')
 def index():
-  return 'Bot operativo con supporto Mercati OTC e Smart RSI!', 200
+  return 'Bot operativo!', 200
 
 
 @app.route('/webhook', methods=['POST'])
