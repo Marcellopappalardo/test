@@ -22,137 +22,67 @@ TG_TOKEN = '8585533636:AAE_J2ospaddCWva9gPHzE26dCp2_WaziLk'
 BASE_URL = 'https://api.telegram.org/bot' + TG_TOKEN
 
 market_cache = {}
-CACHE_DURATION = (
-    10  # Cache ridotta a 10 secondi per avere dati sempre freschi
-)
+CACHE_DURATION = 10  # Cache a 10 secondi per dati sempre freschi
 chart_lock = threading.Lock()
 
-# Asset reali e OTC
+# Lista pulita ed esclusiva solo per i MERCATI REALI (senza alcun asset OTC)
 ALL_ASSETS = [
     'EUR/USD',
-    'EUR/USD OTC',
     'GBP/USD',
-    'GBP/USD OTC',
     'USD/JPY',
-    'USD/JPY OTC',
     'AUD/USD',
-    'AUD/USD OTC',
     'USD/CAD',
-    'USD/CAD OTC',
     'AUD/CAD',
-    'AUD/CAD OTC',
     'USD/MXN',
-    'USD/MXN OTC',
     'USD/PKR',
-    'USD/PKR OTC',
     'EUR/RUB',
-    'EUR/RUB OTC',
     'EUR/TRY',
-    'EUR/TRY OTC',
-    'JOD/CNY',
-    'JOD/CNY OTC',
-    'NGN/USD',
-    'NGN/USD OTC',
-    'LBP/USD',
-    'LBP/USD OTC',
-    'TND/USD',
-    'TND/USD OTC',
     'AUD/CHF',
-    'AUD/CHF OTC',
     'NZD/USD',
-    'NZD/USD OTC',
     'USD/CHF',
-    'USD/CHF OTC',
     'EUR/GBP',
-    'EUR/GBP OTC',
     'EUR/JPY',
-    'EUR/JPY OTC',
     'GBP/JPY',
-    'GBP/JPY OTC',
     'AUD/JPY',
-    'AUD/JPY OTC',
     'EUR/AUD',
-    'EUR/AUD OTC',
     'EUR/CAD',
-    'EUR/CAD OTC',
     'EUR/NZD',
-    'EUR/NZD OTC',
     'GBP/NZD',
-    'GBP/NZD OTC',
     'AUD/NZD',
-    'AUD/NZD OTC',
-    'QAR/CNY',
-    'QAR/CNY OTC',
     'CAD/JPY',
-    'CAD/JPY OTC',
     'CHF/JPY',
-    'CHF/JPY OTC',
     'GBP/CAD',
-    'GBP/CAD OTC',
     'GBP/AUD',
-    'GBP/AUD OTC',
     'USD/ARS',
-    'USD/ARS OTC',
-    'UAH/USD',
-    'UAH/USD OTC',
-    'SAR/CNY',
-    'SAR/CNY OTC',
-    # Criptovalute
+    # Criptovalute Reali
     'Bitcoin',
-    'Bitcoin OTC',
     'Ethereum',
-    'Ethereum OTC',
     'Cardano',
-    'Cardano OTC',
     'Polkadot',
-    'Polkadot OTC',
     'Toncoin',
-    'Toncoin OTC',
     'TRON',
-    'TRON OTC',
     'Dogecoin',
-    'Dogecoin OTC',
     'Litecoin',
-    'Litecoin OTC',
     'Chainlink',
-    'Chainlink OTC',
     'Solana',
-    'Solana OTC',
     'BNB',
-    'BNB OTC',
     'Polygon',
-    'Polygon OTC',
     'Avalanche',
-    'Avalanche OTC',
-    'Bitcoin ETF OTC',
     'Dash',
     'BCH/EUR',
     'BCH/GBP',
     'BCH/JPY',
     'BTC/GBP',
     'BTC/JPY',
-    # Azioni
+    # Azioni Reali
     'APPLE',
-    'APPLE OTC',
     'MICROSOFT',
-    'MICROSOFT OTC',
     'TESLA',
-    'TESLA OTC',
     'AMAZON',
-    'AMAZON OTC',
     'NETFLIX',
-    'NETFLIX OTC',
     'GOOGLE',
-    'GOOGLE OTC',
     'META',
-    'META OTC',
     "MCDONALD'S",
-    'COCA COLA OTC',
-    'INTEL OTC',
-    'BOEING COMPANY OTC',
-    'ALIBABA OTC',
-    'CITIGROUP INC OTC',
-    'EXXONMOBIL OTC',
 ]
 
 user_selection = {}
@@ -391,7 +321,6 @@ def generate_chart_image(df, asset_name):
     try:
       plt.close('all')
       df_clean = df.copy()
-      # Allineamento rigoroso del fuso orario +2 ore per corrispondere all'orario locale del broker
       df_clean.index = df_clean.index + timedelta(hours=2)
 
       for col in ['Open', 'High', 'Low', 'Close']:
@@ -459,7 +388,7 @@ def generate_chart_image(df, asset_name):
 
 
 def get_yahoo_ticker(asset_name):
-  clean = asset_name.replace(' OTC', '').replace("'", '').strip()
+  clean = asset_name.replace("'", '').strip()
   mapping = {
       'EUR/USD': 'EURUSD=X',
       'GBP/USD': 'GBPUSD=X',
@@ -509,11 +438,6 @@ def get_yahoo_ticker(asset_name):
       'GOOGLE': 'GOOGL',
       'META': 'META',
       "MCDONALD'S": 'MCD',
-      'INTEL': 'INTC',
-      'BOEING COMPANY': 'BA',
-      'ALIBABA': 'BABA',
-      'CITIGROUP INC': 'C',
-      'EXXONMOBIL': 'XOM',
   }
   if clean in mapping:
     return mapping[clean]
@@ -523,7 +447,7 @@ def get_yahoo_ticker(asset_name):
 
 
 def fetch_binance_real_data(asset_name):
-  clean = asset_name.replace(' OTC', '').replace("'", '').strip()
+  clean = asset_name.replace("'", '').strip()
   mapping = {
       'Bitcoin': 'BTCUSDT',
       'Ethereum': 'ETHUSDT',
@@ -562,7 +486,6 @@ def fetch_binance_real_data(asset_name):
         index=pd.to_datetime(timestamps, unit='s'),
     )
 
-    # Troncatura ed eliminazione della candela incompleta in corso per sincronizzare il minuto esatto
     df = df[~df.index.duplicated(keep='first')]
     df = df.dropna()
     return df
@@ -660,7 +583,7 @@ def send_assets_menu(chat_id, page=0, msg_id=None):
   if nav:
     kb.append(nav)
 
-  text = '👋 Scegli un asset:'
+  text = '👋 Scegli un asset reale:'
   send_message(chat_id, text, {'inline_keyboard': kb})
 
 
@@ -677,7 +600,7 @@ def send_expiry_menu(chat_id, asset_name, msg_id):
   edit_message(
       chat_id,
       msg_id,
-      f'💲💹 Asset: {asset_name}\n\nSeleziona la scadenza:',
+      f'💲💹 Asset Reale: {asset_name}\n\nSeleziona la scadenza:',
       kb,
   )
 
@@ -688,8 +611,8 @@ def process_analysis_background(cid, mid, ast_name, exp_key):
 
     if data is None or data.empty:
       error_text = (
-          f'⚠️ **Impossibile recuperare i dati per {ast_name}.**\n\nIl server è'
-          ' temporaneamente occupato.'
+          f'⚠️ **Impossibile recuperare i dati per {ast_name}.**\n\nIl mercato'
+          ' potrebbe essere chiuso in questo momento.'
       )
       error_kb = {
           'inline_keyboard': [
@@ -744,7 +667,6 @@ def process_analysis_background(cid, mid, ast_name, exp_key):
     else:
       score -= 1
 
-    # Filtro anti-rumore: Se gli indicatori sono troppo vicini alla zona neutra, attenua il punteggio
     if abs(rsi_val - 50) < 2.5:
       score = 0 if score > 0 else (0 if score < 0 else score)
 
