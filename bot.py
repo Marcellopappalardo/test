@@ -11,6 +11,7 @@ import mplfinance as mpf
 from datetime import datetime, timedelta, timezone
 from flask import Flask, request
 import requests
+import yfinance as yf
 import pandas as pd
 import numpy as np
 
@@ -250,43 +251,23 @@ def fetch_yahoo_real_data(asset_name):
             return cached_df
 
     ticker_symbol = get_yahoo_ticker(asset_name)
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker_symbol}?interval=1m&range=1d"
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-        'Accept': 'application/json'
-    }
-    
     try:
-        response = requests.get(url, headers=headers, timeout=3.0)
-        if response.status_code != 200:
-            raise Exception(f"HTTP {response.status_code}")
-            
-        data = response.json()
-        result = data['chart']['result'][0]
-        timestamps = result['timestamp']
-        quote = result['indicators']['quote'][0]
-        
-        df = pd.DataFrame({
-            'Open': quote['open'],
-            'High': quote['high'],
-            'Low': quote['low'],
-            'Close': quote['close']
-        }, index=pd.to_datetime(timestamps, unit='s'))
-        
-        clean_df = df.dropna()
-        if clean_df.empty:
+        # Utilizziamo yfinance per bypassare i blocchi HTTP di Yahoo Finance
+        df = yf.download(ticker_symbol, period="1d", interval="1m", progress=False)
+        if df is None or df.empty:
             raise Exception("Dati vuoti")
             
-        last_candle_time = clean_df.index[-1]
-        now_utc = pd.Timestamp.now(tz='UTC').tz_localize(None)
-        if (now_utc - last_candle_time).total_seconds() > 5400:
-            if "OTC" not in asset_name and "BTC" not in asset_name and "ETH" not in asset_name and "Bitcoin" not in asset_name and "Ethereum" not in asset_name:
-                return "MERCATO_CHIUSO"
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+            
+        clean_df = df[['Open', 'High', 'Low', 'Close']].dropna()
+        if clean_df.empty:
+            raise Exception("DataFrame vuoto dopo pulizia")
 
         market_cache[asset_name] = (current_time, clean_df)
         return clean_df
     except Exception as e:
-        print(f"Errore dati reali per {asset_name}: {e}")
+        print(f"Errore yfinance per {asset_name}: {e}")
         if asset_name in market_cache:
             _, old_df = market_cache[asset_name]
             return old_df
@@ -323,12 +304,6 @@ def send_expiry_menu(chat_id, asset_name, msg_id):
 def process_analysis_background(cid, mid, ast_name, exp_key):
     try:
         data = fetch_yahoo_real_data(ast_name)
-
-        if data == "MERCATO_CHIUSO":
-            closed_text = f"⚠️ **Mercato Chiuso per {ast_name}!**\n\nQuesto asset reale è attualmente chiuso. Scegli un altro asset oppure un asset con dicitura **OTC**."
-            closed_kb = {"inline_keyboard": [[{"text": "≡ Cambia Asset", "callback_data": "back_assets"}]]}
-            edit_message(cid, mid, closed_text, closed_kb)
-            return
 
         if data is None or data.empty:
             error_text = f"⚠️ **Impossibile recuperare i dati reali per {ast_name}.**\n\nIl server è temporaneamente occupato. Clicca su Aggiorna per riprovare."
