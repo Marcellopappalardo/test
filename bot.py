@@ -25,7 +25,7 @@ app = Flask(__name__)
 TG_TOKEN = '8585533636:AAE_J2ospaddCWva9gPHzE26dCp2_WaziLk'
 BASE_URL = 'https://api.telegram.org/bot' + TG_TOKEN
 
-# Inizializzazione del client Gemini tramite la variabile d'ambiente impostata su Render
+# Inizializzazione corretta del client Gemini
 gemini_client = genai.Client(api_key=os.environ.get('GEMINI_API_KEY'))
 
 market_cache = {}
@@ -225,7 +225,7 @@ def get_telegram_file_url(file_id):
   return None
 
 
-# --- RECUPERO DATI CRYPTO (CON ALLINEAMENTO TEMPORALE FORZATO) ---
+# --- RECUPERO DATI CRYPTO ---
 def fetch_binance_data(clean_name):
   mapping = {
       'Bitcoin': 'BTCUSDT',
@@ -361,7 +361,7 @@ def fetch_bitget_data(clean_name):
   return None
 
 
-# --- CALCOLI DI PROBABILITÀ, RSI(9) E MACD(12,26,9) ---
+# --- CALCOLI DI INDICATORI ---
 def calculate_indicators(df):
   close = df['Close']
   if isinstance(close, pd.DataFrame):
@@ -566,7 +566,7 @@ def fetch_market_data(asset_name):
   return None
 
 
-# --- GESTIONE FOTO CON INTelligenza ARTIFICIALE GEMINI ---
+# --- ANALISI IMMAGINE CON GEMINI AI (gemini-2.5-flash) ---
 def extract_asset_and_price_from_image(image_bytes):
   try:
     img = Image.open(io.BytesIO(image_bytes))
@@ -581,7 +581,7 @@ def extract_asset_and_price_from_image(image_bytes):
     )
 
     response = gemini_client.models.generate_content(
-        model='gemini-flash-latest', contents=[img, prompt]
+        model='gemini-2.5-flash', contents=[img, prompt]
     )
 
     text_res = response.text.strip()
@@ -805,7 +805,7 @@ def process_analysis_background(cid, mid, ast_name, exp_key, is_otc=False):
 
 @app.route('/')
 def index():
-  return 'Bot operativo con intelligenza Gemini integrata!', 200
+  return 'Bot operativo con Gemini AI integrato!', 200
 
 
 @app.route('/webhook', methods=['POST'])
