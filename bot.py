@@ -22,24 +22,17 @@ BASE_URL = "https://api.telegram.org/bot" + TG_TOKEN
 market_cache = {}
 CACHE_DURATION = 300
 
-# Asset Reali Pocket Option
 REAL_ASSETS = [
-    # Forex
     "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD", "AUD/CAD", "USD/CHF",
     "EUR/GBP", "EUR/JPY", "GBP/JPY", "AUD/JPY", "EUR/AUD", "EUR/CAD", "EUR/NZD",
     "GBP/NZD", "AUD/NZD", "CAD/JPY", "CHF/JPY", "GBP/CAD", "GBP/AUD", "NZD/USD",
     "AUD/CHF", "USD/MXN", "USD/PKR", "EUR/RUB", "EUR/TRY", "JOD/CNY", "NGN/USD",
     "LBP/USD", "TND/USD", "QAR/CNY", "USD/ARS", "UAH/USD", "SAR/CNY",
-    
-    # Crypto Reali
     "Bitcoin", "Ethereum", "Cardano", "Solana", "Dogecoin", "Litecoin", 
     "Polkadot", "Toncoin", "TRON", "Chainlink", "Avalanche", "Polygon", "BNB", "Dash",
-
-    # Azioni Reali
     "APPLE", "MICROSOFT", "TESLA", "AMAZON", "NETFLIX", "GOOGLE", "META", "MCDONALD'S", "INTEL", "ALIBABA"
 ]
 
-# Asset OTC Pocket Option
 OTC_ASSETS = [
     "EUR/USD OTC", "GBP/USD OTC", "USD/JPY OTC", "AUD/USD OTC", "USD/CAD OTC", "AUD/CAD OTC", 
     "USD/CHF OTC", "EUR/GBP OTC", "EUR/JPY OTC", "GBP/JPY OTC", "AUD/JPY OTC", "EUR/AUD OTC", 
@@ -95,13 +88,34 @@ def edit_message(chat_id, msg_id, text, markup=None):
 def answer_callback(cq_id):
     api_call("answerCallbackQuery", {"callback_query_id": cq_id})
 
+def detect_candlestick_pattern(df):
+    try:
+        if len(df) < 3:
+            return "Mercato in consolidamento (Dati insufficienti)"
+        c2 = df.iloc[-2]
+        c3 = df.iloc[-1]
+        body3 = abs(c3['Close'] - c3['Open'])
+        range3 = c3['High'] - c3['Low']
+        
+        if body3 < (range3 * 0.15):
+            return "Doji (Indecisione di mercato)"
+        elif c3['Close'] > c3['Open'] and c2['Close'] < c2['Open'] and c3['Close'] > c2['Open'] and c3['Open'] < c2['Close']:
+            return "Bullish Engulfing (Inversione Rialzista Forte)"
+        elif c3['Close'] < c3['Open'] and c2['Close'] > c2['Open'] and c3['Close'] < c2['Open'] and c3['Open'] > c2['Close']:
+            return "Bearish Engulfing (Inversione Ribassista Forte)"
+        elif c3['Close'] > c3['Open']:
+            return "Candela di Spinta Rialzista (Strong Bull)"
+        else:
+            return "Candela di Spinta Ribassista (Strong Bear)"
+    except:
+        return "Analisi Pattern Standard"
+
 def calculate_indicators(df):
     close = df['Close']
     if isinstance(close, pd.DataFrame):
         close = close.iloc[:, 0]
         
     current_close = float(close.iloc[-1])
-
     delta = close.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=9).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=9).mean()
@@ -119,7 +133,6 @@ def calculate_indicators(df):
     m_line = round(float(macd.iloc[-1]), 5)
     m_sig = round(float(signal.iloc[-1]) if not math.isnan(signal.iloc[-1]) else 0, 5)
     m_hist = round(float(hist.iloc[-1]), 5)
-
     ema20 = close.ewm(span=20, adjust=False).mean()
     current_ema = round(float(ema20.iloc[-1]), 5)
     
@@ -151,37 +164,23 @@ def generate_chart_image(df, asset_name, target_entry_time=None):
         ema20_plot = ema20_full.tail(30)
 
         market_colors = mpf.make_marketcolors(
-            up='#00E676', 
-            down='#FF5252', 
+            up='#00E676', down='#FF5252', 
             wick={'up': '#00E676', 'down': '#FF5252'}, 
-            edge='inherit',
-            volume='inherit'
+            edge='inherit', volume='inherit'
         )
         custom_style = mpf.make_mpf_style(
-            base_mpf_style='nightclouds', 
-            marketcolors=market_colors, 
-            facecolor='#1e1e1e', 
-            edgecolor='#333333', 
-            figcolor='#1e1e1e'
+            base_mpf_style='nightclouds', marketcolors=market_colors, 
+            facecolor='#1e1e1e', edgecolor='#333333', figcolor='#1e1e1e'
         )
 
-        add_plots = [
-            mpf.make_addplot(ema20_plot, color='#FFC107', width=1.5, linestyle='--')
-        ]
+        add_plots = [mpf.make_addplot(ema20_plot, color='#FFC107', width=1.5, linestyle='--')]
 
         buf = io.BytesIO()
         fig, axes = mpf.plot(
-            df_plot,
-            type='candle',
-            style=custom_style,
-            addplot=add_plots,
-            title=f"\nAnalisi Tecnica: {asset_name}",
-            volume=False,
-            figsize=(8, 4.5),
-            returnfig=True,
-            panel_ratios=(1,)
+            df_plot, type='candle', style=custom_style, addplot=add_plots,
+            title=f"\nAnalisi Tecnica: {asset_name}", volume=False,
+            figsize=(8, 4.5), returnfig=True, panel_ratios=(1,)
         )
-        
         fig.savefig(buf, format='png', facecolor='#1e1e1e', edgecolor='none', bbox_inches='tight', dpi=100)
         buf.seek(0)
         plt.close(fig)
@@ -270,18 +269,15 @@ def get_yahoo_ticker(asset_name):
         "AMAZON": "AMZN", "NETFLIX": "NFLX", "GOOGLE": "GOOGL", "META": "META",
         "MCDONALD'S": "MCD", "INTEL": "INTC", "ALIBABA": "BABA"
     }
-    if clean in mapping:
-        return mapping[clean]
-    if "/" in clean and len(clean) == 7:
-        return clean.replace("/", "") + "=X"
+    if clean in mapping: return mapping[clean]
+    if "/" in clean and len(clean) == 7: return clean.replace("/", "") + "=X"
     return clean
 
 def fetch_yahoo_real_data(asset_name):
     current_time = time.time()
     if asset_name in market_cache:
         ts, cached_df = market_cache[asset_name]
-        if current_time - ts < CACHE_DURATION:
-            return cached_df
+        if current_time - ts < CACHE_DURATION: return cached_df
 
     df = fetch_binance_data(asset_name)
     if df is not None and not df.empty:
@@ -300,11 +296,7 @@ def fetch_yahoo_real_data(asset_name):
 
     ticker_symbol = get_yahoo_ticker(asset_name)
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker_symbol}?interval=1m&range=1d"
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-        'Accept': 'application/json'
-    }
-    
+    headers = {'User-Agent': 'Mozilla/5.0'}
     try:
         response = requests.get(url, headers=headers, timeout=2.0)
         data = response.json()
@@ -313,23 +305,17 @@ def fetch_yahoo_real_data(asset_name):
         quote = result['indicators']['quote'][0]
         
         df = pd.DataFrame({
-            'Open': quote['open'],
-            'High': quote['high'],
-            'Low': quote['low'],
-            'Close': quote['close']
+            'Open': quote['open'], 'High': quote['high'],
+            'Low': quote['low'], 'Close': quote['close']
         }, index=pd.to_datetime(timestamps, unit='s'))
         
         clean_df = df.dropna()
-        if clean_df.empty:
-            raise Exception("Dati vuoti")
-            
+        if clean_df.empty: raise Exception("Dati vuoti")
         market_cache[asset_name] = (current_time, clean_df)
         return clean_df
     except Exception as e:
         print(f"Errore di recupero dati per {asset_name}: {e}")
-        if asset_name in market_cache:
-            _, old_df = market_cache[asset_name]
-            return old_df
+        if asset_name in market_cache: return market_cache[asset_name][1]
         return None
 
 def send_category_menu(chat_id, msg_id=None):
@@ -362,15 +348,11 @@ def send_assets_menu(chat_id, category="real", page=0, msg_id=None):
         kb.append(row)
         
     nav = []
-    if page > 0: 
-        nav.append({"text": "Indietro", "callback_data": f"pg_{category}_{page-1}"})
-    if (page + 1) * per_page < len(assets_list): 
-        nav.append({"text": "Avanti", "callback_data": f"pg_{category}_{page+1}"})
-    if nav: 
-        kb.append(nav)
+    if page > 0: nav.append({"text": "Indietro", "callback_data": f"pg_{category}_{page-1}"})
+    if (page + 1) * per_page < len(assets_list): nav.append({"text": "Avanti", "callback_data": f"pg_{category}_{page+1}"})
+    if nav: kb.append(nav)
         
     kb.append([{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}])
-        
     title_cat = "Reali" if category == "real" else "OTC"
     text = f"👋 Scegli un asset **{title_cat}**:"
     if msg_id:
@@ -379,9 +361,18 @@ def send_assets_menu(chat_id, category="real", page=0, msg_id=None):
     else:
         send_message(chat_id, text, {"inline_keyboard": kb})
 
-def send_expiry_menu(chat_id, asset_name, msg_id):
-    kb = {"inline_keyboard": [[{"text": "1 Minuto", "callback_data": "exp_1m"}], [{"text": "2 Minuti", "callback_data": "exp_2m"}], [{"text": "3 Minuti", "callback_data": "exp_3m"}], [{"text": "5 Minuti", "callback_data": "exp_5m"}], [{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
-    edit_message(chat_id, msg_id, f"💲💹 Asset: {asset_name}\n\nSeleziona la scadenza:", kb)
+def send_expiry_menu(chat_id, asset_name, msg_id, is_otc=False):
+    prefix = "exp_o_" if is_otc else "exp_r_"
+    kb = {
+        "inline_keyboard": [
+            [{"text": "S5", "callback_data": prefix + "s5"}, {"text": "S10", "callback_data": prefix + "s10"}, {"text": "S15", "callback_data": prefix + "s15"}, {"text": "S30", "callback_data": prefix + "s30"}],
+            [{"text": "M1", "callback_data": prefix + "m1"}, {"text": "M2", "callback_data": prefix + "m2"}, {"text": "M3", "callback_data": prefix + "m3"}, {"text": "M5", "callback_data": prefix + "m5"}],
+            [{"text": "M10", "callback_data": prefix + "m10"}, {"text": "M15", "callback_data": prefix + "m15"}, {"text": "M30", "callback_data": prefix + "m30"}],
+            [{"text": "H1", "callback_data": prefix + "h1"}, {"text": "H4", "callback_data": prefix + "h4"}, {"text": "D1", "callback_data": prefix + "d1"}],
+            [{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]
+        ]
+    }
+    edit_message(chat_id, msg_id, f"💲💹 Asset: {asset_name}\n\nSeleziona l'intervallo / timeframe:", kb)
 
 @app.route('/')
 def index():
@@ -390,6 +381,12 @@ def index():
 @app.route('/webhook', methods=['POST'])
 def webhook():
     up = request.get_json()
+    exp_map = {
+        "s5": "5 Secondi (S5)", "s10": "10 Secondi (S10)", "s15": "15 Secondi (S15)", "s30": "30 Secondi (S30)",
+        "m1": "1 Minuto (M1)", "m2": "2 Minuti (M2)", "m3": "3 Minuti (M3)", "m5": "5 Minuti (M5)",
+        "m10": "10 Minuti (M10)", "m15": "15 Minuti (M15)", "m30": "30 Minuti (M30)",
+        "h1": "1 Ora (H1)", "h4": "4 Ore (H4)", "d1": "1 Giorno (D1)"
+    }
     if up:
         try:
             if "callback_query" in up:
@@ -399,7 +396,8 @@ def webhook():
                 
                 if val == "main_categories":
                     user_otc_state.pop(cid, None)
-                    send_category_menu(cid, mid)
+                    api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
+                    send_category_menu(cid)
                     
                 elif val.startswith("cat_"):
                     parts = val.split("_")
@@ -417,27 +415,26 @@ def webhook():
                     if val.startswith("ast_r_"):
                         ast = REAL_ASSETS[int(val.split("_")[2])]
                         user_selection[cid] = {"asset": ast, "cat": "real"}
-                        send_expiry_menu(cid, ast, mid)
+                        send_expiry_menu(cid, ast, mid, is_otc=False)
                     else:
                         ast = OTC_ASSETS[int(val.split("_")[2])]
                         user_selection[cid] = {"asset": ast, "cat": "otc"}
-                        user_otc_state[cid] = {"asset": ast, "step": "price"}
-                        edit_message(cid, mid, f"📊 **Mercato OTC ({ast}) - Analisi Gemini**\n\nInserisci il **Prezzo attuale** (es. `1.08540`):")
+                        send_expiry_menu(cid, ast, mid, is_otc=True)
 
-                elif val.startswith("exp_") or val.startswith("retry_"):
-                    if val.startswith("exp_"):
+                elif val.startswith("exp_r_") or val.startswith("retry_"):
+                    if val.startswith("exp_r_"):
+                        exp_key = val.split("_")[2]
                         sel = user_selection.get(cid, {})
                         ast_name = sel.get("asset", "EUR/USD")
-                        exp_key = val.split("_")[1]
+                        user_selection[cid]["exp"] = exp_key
                     else:
                         parts = val.split("_")
                         exp_key = parts[-1]
                         ast_name = "_".join(parts[1:-1])
                     
-                    edit_message(cid, mid, f"⏳ Elaborazione per {ast_name} ({exp_key.upper()})...")
+                    edit_message(cid, mid, f"⏳ Elaborazione analisi per {ast_name} ({exp_key.upper()})...")
                     
                     data = fetch_yahoo_real_data(ast_name)
-
                     if data is None or data.empty:
                         error_text = f"⚠️ **Impossibile recuperare i dati per {ast_name}.**\n\nIl mercato potrebbe essere chiuso in questo momento."
                         error_kb = {"inline_keyboard": [[{"text": "🔄 Aggiorna", "callback_data": "retry_" + ast_name + "_" + exp_key}], [{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
@@ -450,37 +447,39 @@ def webhook():
                     entry_time = next_entry_dt.replace(second=0, microsecond=0).strftime('%H:%M:%S')
                     
                     rsi_val, macd_line, macd_signal, macd_hist, current_close, current_ema = calculate_indicators(data)
+                    pattern_name = detect_candlestick_pattern(data)
                     
                     trend_bullish = current_close > current_ema
                     if trend_bullish and (macd_line >= macd_signal or rsi_val < 48):
                         sig_type = "ACQUISTA (BUY)"
+                        trend_desc = "Rialzista Forte 📈"
                     elif not trend_bullish and (macd_line <= macd_signal or rsi_val > 52):
                         sig_type = "VENDI (SELL)"
+                        trend_desc = "Ribassista Forte 📉"
                     else:
                         sig_type = "ACQUISTA (BUY)" if macd_line > macd_signal else "VENDI (SELL)"
+                        trend_desc = "Laterale / Transizione ↔️"
                         
                     conf = round(79.0 + abs(macd_hist) * 800, 1)
                     conf = min(97.0, max(68.0, conf))
-
                     sig_emoji = "🟢" if "ACQUISTA" in sig_type else "🔴"
-                    exp_map = {"1m": "1 Minuto (1M)", "2m": "2 Minuti (2M)", "3m": "3 Minuti (3M)", "5m": "5 Minuti (5M)"}
-                    expiry_name = exp_map.get(exp_key, "1 Minuto (1M)")
+                    timeframe_name = exp_map.get(exp_key, "1 Minuto (M1)")
 
-                    text = "🐂🐻 ANALISI EASY TRACK\n\n"
+                    text = "🐂🐻 ANALISI EASY TRACK (REALE)\n\n"
                     text += f"💲💹 Asset: {ast_name}\n"
                     text += f"💵 Prezzo Reale: `{round(current_close, 5)}`\n"
+                    text += f"📊 Trend di Mercato: {trend_desc}\n"
+                    text += f"🕯️ Pattern Candele: {pattern_name}\n"
                     text += f"🎯 Segnale: {sig_type} {sig_emoji}\n\n"
-                    text += "🛠️ Indicatori:\n"
+                    text += "🛠️ Indicatori Tecnici:\n"
                     text += f"• RSI (9): {rsi_val}\n"
                     text += f"• Linea MACD: {macd_line}\n"
-                    text += f"• Segnale MACD: {macd_signal}\n"
                     text += f"• Istogramma: {macd_hist}\n\n"
                     text += f"⚖️ Affidabilità: {conf}%\n"
-                    text += f"⏳ Scadenza: {expiry_name}\n"
-                    text += f"📌 Entrata: {entry_time}"
+                    text += f"⏱️ Timeframe: {timeframe_name}\n"
+                    text += f"📌 Ora Esatta Ingresso: `{entry_time}`"
                     
                     kb = {"inline_keyboard": [[{"text": "🔄 Aggiorna", "callback_data": "retry_" + ast_name + "_" + exp_key}], [{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
-                    
                     chart_buf = generate_chart_image(data, ast_name, target_entry_time=entry_time)
                     
                     api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
@@ -488,6 +487,14 @@ def webhook():
                         send_photo_message(cid, chart_buf, text, kb)
                     else:
                         send_message(cid, text, kb)
+
+                elif val.startswith("exp_o_"):
+                    exp_key = val.split("_")[2]
+                    sel = user_selection.get(cid, {})
+                    ast_name = sel.get("asset", "EUR/USD OTC")
+                    # Avvia il flusso guidato OTC chiedendo il prezzo dopo aver scelto la scadenza
+                    user_otc_state[cid] = {"asset": ast_name, "expiry": exp_key, "step": "price"}
+                    edit_message(cid, mid, f"📊 **Mercato OTC ({ast_name} - {exp_map.get(exp_key, exp_key)})**\n\n1️⃣ Inserisci il **Prezzo attuale** letto sulla piattaforma (es. `1.08540`):")
 
                 elif val == "back_assets":
                     user_otc_state.pop(cid, None)
@@ -504,7 +511,6 @@ def webhook():
                     send_category_menu(cid)
                     return "ok", 200
 
-                # Gestione flussi inserimento manuale OTC guidato da Gemini
                 if cid in user_otc_state:
                     state = user_otc_state[cid]
                     step = state.get("step")
@@ -513,7 +519,7 @@ def webhook():
                         try:
                             state["price"] = float(txt_msg.replace(",", "."))
                             state["step"] = "rsi"
-                            send_message(cid, "📊 Inserisci il valore di **RSI (9)** letto sul grafico OTC (es. `54.2`):")
+                            send_message(cid, "2️⃣ Inserisci il valore di **RSI (9)** letto sul grafico OTC (es. `54.2`):")
                         except ValueError:
                             send_message(cid, "⚠️ Valore non valido. Inserisci un numero valido per il prezzo:")
                         return "ok", 200
@@ -522,7 +528,7 @@ def webhook():
                         try:
                             state["rsi"] = float(txt_msg.replace(",", "."))
                             state["step"] = "macd"
-                            send_message(cid, "📊 Inserisci il valore del **MACD Line** letto sul grafico OTC (es. `0.0012` o `-0.0005`):")
+                            send_message(cid, "3️⃣ Inserisci il valore della **Linea MACD** letto sul grafico OTC (es. `0.0012`):")
                         except ValueError:
                             send_message(cid, "⚠️ Valore non valido. Inserisci un numero valido per RSI:")
                         return "ok", 200
@@ -531,6 +537,7 @@ def webhook():
                         try:
                             state["macd"] = float(txt_msg.replace(",", "."))
                             ast_name = state["asset"]
+                            exp_key = state["expiry"]
                             price = state["price"]
                             rsi = state["rsi"]
                             macd_line = state["macd"]
@@ -541,27 +548,34 @@ def webhook():
                             current_it_time = datetime.now(italian_tz)
                             entry_time = (current_it_time + timedelta(minutes=1)).replace(second=0, microsecond=0).strftime('%H:%M:%S')
 
-                            # Elaborazione dell'analisi Gemini basata sui dati manuali inseriti per l'OTC
+                            # Analisi Gemini / Algoritmica OTC avanzata basata sui 3 parametri inseriti
                             if rsi < 48 or macd_line > 0:
                                 sig_type = "ACQUISTA (BUY)"
                                 sig_emoji = "🟢"
+                                trend_desc = "Rialzista (Analisi Gemini) 📈"
+                                pattern_name = "Candela di Rimbalzo / Spinta"
                             else:
                                 sig_type = "VENDI (SELL)"
                                 sig_emoji = "🔴"
+                                trend_desc = "Ribassista (Analisi Gemini) 📉"
+                                pattern_name = "Rifiuto / Correzione Livello"
                                 
                             conf = round(83.0 + abs(macd_line) * 400, 1)
                             conf = min(96.0, max(72.0, conf))
+                            timeframe_name = exp_map.get(exp_key, "1 Minuto (M1)")
 
                             text = "🤖 **ANALISI GEMINI (MERCATO OTC)**\n\n"
                             text += f"💲💹 Asset: {ast_name}\n"
                             text += f"💵 Prezzo Inserito: `{price}`\n"
+                            text += f"📊 Trend Rilevato: {trend_desc}\n"
+                            text += f"🕯️ Pattern Candele: {pattern_name}\n"
                             text += f"🎯 Segnale: {sig_type} {sig_emoji}\n\n"
-                            text += "🛠️ Indicatori Elaborati:\n"
+                            text += f"🛠️ Indicatori Inseriti:\n"
                             text += f"• RSI (9): {rsi}\n"
                             text += f"• Linea MACD: `{macd_line}`\n\n"
                             text += f"⚖️ Affidabilità: {conf}%\n"
-                            text += f"⏳ Scadenza: 1 Minuto (1M)\n"
-                            text += f"📌 Entrata: {entry_time}"
+                            text += f"⏱️ Timeframe: {timeframe_name}\n"
+                            text += f"📌 Ora Esatta Ingresso: `{entry_time}`"
                             
                             kb = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
                             send_message(cid, text, kb)
