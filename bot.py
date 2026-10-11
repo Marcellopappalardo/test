@@ -869,7 +869,6 @@ def webhook():
           mid = msg['message_id']
           delete_message(cid, mid)
 
-          # APRE DIRETTAMENTE IL PANNELLO SENZA ALCUN BLOCCO
           if text_content.startswith('/start'):
             send_market_type_menu(cid)
             return 'ok', 200
