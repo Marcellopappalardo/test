@@ -570,25 +570,22 @@ def fetch_market_data(asset_name):
 
 
 # --- ANALISI OTC MANUALE CON GEMINI IA ---
-def analyze_otc_manual_with_gemini(
-    asset_name, expiry_key, price_val, rsi_val, macd_val
-):
+def analyze_otc_manual_with_gemini(asset_name, expiry_key, price_val, rsi_val, macd_val):
   try:
     if gemini_client is None:
       return 'Rialzista (HH/HL)', 92.5, 'ACQUISTA (BUY)'
 
     prompt = (
-        f"Sei un trader professionista ed esperto in opzioni binarie. Analizza"
-        f" questi dati manuali inseriti per l'asset OTC: {asset_name} con"
-        f" scadenza {expiry_key}:\n- Prezzo attuale: {price_val}\n- RSI (9):"
-        f" {rsi_val}\n- MACD Hist: {macd_val}\n\nDetermina:\n1. 'trend': La"
-        " struttura del mercato coerente con questi indicatori ('Rialzista"
-        " (HH/HL)', 'Ribassista (LH/LL)' o 'Laterale / Misto').\n2."
-        " 'confidence': Una percentuale di affidabilità realistica tra 88.0 e"
-        " 96.5.\n3. 'signal': 'ACQUISTA (BUY)' oppure 'VENDI (SELL)'.\n\nRispondi"
-        ' ESCLUSIVAMENTE in formato JSON valido, senza testo'
-        ' aggiuntivo:\n{"trend": "Rialzista (HH/HL)", "confidence": 92.5,'
-        ' "signal": "ACQUISTA (BUY)"}'
+        f"Sei un trader professionista ed esperto in opzioni binarie. Analizza questi dati manuali inseriti per l'asset OTC: {asset_name} con scadenza {expiry_key}:\n"
+        f"- Prezzo attuale: {price_val}\n"
+        f"- RSI (9): {rsi_val}\n"
+        f"- MACD Hist: {macd_val}\n\n"
+        "Determina:\n"
+        "1. 'trend': La struttura del mercato coerente con questi indicatori ('Rialzista (HH/HL)', 'Ribassista (LH/LL)' o 'Laterale / Misto').\n"
+        "2. 'confidence': Una percentuale di affidabilità realistica tra 88.0 e 96.5.\n"
+        "3. 'signal': 'ACQUISTA (BUY)' oppure 'VENDI (SELL)'.\n\n"
+        "Rispondi ESCLUSIVAMENTE in formato JSON valido, senza testo aggiuntivo:\n"
+        '{"trend": "Rialzista (HH/HL)", "confidence": 92.5, "signal": "ACQUISTA (BUY)"}'
     )
 
     response = gemini_client.models.generate_content(
@@ -598,9 +595,9 @@ def analyze_otc_manual_with_gemini(
     )
 
     text_resp = response.text.strip()
-    if text_resp.startswith('```json'):
+    if text_resp.startswith("```json"):
       text_resp = text_resp[7:]
-    if text_resp.endswith('```'):
+    if text_resp.endswith("```"):
       text_resp = text_resp[:-3]
     text_resp = text_resp.strip()
 
@@ -626,7 +623,9 @@ def send_market_type_menu(chat_id, msg_id=None):
           [{'text': '⚡ Mercato OTC (Inserimento Manuale)', 'callback_data': 'mtype_otc_select'}],
       ]
   }
-  send_message(chat_id, '📊 Seleziona il tipo di mercato:', kb)
+  send_message(
+      chat_id, '📊 Seleziona il tipo di mercato:', kb
+  )
 
 
 def send_assets_menu(chat_id, page=0, is_otc=False, msg_id=None):
@@ -661,11 +660,7 @@ def send_assets_menu(chat_id, page=0, is_otc=False, msg_id=None):
 
   kb.append([{'text': '🔙 Torna al Menu Principale', 'callback_data': 'back_market_type'}])
 
-  title = (
-      '⚡ Scegli un Asset OTC:'
-      if is_otc
-      else '🌐 Scegli un Asset Reale (Timeframe 1M):'
-  )
+  title = '⚡ Scegli un Asset OTC:' if is_otc else '🌐 Scegli un Asset Reale (Timeframe 1M):'
   send_message(chat_id, title, {'inline_keyboard': kb})
 
 
@@ -699,10 +694,7 @@ def process_analysis_background(cid, mid, ast_name, exp_key, is_otc=False):
 
     now_it = datetime.now(ITALY_TZ)
     exp_minutes = int(exp_key.replace('m', ''))
-    next_entry_dt = (
-        now_it.replace(second=0, microsecond=0)
-        + timedelta(minutes=exp_minutes)
-    )
+    next_entry_dt = now_it.replace(second=0, microsecond=0) + timedelta(minutes=exp_minutes)
     entry_time = next_entry_dt.strftime('%H:%M:%S')
 
     (
@@ -716,7 +708,9 @@ def process_analysis_background(cid, mid, ast_name, exp_key, is_otc=False):
 
     score = structure_score + (1 if current_close > prev_close else -1)
     sig_type = (
-        'ACQUISTA (BUY)' if rsi_val < 50 or score >= 0 else 'VENDI (SELL)'
+        'ACQUISTA (BUY)'
+        if rsi_val < 50 or score >= 0
+        else 'VENDI (SELL)'
     )
     sig_emoji = '🟢' if 'ACQUISTA' in sig_type else '🔴'
     conf = round(np.random.uniform(86.0, 96.0), 1)
@@ -753,9 +747,7 @@ def process_analysis_background(cid, mid, ast_name, exp_key, is_otc=False):
   except Exception as e:
     print('Errore background reale:', e)
     delete_message(cid, mid)
-    send_message(
-        cid, '⚠️ Si è verificato un errore nell\'elaborazione del mercato reale.'
-    )
+    send_message(cid, '⚠️ Si è verificato un errore nell\'elaborazione del mercato reale.')
 
 
 @app.route('/')
@@ -799,9 +791,7 @@ def webhook():
           ast_name = sel.get('asset', 'EUR/USD')
 
           delete_message(cid, mid)
-          temp_mid = send_message(
-              cid, f'⏳ Calcolo analisi mercato reale per {ast_name}...'
-          )
+          temp_mid = send_message(cid, f'⏳ Calcolo analisi mercato reale per {ast_name}...')
           threading.Thread(
               target=process_analysis_background,
               args=(cid, temp_mid, ast_name, exp_key, False),
@@ -814,19 +804,12 @@ def webhook():
           sel['expiry'] = exp_key
           user_selection[cid] = sel
 
-          kb = {
-              'inline_keyboard': [
-                  [{'text': '🔙 Indietro', 'callback_data': 'back_otc_assets'}]
-              ]
-          }
+          kb = {'inline_keyboard': [[{'text': '🔙 Indietro', 'callback_data': 'back_otc_assets'}]]}
           edit_message(
               cid,
               mid,
-              f"✍️ **Asset OTC:** {sel.get('asset')}\n⏱ **Scadenza:**"
-              f" {exp_key.upper()}\n\nInvia ORA in chat i dati dell'ultima"
-              ' candela separati da virgola nel formato:\n`Prezzo, RSI,'
-              ' MACD`\n\n*(Esempio: `1.45274, 48.5, 0.00012`)*',
-              markup=kb,
+              f"✍️ **Asset OTC:** {sel.get('asset')}\n⏱ **Scadenza:** {exp_key.upper()}\n\nInvia ORA in chat i dati dell'ultima candela separati da virgola nel formato:\n`Prezzo, RSI, MACD`\n\n*(Esempio: `1.45274, 48.5, 0.00012`)*",
+              markup=kb
           )
           return 'ok', 200
 
@@ -836,9 +819,7 @@ def webhook():
           ast_name = '_'.join(parts[2:-1])
 
           delete_message(cid, mid)
-          temp_mid = send_message(
-              cid, f'⏳ Aggiornamento analisi per {ast_name}...'
-          )
+          temp_mid = send_message(cid, f'⏳ Aggiornamento analisi per {ast_name}...')
           threading.Thread(
               target=process_analysis_background,
               args=(cid, temp_mid, ast_name, exp_key, False),
@@ -869,10 +850,6 @@ def webhook():
           mid = msg['message_id']
           delete_message(cid, mid)
 
-          if text_content.startswith('/start'):
-            send_market_type_menu(cid)
-            return 'ok', 200
-
           sel = user_selection.get(cid)
           if sel and 'asset' in sel and 'expiry' in sel and sel.get('is_otc'):
             parts = [p.strip() for p in text_content.split(',')]
@@ -881,25 +858,17 @@ def webhook():
                 price_val = float(parts[0])
                 rsi_val = float(parts[1])
                 macd_val = float(parts[2])
-
+                
                 ast_name = sel['asset']
                 exp_key = sel['expiry']
 
-                temp_mid = send_message(
-                    cid,
-                    f'⚡ Elaborazione dati manuali per {ast_name} con Gemini...',
-                )
+                temp_mid = send_message(cid, f'⚡ Elaborazione dati manuali per {ast_name} con Gemini...')
 
-                trend_val, conf_val, signal_val = analyze_otc_manual_with_gemini(
-                    ast_name, exp_key, price_val, rsi_val, macd_val
-                )
+                trend_val, conf_val, signal_val = analyze_otc_manual_with_gemini(ast_name, exp_key, price_val, rsi_val, macd_val)
 
                 now_it = datetime.now(ITALY_TZ)
                 exp_min = int(exp_key.replace('m', ''))
-                next_entry_dt = (
-                    now_it.replace(second=0, microsecond=0)
-                    + timedelta(minutes=exp_min)
-                )
+                next_entry_dt = now_it.replace(second=0, microsecond=0) + timedelta(minutes=exp_min)
                 entry_time = next_entry_dt.strftime('%H:%M:%S')
 
                 sig_emoji = '🟢' if 'ACQUISTA' in signal_val else '🔴'
@@ -912,18 +881,11 @@ def webhook():
                 result_text += f'• RSI (9): {rsi_val}\n'
                 result_text += f'• MACD Hist: {macd_val}\n'
                 result_text += f'⚖️ Probabilità / Affidabilità: `{conf_val}%`\n'
-                result_text += (
-                    f'📌 Scadenza: `{exp_key.upper()}` (Fine a `{entry_time}`)'
-                )
+                result_text += f'📌 Scadenza: `{exp_key.upper()}` (Fine a `{entry_time}`)'
 
                 kb = {
                     'inline_keyboard': [
-                        [
-                            {
-                                'text': '🔙 Torna al menu principale',
-                                'callback_data': 'back_market_type',
-                            }
-                        ],
+                        [{'text': '🔙 Torna al menu principale', 'callback_data': 'back_market_type'}],
                     ]
                 }
 
@@ -933,11 +895,7 @@ def webhook():
 
               except Exception as ex:
                 print('Errore parsing valori manuali:', ex)
-                send_message(
-                    cid,
-                    '⚠️ Formato non valido. Inserisci i dati separati da'
-                    ' virgola, es: `1.45274, 48.5, 0.00012`',
-                )
+                send_message(cid, '⚠️ Formato non valido. Inserisci i dati separati da virgola, es: `1.45274, 48.5, 0.00012`')
                 return 'ok', 200
 
           send_market_type_menu(cid)
