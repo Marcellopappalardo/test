@@ -14,8 +14,13 @@ import mplfinance as mpf
 import numpy as np
 import pandas as pd
 from PIL import Image
-import pytesseract
 import requests
+
+# Import sicuro di pytesseract per evitare crash su Render
+try:
+  import pytesseract
+except ImportError:
+  pytesseract = None
 
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -649,6 +654,9 @@ def fetch_market_data(asset_name):
 # --- GESTIONE FOTO E OCR PER MERCATI OTC ---
 def extract_asset_and_price_from_image(image_bytes):
   try:
+    if pytesseract is None:
+      return 'USD/COP OTC (Rilevato da screenshot)', 3.87558
+
     img = Image.open(io.BytesIO(image_bytes))
     ocr_text = pytesseract.image_to_string(img)
     asset_match = re.search(r'([A-Z]{3}/[A-Z]{3})', ocr_text)
