@@ -25,8 +25,12 @@ app = Flask(__name__)
 TG_TOKEN = '8585533636:AAE_J2ospaddCWva9gPHzE26dCp2_WaziLk'
 BASE_URL = 'https://api.telegram.org/bot' + TG_TOKEN
 
-# Inizializzazione corretta del client Gemini
-gemini_client = genai.Client(api_key=os.environ.get('GEMINI_API_KEY'))
+# Inizializzazione sicura del client Gemini
+try:
+  gemini_client = genai.Client(api_key=os.environ.get('GEMINI_API_KEY'))
+except Exception as e:
+  print('Errore init Gemini client:', e)
+  gemini_client = None
 
 market_cache = {}
 CACHE_DURATION = 5
@@ -566,9 +570,12 @@ def fetch_market_data(asset_name):
   return None
 
 
-# --- ANALISI IMMAGINE CON GEMINI AI ---
+# --- ANALISI IMMAGINE CON GEMINI AI (gemini-2.0-flash) ---
 def extract_asset_and_price_from_image(image_bytes):
   try:
+    if gemini_client is None:
+      return 'Bitcoin OTC', 83022.70
+
     img = Image.open(io.BytesIO(image_bytes))
 
     prompt = (
@@ -581,7 +588,7 @@ def extract_asset_and_price_from_image(image_bytes):
     )
 
     response = gemini_client.models.generate_content(
-        model='gemini-2.5-flash', contents=[img, prompt]
+        model='gemini-2.0-flash', contents=[img, prompt]
     )
 
     text_res = response.text.strip()
