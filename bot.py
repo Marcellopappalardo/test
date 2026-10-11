@@ -227,7 +227,7 @@ def get_telegram_file_url(file_id):
   return None
 
 
-# --- RECUPERO DATI CRYPTO ---
+# --- RECUPERO DATI CRYPTO (CON ALLINEAMENTO TEMPORALE FORZATO) ---
 def fetch_binance_data(clean_name):
   mapping = {
       'Bitcoin': 'BTCUSDT',
@@ -275,6 +275,7 @@ def fetch_binance_data(clean_name):
       df.set_index('timestamp', inplace=True)
       df = df[['open', 'high', 'low', 'close']].astype(float)
       df.columns = ['Open', 'High', 'Low', 'Close']
+      df = df.sort_index()
       return df
   except Exception as e:
     print('Errore Binance:', e)
@@ -370,7 +371,6 @@ def calculate_indicators(df):
   current_close = float(close.iloc[-1])
   prev_close = float(close.iloc[-2]) if len(close) > 1 else current_close
 
-  # RSI a 9 periodi
   delta = close.diff()
   gain = (delta.where(delta > 0, 0)).rolling(window=9).mean()
   loss = (-delta.where(delta < 0, 0)).rolling(window=9).mean().replace(0, 1e-10)
@@ -379,16 +379,11 @@ def calculate_indicators(df):
   if math.isnan(current_rsi):
     current_rsi = 50.0
 
-  # MACD Default (12, 26, 9)
   exp1 = close.ewm(span=12, adjust=False).mean()
   exp2 = close.ewm(span=26, adjust=False).mean()
-  macd_line = exp1 - exp2
-  signal_line = macd_line.ewm(span=9, adjust=False).mean()
-  hist = macd_line - signal_line
-
+  hist = (exp1 - exp2) - (exp1 - exp2).ewm(span=9, adjust=False).mean()
   m_hist = round(float(hist.iloc[-1]), 5)
 
-  # Struttura del mercato (Trend)
   highs = df['High'].iloc[:, 0] if isinstance(df['High'], pd.DataFrame) else df['High']
   lows = df['Low'].iloc[:, 0] if isinstance(df['Low'], pd.DataFrame) else df['Low']
 
@@ -563,6 +558,7 @@ def fetch_market_data(asset_name):
             .ffill()
             .dropna()
         )
+        df = df.sort_index()
     except Exception as e:
       print('Errore Yahoo:', e)
 
@@ -813,7 +809,7 @@ def process_analysis_background(cid, mid, ast_name, exp_key, is_otc=False):
 
 @app.route('/')
 def index():
-  return 'Bot operativo con selezione manuale OTC e tasto torna indietro!', 200
+  return 'Bot operativo con allineamento temporale forzato!', 200
 
 
 @app.route('/webhook', methods=['POST'])
@@ -837,7 +833,6 @@ def webhook():
           send_assets_menu(cid, page=0, is_otc=True, msg_id=mid)
 
         elif val == 'req_photo_otc':
-          # TASTO TORNA INDIETRO AGGIUNTO QUI
           kb = {
               'inline_keyboard': [
                   [{'text': '🔙 Torna Indietro', 'callback_data': 'back_market_type'}]
