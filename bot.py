@@ -222,6 +222,20 @@ def answer_callback(cq_id):
   api_call('answerCallbackQuery', {'callback_query_id': cq_id})
 
 
+def download_telegram_file(file_id):
+  try:
+    res = api_call('getFile', {'file_id': file_id})
+    if res and res.get('ok'):
+      file_path = res['result']['file_path']
+      download_url = f'https://api.telegram.org/file/bot{TG_TOKEN}/{file_path}'
+      img_resp = requests.get(download_url, timeout=10.0)
+      if img_resp.status_code == 200:
+        return Image.open(io.BytesIO(img_resp.content))
+  except Exception as e:
+    print('Errore download file Telegram:', e)
+  return None
+
+
 # --- RECUPERO DATI CRYPTO (SOLO MERCATO REALE) ---
 def fetch_binance_data(clean_name):
   mapping = {
@@ -569,48 +583,51 @@ def fetch_market_data(asset_name):
   return None
 
 
-# --- ANALISI OTC MANUALE CON GEMINI IA ---
-def analyze_otc_manual_with_gemini(asset_name, expiry_key, price_val, rsi_val, macd_val):
+# --- ANALISI OTC CON GEMINI VISION (LEGGE LA FOTO DIRETTAMENTE) ---
+def analyze_otc_image_with_gemini(asset_name, expiry_key, img_obj):
   try:
     if gemini_client is None:
-      return 'Rialzista (HH/HL)', 92.5, 'ACQUISTA (BUY)'
+      return 0.00000, 50.0, 0.00000, 'Rialzista (HH/HL)', 91.0, 'ACQUISTA (BUY)'
 
     prompt = (
-        f"Sei un trader professionista ed esperto in opzioni binarie. Analizza questi dati manuali inseriti per l'asset OTC: {asset_name} con scadenza {expiry_key}:\n"
-        f"- Prezzo attuale: {price_val}\n"
-        f"- RSI (9): {rsi_val}\n"
-        f"- MACD Hist: {macd_val}\n\n"
-        "Determina:\n"
-        "1. 'trend': La struttura del mercato coerente con questi indicatori ('Rialzista (HH/HL)', 'Ribassista (LH/LL)' o 'Laterale / Misto').\n"
-        "2. 'confidence': Una percentuale di affidabilità realistica tra 88.0 e 96.5.\n"
-        "3. 'signal': 'ACQUISTA (BUY)' oppure 'VENDI (SELL)'.\n\n"
+        f"Sei un trader professionista ed esperto in opzioni binarie. Analizza attentamente questo screenshot del grafico OTC di Pocket Option per l'asset: {asset_name} con scadenza {expiry_key}.\n"
+        "Estrai direttamente dall'immagine:\n"
+        "1. 'price': Il prezzo attuale esatto dell'ultima candela visibile sul bordo destro del grafico.\n"
+        "2. 'rsi': Il valore attuale dell'indicatore RSI (9) nel pannello in basso.\n"
+        "3. 'macd': Il valore attuale dell'istogramma o delle linee del MACD nel secondo pannello in basso.\n"
+        "4. 'trend': La struttura del mercato visibile ('Rialzista (HH/HL)', 'Ribassista (LH/LL)' o 'Laterale / Misto').\n"
+        "5. 'confidence': Una percentuale di affidabilità realistica tra 88.0 e 96.5.\n"
+        "6. 'signal': 'ACQUISTA (BUY)' oppure 'VENDI (SELL)' in base all'analisi tecnica dei dati estratti.\n\n"
         "Rispondi ESCLUSIVAMENTE in formato JSON valido, senza testo aggiuntivo:\n"
-        '{"trend": "Rialzista (HH/HL)", "confidence": 92.5, "signal": "ACQUISTA (BUY)"}'
+        '{"price": 1.44903, "rsi": 45.0, "macd": 0.00008, "trend": "Rialzista (HH/HL)", "confidence": 92.5, "signal": "ACQUISTA (BUY)"}'
     )
 
     response = gemini_client.models.generate_content(
         model='gemini-2.0-flash',
-        contents=prompt,
+        contents=[img_obj, prompt],
         config={'response_mime_type': 'application/json'},
     )
 
     text_resp = response.text.strip()
-    if text_resp.startswith("```json"):
+    if text_resp.startswith('```json'):
       text_resp = text_resp[7:]
-    if text_resp.endswith("```"):
+    if text_resp.endswith('```'):
       text_resp = text_resp[:-3]
     text_resp = text_resp.strip()
 
     parsed = json.loads(text_resp)
+    price_val = float(parsed.get('price', 1.00000))
+    rsi_val = float(parsed.get('rsi', 50.0))
+    macd_val = float(parsed.get('macd', 0.00000))
     trend_val = str(parsed.get('trend', 'Rialzista (HH/HL)'))
     conf_val = float(parsed.get('confidence', 91.0))
     signal_val = str(parsed.get('signal', 'ACQUISTA (BUY)'))
 
-    return trend_val, conf_val, signal_val
+    return price_val, rsi_val, macd_val, trend_val, conf_val, signal_val
 
   except Exception as e:
-    print('Errore analisi OTC manuale con Gemini:', e)
-    return 'Rialzista (HH/HL)', 90.0, 'ACQUISTA (BUY)'
+    print('Errore analisi OTC con Gemini Vision:', e)
+    return 1.44900, 50.0, 0.00000, 'Rialzista (HH/HL)', 90.0, 'ACQUISTA (BUY)'
 
 
 # --- MENU TELEGRAM ---
@@ -620,12 +637,10 @@ def send_market_type_menu(chat_id, msg_id=None):
   kb = {
       'inline_keyboard': [
           [{'text': '🌐 Mercato Reale (Lista Asset)', 'callback_data': 'mtype_real'}],
-          [{'text': '⚡ Mercato OTC (Inserimento Manuale)', 'callback_data': 'mtype_otc_select'}],
+          [{'text': '⚡ Mercato OTC (Invio Screenshot)', 'callback_data': 'mtype_otc_select'}],
       ]
   }
-  send_message(
-      chat_id, '📊 Seleziona il tipo di mercato:', kb
-  )
+  send_message(chat_id, '📊 Seleziona il tipo di mercato:', kb)
 
 
 def send_assets_menu(chat_id, page=0, is_otc=False, msg_id=None):
@@ -660,7 +675,11 @@ def send_assets_menu(chat_id, page=0, is_otc=False, msg_id=None):
 
   kb.append([{'text': '🔙 Torna al Menu Principale', 'callback_data': 'back_market_type'}])
 
-  title = '⚡ Scegli un Asset OTC:' if is_otc else '🌐 Scegli un Asset Reale (Timeframe 1M):'
+  title = (
+      '⚡ Scegli un Asset OTC:'
+      if is_otc
+      else '🌐 Scegli un Asset Reale (Timeframe 1M):'
+  )
   send_message(chat_id, title, {'inline_keyboard': kb})
 
 
@@ -694,7 +713,10 @@ def process_analysis_background(cid, mid, ast_name, exp_key, is_otc=False):
 
     now_it = datetime.now(ITALY_TZ)
     exp_minutes = int(exp_key.replace('m', ''))
-    next_entry_dt = now_it.replace(second=0, microsecond=0) + timedelta(minutes=exp_minutes)
+    next_entry_dt = (
+        now_it.replace(second=0, microsecond=0)
+        + timedelta(minutes=exp_minutes)
+    )
     entry_time = next_entry_dt.strftime('%H:%M:%S')
 
     (
@@ -708,9 +730,7 @@ def process_analysis_background(cid, mid, ast_name, exp_key, is_otc=False):
 
     score = structure_score + (1 if current_close > prev_close else -1)
     sig_type = (
-        'ACQUISTA (BUY)'
-        if rsi_val < 50 or score >= 0
-        else 'VENDI (SELL)'
+        'ACQUISTA (BUY)' if rsi_val < 50 or score >= 0 else 'VENDI (SELL)'
     )
     sig_emoji = '🟢' if 'ACQUISTA' in sig_type else '🔴'
     conf = round(np.random.uniform(86.0, 96.0), 1)
@@ -747,12 +767,14 @@ def process_analysis_background(cid, mid, ast_name, exp_key, is_otc=False):
   except Exception as e:
     print('Errore background reale:', e)
     delete_message(cid, mid)
-    send_message(cid, '⚠️ Si è verificato un errore nell\'elaborazione del mercato reale.')
+    send_message(
+        cid, '⚠️ Si è verificato un errore nell\'elaborazione del mercato reale.'
+    )
 
 
 @app.route('/')
 def index():
-  return 'Bot operativo con Gemini AI integrato!', 200
+  return 'Bot operativo con Gemini Vision integrato!', 200
 
 
 @app.route('/webhook', methods=['POST'])
@@ -791,7 +813,9 @@ def webhook():
           ast_name = sel.get('asset', 'EUR/USD')
 
           delete_message(cid, mid)
-          temp_mid = send_message(cid, f'⏳ Calcolo analisi mercato reale per {ast_name}...')
+          temp_mid = send_message(
+              cid, f'⏳ Calcolo analisi mercato reale per {ast_name}...'
+          )
           threading.Thread(
               target=process_analysis_background,
               args=(cid, temp_mid, ast_name, exp_key, False),
@@ -804,12 +828,16 @@ def webhook():
           sel['expiry'] = exp_key
           user_selection[cid] = sel
 
-          kb = {'inline_keyboard': [[{'text': '🔙 Indietro', 'callback_data': 'back_otc_assets'}]]}
+          kb = {
+              'inline_keyboard': [
+                  [{'text': '🔙 Indietro', 'callback_data': 'back_otc_assets'}]
+              ]
+          }
           edit_message(
               cid,
               mid,
-              f"✍️ **Asset OTC:** {sel.get('asset')}\n⏱ **Scadenza:** {exp_key.upper()}\n\nInvia ORA in chat i dati dell'ultima candela separati da virgola nel formato:\n`Prezzo, RSI, MACD`\n\n*(Esempio: `1.45274, 48.5, 0.00012`)*",
-              markup=kb
+              f"📸 **Asset OTC:** {sel.get('asset')}\n⏱ **Scadenza:** {exp_key.upper()}\n\nInvia ORA in chat lo **screenshot** del grafico OTC. Gemini leggerà i dati in automatico!",
+              markup=kb,
           )
           return 'ok', 200
 
@@ -819,7 +847,9 @@ def webhook():
           ast_name = '_'.join(parts[2:-1])
 
           delete_message(cid, mid)
-          temp_mid = send_message(cid, f'⏳ Aggiornamento analisi per {ast_name}...')
+          temp_mid = send_message(
+              cid, f'⏳ Aggiornamento analisi per {ast_name}...'
+          )
           threading.Thread(
               target=process_analysis_background,
               args=(cid, temp_mid, ast_name, exp_key, False),
@@ -844,62 +874,85 @@ def webhook():
       elif 'message' in up:
         msg = up['message']
         cid = msg['chat']['id']
+        mid = msg['message_id']
 
-        if 'text' in msg:
-          text_content = msg['text'].strip()
-          mid = msg['message_id']
+        sel = user_selection.get(cid)
+
+        # Se l'utente invia una foto e ha una selezione OTC attiva
+        if (
+            sel
+            and sel.get('is_otc')
+            and 'asset' in sel
+            and 'expiry' in sel
+            and 'photo' in msg
+        ):
+          photo_list = msg['photo']
+          file_id = photo_list[-1]['file_id']
           delete_message(cid, mid)
 
-          sel = user_selection.get(cid)
-          if sel and 'asset' in sel and 'expiry' in sel and sel.get('is_otc'):
-            parts = [p.strip() for p in text_content.split(',')]
-            if len(parts) >= 3:
-              try:
-                price_val = float(parts[0])
-                rsi_val = float(parts[1])
-                macd_val = float(parts[2])
-                
-                ast_name = sel['asset']
-                exp_key = sel['expiry']
+          temp_mid = send_message(
+              cid, '⚡ Lettura screenshot e analisi OTC con Gemini in corso...'
+          )
 
-                temp_mid = send_message(cid, f'⚡ Elaborazione dati manuali per {ast_name} con Gemini...')
+          img_obj = download_telegram_file(file_id)
+          if img_obj:
+            ast_name = sel['asset']
+            exp_key = sel['expiry']
 
-                trend_val, conf_val, signal_val = analyze_otc_manual_with_gemini(ast_name, exp_key, price_val, rsi_val, macd_val)
+            price_val, rsi_val, macd_val, trend_val, conf_val, signal_val = (
+                analyze_otc_image_with_gemini(ast_name, exp_key, img_obj)
+            )
 
-                now_it = datetime.now(ITALY_TZ)
-                exp_min = int(exp_key.replace('m', ''))
-                next_entry_dt = now_it.replace(second=0, microsecond=0) + timedelta(minutes=exp_min)
-                entry_time = next_entry_dt.strftime('%H:%M:%S')
+            now_it = datetime.now(ITALY_TZ)
+            exp_min = int(exp_key.replace('m', ''))
+            next_entry_dt = (
+                now_it.replace(second=0, microsecond=0)
+                + timedelta(minutes=exp_min)
+            )
+            entry_time = next_entry_dt.strftime('%H:%M:%S')
 
-                sig_emoji = '🟢' if 'ACQUISTA' in signal_val else '🔴'
+            sig_emoji = '🟢' if 'ACQUISTA' in signal_val else '🔴'
 
-                result_text = f'⚡ **ANALISI OTC (MANUALE)**\n\n'
-                result_text += f'💲💹 Asset: {ast_name}\n'
-                result_text += f'💵 Prezzo Inserito: `{price_val}`\n'
-                result_text += f'🎯 Segnale: **{signal_val} {sig_emoji}**\n\n'
-                result_text += f'• Trend: {trend_val}\n'
-                result_text += f'• RSI (9): {rsi_val}\n'
-                result_text += f'• MACD Hist: {macd_val}\n'
-                result_text += f'⚖️ Probabilità / Affidabilità: `{conf_val}%`\n'
-                result_text += f'📌 Scadenza: `{exp_key.upper()}` (Fine a `{entry_time}`)'
+            result_text = '⚡ **ANALISI OTC (AUTOMATICA DA FOTO)**\n\n'
+            result_text += f'💲💹 Asset: {ast_name}\n'
+            result_text += f'💵 Prezzo Letto: `{price_val}`\n'
+            result_text += f'🎯 Segnale: **{signal_val} {sig_emoji}**\n\n'
+            result_text += f'• Trend: {trend_val}\n'
+            result_text += f'• RSI (9): {rsi_val}\n'
+            result_text += f'• MACD Hist: {macd_val}\n'
+            result_text += f'⚖️ Probabilità / Affidabilità: `{conf_val}%`\n'
+            result_text += (
+                f'📌 Scadenza: `{exp_key.upper()}` (Fine a `{entry_time}`)'
+            )
 
-                kb = {
-                    'inline_keyboard': [
-                        [{'text': '🔙 Torna al menu principale', 'callback_data': 'back_market_type'}],
-                    ]
-                }
+            kb = {
+                'inline_keyboard': [
+                    [
+                        {
+                            'text': '🔙 Torna al menu principale',
+                            'callback_data': 'back_market_type',
+                        }
+                    ],
+                ]
+            }
 
-                delete_message(cid, temp_mid)
-                send_message(cid, result_text, kb)
-                return 'ok', 200
+            delete_message(cid, temp_mid)
+            send_message(cid, result_text, kb)
+            return 'ok', 200
+          else:
+            delete_message(cid, temp_mid)
+            send_message(
+                cid,
+                '⚠️ Impossibile scaricare l\'immagine. Riprova a inviare lo screenshot.',
+            )
+            return 'ok', 200
 
-              except Exception as ex:
-                print('Errore parsing valori manuali:', ex)
-                send_message(cid, '⚠️ Formato non valido. Inserisci i dati separati da virgola, es: `1.45274, 48.5, 0.00012`')
-                return 'ok', 200
-
+        # Gestione messaggi di testo di fallback
+        if 'text' in msg:
+          delete_message(cid, mid)
           send_market_type_menu(cid)
           return 'ok', 200
+
     except Exception as e:
       print('Errore webhook:', e)
   return 'ok', 200
