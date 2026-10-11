@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+from google import genai
 import io
 import json
 import math
@@ -16,12 +17,6 @@ import pandas as pd
 from PIL import Image, ImageEnhance, ImageOps
 import requests
 
-# Import sicuro di pytesseract
-try:
-  import pytesseract
-except ImportError:
-  pytesseract = None
-
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
@@ -29,6 +24,9 @@ app = Flask(__name__)
 
 TG_TOKEN = '8585533636:AAE_J2ospaddCWva9gPHzE26dCp2_WaziLk'
 BASE_URL = 'https://api.telegram.org/bot' + TG_TOKEN
+
+# Inizializzazione del client Gemini tramite la variabile d'ambiente impostata su Render
+gemini_client = genai.Client(api_key=os.environ.get('GEMINI_API_KEY'))
 
 market_cache = {}
 CACHE_DURATION = 5
@@ -568,41 +566,39 @@ def fetch_market_data(asset_name):
   return None
 
 
-# --- GESTIONE FOTO ED OCR ---
+# --- GESTIONE FOTO CON INTelligenza ARTIFICIALE GEMINI ---
 def extract_asset_and_price_from_image(image_bytes):
   try:
-    if pytesseract is None:
-      return 'Chainlink OTC', 12.8580
-
     img = Image.open(io.BytesIO(image_bytes))
-    width, height = img.size
-    cropped_img = img.crop((0, 0, width, int(height * 0.35))).convert('L')
-    enhancer = ImageEnhance.Contrast(cropped_img)
-    cropped_img = enhancer.enhance(2.5)
 
-    ocr_text = pytesseract.image_to_string(cropped_img)
-    print('OCR ESTRATTO:\n', ocr_text)
+    prompt = (
+        'Analizza questo screenshot di una piattaforma di trading binario/OTC.\n'
+        'Individua con precisione due informazioni:\n'
+        '1. Il nome esatto dell\'asset o criptovaluta visualizzato nel grafico (es. Bitcoin, Ethereum, EUR/USD, ecc.).\n'
+        '2. Il prezzo numerico attuale visibile sul grafico (es. 83022.70).\n\n'
+        'Rispondi ESCLUSIVAMENTE in formato JSON rigoroso, senza blocchi markdown o altro testo:\n'
+        '{"asset": "NomeAsset", "price": 00.00}'
+    )
 
-    currency_pair_match = re.search(r'([A-Z]{3}\s*/\s*[A-Z]{3})', ocr_text)
-    detected_asset = None
-    if currency_pair_match:
-      detected_asset = currency_pair_match.group(1).replace(' ', '').upper()
-    else:
-      for item in ALL_ASSETS:
-        if item.lower() in ocr_text.lower():
-          detected_asset = item
-          break
+    response = gemini_client.models.generate_content(
+        model='gemini-flash-latest', contents=[img, prompt]
+    )
 
-    if not detected_asset:
-      detected_asset = 'Chainlink'
+    text_res = response.text.strip()
+    text_res = re.sub(r'```json\s*|\s*```', '', text_res).strip()
 
-    prices = re.findall(r'\b\d{1,6}\.\d{2,6}\b', ocr_text)
-    price_val = float(prices[0]) if prices else 12.8580
+    parsed = json.loads(text_res)
+    detected_asset = parsed.get('asset', 'Bitcoin')
+    price_val = float(parsed.get('price', 83022.70))
 
-    return f'{detected_asset} OTC', price_val
+    if 'otc' not in detected_asset.lower():
+      detected_asset = f'{detected_asset} OTC'
+
+    return detected_asset, price_val
+
   except Exception as e:
-    print('Errore OCR OTC:', e)
-    return 'Chainlink OTC', 12.8580
+    print('Errore durante l\'analisi con Gemini:', e)
+    return 'Bitcoin OTC', 83022.70
 
 
 def process_otc_photo_background(cid, mid, file_id):
@@ -618,7 +614,7 @@ def process_otc_photo_background(cid, mid, file_id):
     clean_asset = asset_detected.replace('OTC', '').strip()
     data = fetch_market_data(clean_asset)
     if data is None or data.empty:
-      data = fetch_market_data('Chainlink')
+      data = fetch_market_data('Bitcoin')
 
     (
         rsi_val,
@@ -643,7 +639,7 @@ def process_otc_photo_background(cid, mid, file_id):
     sig_emoji = '🟢' if 'ACQUISTA' in sig_type else '🔴'
     conf = round(np.random.uniform(86.0, 96.0), 1)
 
-    text = f'⚡ **ANALISI FOTO MERCATO OTC (INTERNA)**\n\n'
+    text = f'⚡ **ANALISI FOTO MERCATO OTC (GEMINI AI)**\n\n'
     text += f'1. **Asset Rilevato**: `{asset_detected}`\n'
     text += f'2. **Prezzo Attuale**: `{current_price}`\n'
     text += (
@@ -747,7 +743,7 @@ def process_analysis_background(cid, mid, ast_name, exp_key, is_otc=False):
     clean_asset = ast_name.replace('OTC', '').strip()
     data = fetch_market_data(clean_asset)
     if data is None or data.empty:
-      data = fetch_market_data('Chainlink')
+      data = fetch_market_data('Bitcoin')
 
     now_it = datetime.now(ITALY_TZ)
     next_entry_dt = now_it.replace(second=0, microsecond=0) + timedelta(minutes=1)
@@ -809,7 +805,7 @@ def process_analysis_background(cid, mid, ast_name, exp_key, is_otc=False):
 
 @app.route('/')
 def index():
-  return 'Bot operativo con allineamento temporale forzato!', 200
+  return 'Bot operativo con intelligenza Gemini integrata!', 200
 
 
 @app.route('/webhook', methods=['POST'])
@@ -841,7 +837,7 @@ def webhook():
           edit_message(
               cid,
               mid,
-              '📷 **Invia ORA lo screenshot del tuo grafico OTC (es. Pocket Option).**\n\nSe cambi idea e non vuoi inviare la foto, usa il pulsante qui sotto per tornare indietro.',
+              '📷 **Invia ORA lo screenshot del tuo grafico OTC (es. Pocket Option).**\n\nGemini analizzerà l\'immagine riconoscendo istantaneamente asset e prezzo!',
               markup=kb,
           )
           return 'ok', 200
@@ -899,7 +895,7 @@ def webhook():
         if 'photo' in msg:
           file_id = msg['photo'][-1]['file_id']
           temp_mid = send_message(
-              cid, '🔍 **Screenshot ricevuto.** Analisi OTC in corso...'
+              cid, '🔍 **Screenshot ricevuto.** Gemini sta analizzando il grafico...'
           )
           threading.Thread(
               target=process_otc_photo_background, args=(cid, temp_mid, file_id)
