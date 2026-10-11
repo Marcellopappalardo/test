@@ -1,7 +1,9 @@
-flask
+Flask
+gunicorn
 requests
 pandas
 numpy
 matplotlib
 mplfinance
-gunicorn
+Pillow
+pytesseract
