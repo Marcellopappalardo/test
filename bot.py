@@ -222,6 +222,16 @@ def answer_callback(cq_id):
   api_call('answerCallbackQuery', {'callback_query_id': cq_id})
 
 
+def check_subscription(user_id):
+  channel_username = '@TucosProfit'
+  res = api_call('getChatMember', {'chat_id': channel_username, 'user_id': user_id})
+  if res and res.get('ok'):
+    status = res['result'].get('status')
+    if status in ['creator', 'administrator', 'member']:
+      return True
+  return False
+
+
 def download_telegram_file(file_id):
   try:
     res = api_call('getFile', {'file_id': file_id})
@@ -876,6 +886,26 @@ def webhook():
         cid = msg['chat']['id']
         mid = msg['message_id']
 
+        if 'text' in msg:
+          text_content = msg['text'].strip()
+
+          if text_content.startswith('/start'):
+            if not check_subscription(cid):
+              kb = {
+                  'inline_keyboard': [
+                      [{'text': 'APRI CANALE', 'url': 'https://t.me/TucosProfit'}],
+                  ]
+              }
+              send_message(
+                  cid,
+                  '🚀 *To use this bot, you must join our channel:* https://t.me/TucosProfit\n\nTelegram\n*Tuco\'s Profit*\n_To join the premium_ 👉👉\n\n_DM at @tucosalamanca98_',
+                  markup=kb,
+              )
+              return 'ok', 200
+
+            send_market_type_menu(cid)
+            return 'ok', 200
+
         sel = user_selection.get(cid)
 
         # Se l'utente invia una foto e ha una selezione OTC attiva
@@ -947,7 +977,7 @@ def webhook():
             )
             return 'ok', 200
 
-        # Gestione messaggi di testo di fallback
+        # Fallback per altri messaggi di testo non riconosciuti
         if 'text' in msg:
           delete_message(cid, mid)
           send_market_type_menu(cid)
