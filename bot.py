@@ -29,19 +29,14 @@ chart_lock = threading.Lock()
 ITALY_TZ = ZoneInfo('Europe/Rome')
 
 BASE_ASSETS = [
+    # Forex Majors e Cross
     'EUR/USD',
     'GBP/USD',
     'USD/JPY',
     'AUD/USD',
     'USD/CAD',
-    'AUD/CAD',
-    'USD/MXN',
-    'USD/PKR',
-    'EUR/RUB',
-    'EUR/TRY',
-    'AUD/CHF',
-    'NZD/USD',
     'USD/CHF',
+    'NZD/USD',
     'EUR/GBP',
     'EUR/JPY',
     'GBP/JPY',
@@ -55,7 +50,29 @@ BASE_ASSETS = [
     'CHF/JPY',
     'GBP/CAD',
     'GBP/AUD',
+    'AUD/CAD',
+    'AUD/CHF',
+    'EUR/RUB',
+    'EUR/TRY',
+    'USD/MXN',
+    'USD/PKR',
     'USD/ARS',
+    'USD/BRL',
+    'USD/ZAR',
+    'USD/INR',
+    'USD/TRY',
+    'USD/SGD',
+    'USD/PHP',
+    'USD/IDR',
+    'USD/MYR',
+    'USD/VND',
+    'USD/COP',
+    'USD/AED',
+    'GBP/CHF',
+    'NZD/JPY',
+    'NZD/CAD',
+    'NZD/CHF',
+    # Criptovalute
     'Bitcoin',
     'Ethereum',
     'Cardano',
@@ -70,6 +87,9 @@ BASE_ASSETS = [
     'Polygon',
     'Avalanche',
     'Dash',
+    'Ripple',
+    'Shiba Inu',
+    # Azioni
     'APPLE',
     'MICROSOFT',
     'TESLA',
@@ -78,6 +98,26 @@ BASE_ASSETS = [
     'GOOGLE',
     'META',
     "MCDONALD'S",
+    'INTEL',
+    'COCA-COLA',
+    'BOEING',
+    'CISCO',
+    'DISNEY',
+    'JPMORGAN',
+    'TWITTER',
+    'ALIBABA',
+    # Materie Prime e Indici
+    'Gold',
+    'Silver',
+    'Brent Crude',
+    'WTI Crude',
+    'Natural Gas',
+    'S&P 500',
+    'NASDAQ',
+    'DAX',
+    'FTSE 100',
+    'DOW JONES',
+    'NIKKEI 225',
 ]
 
 user_selection = {}
@@ -256,8 +296,7 @@ def calculate_indicators(df, market_type='REAL'):
   prev_close = float(close.iloc[-2]) if len(close) > 1 else current_close
 
   delta = close.diff()
-  # RSI 7 per OTC (più reattivo ai micromovimenti), RSI 9 per il Reale
-  rsi_period = 7 if market_type == 'OTC' else 9
+  rsi_period = 9
 
   gain = (delta.where(delta > 0, 0)).rolling(window=rsi_period).mean()
   loss = (-delta.where(delta < 0, 0)).rolling(window=rsi_period).mean()
@@ -380,7 +419,9 @@ def generate_chart_image(df, asset_name, market_type='REAL'):
 
 
 def get_yahoo_ticker(asset_name):
-  clean = asset_name.replace("'", '').strip()
+  clean = (
+      asset_name.replace("'", '').replace('(OTC)', '').strip()
+  )  # Pulisce eventuale tag OTC per il recupero dati
   mapping = {
       'EUR/USD': 'EURUSD=X',
       'GBP/USD': 'GBPUSD=X',
@@ -409,6 +450,16 @@ def get_yahoo_ticker(asset_name):
       'GBP/CAD': 'GBPCAD=X',
       'GBP/AUD': 'GBPAUD=X',
       'USD/ARS': 'USDARS=X',
+      'USD/BRL': 'USDBRL=X',
+      'USD/ZAR': 'USDZAR=X',
+      'USD/INR': 'USDINR=X',
+      'USD/SGD': 'USDSGD=X',
+      'USD/PHP': 'USDPHP=X',
+      'USD/MYR': 'USDMYR=X',
+      'GBP/CHF': 'GBPCHF=X',
+      'NZD/JPY': 'NZDJPY=X',
+      'NZD/CAD': 'NZDCAD=X',
+      'NZD/CHF': 'NZDCHF=X',
       'Bitcoin': 'BTC-USD',
       'Ethereum': 'ETH-USD',
       'Cardano': 'ADA-USD',
@@ -423,6 +474,8 @@ def get_yahoo_ticker(asset_name):
       'Polygon': 'MATIC-USD',
       'BNB': 'BNB-USD',
       'Dash': 'DASH-USD',
+      'Ripple': 'XRP-USD',
+      'Shiba Inu': 'SHIB-USD',
       'APPLE': 'AAPL',
       'MICROSOFT': 'MSFT',
       'TESLA': 'TSLA',
@@ -431,6 +484,24 @@ def get_yahoo_ticker(asset_name):
       'GOOGLE': 'GOOGL',
       'META': 'META',
       "MCDONALD'S": 'MCD',
+      'INTEL': 'INTC',
+      'COCA-COLA': 'KO',
+      'BOEING': 'BA',
+      'CISCO': 'CSCO',
+      'DISNEY': 'DIS',
+      'JPMORGAN': 'JPM',
+      'ALIBABA': 'BABA',
+      'Gold': 'GC=F',
+      'Silver': 'SI=F',
+      'Brent Crude': 'BZ=F',
+      'WTI Crude': 'CL=F',
+      'Natural Gas': 'NG=F',
+      'S&P 500': '^GSPC',
+      'NASDAQ': '^IXIC',
+      'DAX': '^GDAXI',
+      'FTSE 100': '^FTSE',
+      'DOW JONES': '^DJI',
+      'NIKKEI 225': '^N225',
   }
   if clean in mapping:
     return mapping[clean]
@@ -440,7 +511,7 @@ def get_yahoo_ticker(asset_name):
 
 
 def fetch_binance_real_data(asset_name):
-  clean = asset_name.replace("'", '').strip()
+  clean = asset_name.replace("'", '').replace('(OTC)', '').strip()
   mapping = {
       'Bitcoin': 'BTCUSDT',
       'Ethereum': 'ETHUSDT',
@@ -456,6 +527,8 @@ def fetch_binance_real_data(asset_name):
       'Polygon': 'MATICUSDT',
       'Avalanche': 'AVAXUSDT',
       'Dash': 'DASHUSDT',
+      'Ripple': 'XRPUSDT',
+      'Shiba Inu': 'SHIBUSDT',
   }
   if clean not in mapping:
     return None
@@ -589,8 +662,14 @@ def send_assets_menu(chat_id, market_type, page=0, msg_id=None):
       if i + j < len(sub):
         asset_item = sub[i + j]
         idx = BASE_ASSETS.index(asset_item)
+
+        # Aggiunge la scritta (OTC) sul pulsante se ci troviamo nel mercato OTC
+        display_name = (
+            f'{asset_item} (OTC)' if market_type == 'OTC' else asset_item
+        )
+
         row.append(
-            {'text': asset_item, 'callback_data': f'ast_{market_type}_{idx}'}
+            {'text': display_name, 'callback_data': f'ast_{market_type}_{idx}'}
         )
     kb.append(row)
 
@@ -685,12 +764,12 @@ def process_analysis_background(cid, mid, ast_name, market_type, exp_key):
     elif rsi_val < 45:
       score -= 1
 
-    if rsi_val < 20:
+    if rsi_val < 25:
       sig_type = 'ACQUISTA (BUY)'
-      filter_note = f'Rimbalzo Ipervenduto (RSI {rsi_period} < 20) 🟢'
-    elif rsi_val > 80:
+      filter_note = f'Rimbalzo Ipervenduto (RSI {rsi_period} < 25) 🟢'
+    elif rsi_val > 75:
       sig_type = 'VENDI (SELL)'
-      filter_note = f'Storno Ipercomprato (RSI {rsi_period} > 80) 🔴'
+      filter_note = f'Storno Ipercomprato (RSI {rsi_period} > 75) 🔴'
     else:
       filter_note = f'Filtro RSI {rsi_period} Normale ✅'
       if score > 0:
@@ -799,11 +878,16 @@ def webhook():
           m_type = parts[1]
           ast_idx = int(parts[2])
           ast = BASE_ASSETS[ast_idx]
+          if m_type == 'OTC':
+            ast_display = f'{ast} (OTC)'
+          else:
+            ast_display = ast
+
           if cid not in user_selection:
             user_selection[cid] = {}
           user_selection[cid]['market_type'] = m_type
-          user_selection[cid]['asset'] = ast
-          send_expiry_menu(cid, ast, m_type, mid)
+          user_selection[cid]['asset'] = ast_display
+          send_expiry_menu(cid, ast_display, m_type, mid)
         elif val.startswith('exp_'):
           parts = val.split('_')
           m_type = parts[1]
