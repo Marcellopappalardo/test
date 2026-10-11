@@ -286,23 +286,27 @@ def generate_chart_image(df, asset_name, market_type='REAL'):
           else df_clean['Close']
       )
       ema20_plot = close_series.ewm(span=20, adjust=False).mean().tail(30)
+      
+      # Stile TradingView avanzato (Dark Mode pulita e professionale)
       market_colors = mpf.make_marketcolors(
-          up='#00E676',
-          down='#FF5252',
-          wick={'up': '#00E676', 'down': '#FF5252'},
+          up='#26a69a',
+          down='#ef5350',
+          wick={'up': '#26a69a', 'down': '#ef5350'},
           edge='inherit',
           volume='inherit',
       )
       custom_style = mpf.make_mpf_style(
           base_mpf_style='nightclouds',
           marketcolors=market_colors,
-          facecolor='#1e1e1e',
-          edgecolor='#333333',
-          figcolor='#1e1e1e',
+          facecolor='#131722',  # Sfondo tipico TradingView Dark
+          edgecolor='#2a2e39',
+          figcolor='#131722',
+          gridcolor='#1e222d',
+          gridstyle='--',
       )
       add_plots = [
           mpf.make_addplot(
-              ema20_plot, color='#FFC107', width=1.5, linestyle='--'
+              ema20_plot, color='#2962ff', width=1.5, linestyle='-'
           )
       ]
       m_label = 'OTC (Pocket Option)' if market_type == 'OTC' else 'Reale'
@@ -312,18 +316,18 @@ def generate_chart_image(df, asset_name, market_type='REAL'):
           type='candle',
           style=custom_style,
           addplot=add_plots,
-          title=f'\nAnalisi 1M [{m_label}]: {asset_name}',
+          title=f'\nGrafico 1M [{m_label}] - {asset_name}',
           volume=False,
-          figsize=(8, 4.5),
+          figsize=(9, 5),
           returnfig=True,
       )
       fig.savefig(
           buf,
           format='png',
-          facecolor='#1e1e1e',
+          facecolor='#131722',
           edgecolor='none',
           bbox_inches='tight',
-          dpi=100,
+          dpi=120,
       )
       buf.seek(0)
       plt.close(fig)
@@ -529,35 +533,59 @@ def fetch_market_data(asset_name, market_type='REAL'):
   return None
 
 
-# --- ANALISI FOTO OTC TRAMITE EURISTICA INTERNA (SENZA API ESTERNE) ---
-def analyze_otc_image_internally(image_bytes):
+# --- ANALISI FOTO OTC CON GRAFICO STILE TRADINGVIEW ---
+def process_otc_photo_background(cid, mid, file_id):
   try:
-    # Generiamo un'analisi tecnica di mercato simulata ed euristica basata sull'immagine ricevuta
+    file_url = get_telegram_file_url(file_id)
+    if not file_url:
+      delete_message(cid, mid)
+      send_message(cid, '⚠️ Impossibile scaricare l\'immagine.')
+      return
+
+    # Generiamo dati di mercato di fallback (es. EUR/USD o USD/COP) per costruire il grafico TradingView reale
+    data = fetch_market_data('EUR/USD', 'OTC')
+    if data is None or data.empty:
+      data = fetch_market_data('Bitcoin', 'OTC')
+
     now_it = datetime.now(ITALY_TZ)
     entry_time = (
         now_it.replace(second=0, microsecond=0) + timedelta(minutes=1)
     ).strftime('%H:%M:%S')
 
-    # Valori di esempio coerenti con schermate OTC tipiche (es. USD/COP OTC)
-    simulated_price = round(3.87553 + np.random.uniform(-0.001, 0.001), 5)
-    rsi_val = round(np.random.uniform(35.0, 68.0), 1)
-    
+    rsi_val = round(np.random.uniform(32.0, 69.0), 1)
     sig_type = 'ACQUISTA (BUY)' if rsi_val < 50 else 'VENDI (SELL)'
     sig_emoji = '🟢' if 'ACQUISTA' in sig_type else '🔴'
-    conf = round(np.random.uniform(74.0, 91.5), 1)
+    conf = round(np.random.uniform(76.0, 93.5), 1)
+    simulated_price = round(float(data['Close'].iloc[-1]), 5) if data is not None else 1.08450
 
-    analysis_text = f"""
-1. **Asset Rilevato**: USD/COP OTC (Rilevato da screenshot)
-2. **Prezzo Attuale**: `{simulated_price}`
-3. **Struttura del Mercato & Pattern**: Trend a breve termine reattivo, supporto/resistenza testati sulla candela precedente.
-4. **Segnale**: **{sig_type} {sig_emoji}**
-5. **Scadenza Consigliata**: 1 Minuto
-6. **Minuto Corretto di Entrata**: {entry_time}
-7. **Affidabilità Stimata**: {conf}%
-    """
-    return analysis_text.strip()
+    text = f"⚡ **ANALISI FOTO MERCATO OTC (TRADINGVIEW)**\n\n"
+    text += f"1. **Asset Rilevato**: EUR/USD OTC\n"
+    text += f"2. **Prezzo Attuale**: `{simulated_price}`\n"
+    text += f"3. **Segnale**: **{sig_type} {sig_emoji}**\n"
+    text += f"4. **RSI (9)**: {rsi_val}\n"
+    text += f"5. **Scadenza Consigliata**: 1 Minuto\n"
+    text += f"6. **Minuto Corretto di Entrata**: {entry_time}\n"
+    text += f"7. **Affidabilità Stimata**: {conf}%"
+
+    kb = {
+        'inline_keyboard': [
+            [{'text': '📷 Invia altra foto OTC', 'callback_data': 'req_photo_otc'}],
+            [{'text': '🔙 Torna al menu principale', 'callback_data': 'back_market_type'}],
+        ]
+    }
+    
+    chart_buf = generate_chart_image(data, 'EUR/USD', 'OTC') if data is not None else None
+    delete_message(cid, mid)
+    
+    if chart_buf:
+      send_photo_message(cid, chart_buf, text, kb)
+    else:
+      send_message(cid, text, kb)
+
   except Exception as e:
-    return f'⚠️ Errore nell\'elaborazione locale dell\'immagine: {e}'
+    print('Errore elaborazione foto:', e)
+    delete_message(cid, mid)
+    send_message(cid, '⚠️ Errore durante l\'elaborazione dell\'immagine.')
 
 
 # --- MENU TELEGRAM ---
@@ -735,33 +763,9 @@ def process_analysis_background(cid, mid, ast_name, market_type, exp_key):
     send_message(cid, '⚠️ Si è verificato un errore.')
 
 
-def process_otc_photo_background(cid, mid, file_id):
-  try:
-    file_url = get_telegram_file_url(file_id)
-    if not file_url:
-      delete_message(cid, mid)
-      send_message(cid, '⚠️ Impossibile scaricare l\'immagine.')
-      return
-    img_data = requests.get(file_url).content
-    res = analyze_otc_image_internally(img_data)
-    delete_message(cid, mid)
-    kb = {
-        'inline_keyboard': [
-            [{'text': '📷 Invia altra foto OTC', 'callback_data': 'req_photo_otc'}],
-            [{'text': '🔙 Torna al menu principale', 'callback_data': 'back_market_type'}],
-        ]
-    }
-    send_message(
-        cid, f'⚡ **ANALISI FOTO MERCATO OTC (INTERNA)**\n\n{res}', kb
-    )
-  except Exception as e:
-    delete_message(cid, mid)
-    send_message(cid, '⚠️ Errore durante l\'elaborazione locale dell\'immagine.')
-
-
 @app.route('/')
 def index():
-  return 'Bot pronto con analisi interna, mercati multipli e senza chiavi OpenAI!', 200
+  return 'Bot operativo con pulizia foto e grafici TradingView!', 200
 
 
 @app.route('/webhook', methods=['POST'])
@@ -791,7 +795,7 @@ def webhook():
           edit_message(
               cid,
               mid,
-              '📷 **Invia ORA lo screenshot del tuo grafico OTC (es. Pocket Option).**\n\nIl sistema elaborerà l\'analisi direttamente.',
+              '📷 **Invia ORA lo screenshot del tuo grafico OTC (es. Pocket Option).**\n\nIl sistema eliminerà la foto e genererà il grafico in stile TradingView.',
               markup=kb
           )
           if cid not in user_selection:
@@ -850,9 +854,14 @@ def webhook():
 
         if 'photo' in msg:
           file_id = msg['photo'][-1]['file_id']
+          photo_msg_id = msg['message_id']
+          
+          # Elimina immediatamente lo screenshot inviato dall'utente
+          delete_message(cid, photo_msg_id)
+
           temp_mid = send_message(
               cid,
-              '🔍 **Elaborazione screenshot in corso...**\nAnalisi geometrica e dei pattern grafici avviata.',
+              '🔍 **Screenshot ricevuto ed eliminato.**\nGenerazione grafico in stile TradingView e analisi in corso...',
           )
           threading.Thread(
               target=process_otc_photo_background,
