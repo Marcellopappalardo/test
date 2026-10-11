@@ -498,5 +498,31 @@ def webhook():
                             text += f"🎯 Segnale: {sig_type} {sig_emoji}\n\n"
                             text += "🛠️ Indicatori Inseriti:\n"
                             text += f"• RSI (9): {rsi}\n"
-                            text += f"• Linea MACD: `{"
-                            # Fix string template literal below
+                            text += f"• Linea MACD: `{macd_line}`\n\n"
+                            text += f"⚖️ Affidabilità: {conf}%\n"
+                            text += f"⏳ Scadenza: 1 Minuto (1M)\n"
+                            text += f"📌 Entrata: {entry_time}"
+                            
+                            kb = {"inline_keyboard": [[{"text": "≡ Cambia Asset", "callback_data": "back_assets"}]]}
+                            send_message(cid, text, kb)
+                        except ValueError:
+                            send_message(cid, "⚠️ Valore non valido. Inserisci un numero valido per il MACD:")
+                        return "ok", 200
+
+                send_assets_menu(cid, 0)
+                return "ok", 200
+        except Exception as e:
+            print("Errore nel webhook:", e)
+    return "ok", 200
+
+RENDER_URL = os.environ.get('RENDER_EXTERNAL_URL')
+if RENDER_URL:
+    try:
+        hook_url = f"{RENDER_URL}/webhook"
+        requests.get(f"{BASE_URL}/setWebhook?url={hook_url}", timeout=5)
+        print(f"✅ Webhook impostato automaticamente su: {hook_url}")
+    except Exception as e:
+        print("⚠️ Errore impostazione automatica webhook:", e)
+
+if __name__ == "__main__":
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
