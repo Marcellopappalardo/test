@@ -44,7 +44,6 @@ ALL_ASSETS = [
 ]
 
 user_selection = {}
-# Dizionario per tracciare gli utenti che stanno inserendo i dati manuali per gli asset OTC
 user_otc_state = {}
 
 def api_call(method, data):
@@ -207,7 +206,6 @@ def fetch_coinbase_data(asset_name):
     try:
         res = requests.get(url, headers=headers, timeout=3.0).json()
         if not isinstance(res, list): return None
-        # Coinbase format: [time, low, high, open, close, volume]
         df = pd.DataFrame(res, columns=['time', 'Low', 'High', 'Open', 'Close', 'Volume'])
         df['Datetime'] = pd.to_datetime(df['time'], unit='s')
         df.set_index('Datetime', inplace=True)
@@ -224,7 +222,6 @@ def fetch_bitget_data(asset_name):
         res = requests.get(url, timeout=3.0).json()
         data = res.get("data", [])
         if not data: return None
-        # Bitget format: [timestamp, open, high, low, close, volume, quoteVolume]
         df = pd.DataFrame(data, columns=['timestamp', 'Open', 'High', 'Low', 'Close', 'Volume', 'QV'])
         df['Datetime'] = pd.to_datetime(df['timestamp'].astype(int), unit='ms')
         df.set_index('Datetime', inplace=True)
@@ -267,7 +264,6 @@ def fetch_yahoo_real_data(asset_name):
         if current_time - ts < CACHE_DURATION:
             return cached_df
 
-    # Prova prima le API crypto dedicate
     df = fetch_binance_data(asset_name)
     if df is not None and not df.empty:
         market_cache[asset_name] = (current_time, df)
@@ -283,7 +279,6 @@ def fetch_yahoo_real_data(asset_name):
         market_cache[asset_name] = (current_time, df)
         return df
 
-    # Fallback su Yahoo Finance
     ticker_symbol = get_yahoo_ticker(asset_name)
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker_symbol}?interval=1m&range=1d"
     headers = {
@@ -364,7 +359,6 @@ def webhook():
                     ast = ALL_ASSETS[int(val.split("_")[1])]
                     user_selection[cid] = {"asset": ast}
                     if "OTC" in ast:
-                        # Gestione asset OTC: chiedi inserimento manuale
                         user_otc_state[cid] = {"asset": ast, "step": "price"}
                         edit_message(cid, mid, f"📊 **Mercato OTC Rilevato ({ast})**\n\nInserisci il **Prezzo attuale** (es. `1.08540`):")
                     else:
@@ -447,7 +441,12 @@ def webhook():
                 cid = up["message"]["chat"]["id"]
                 txt_msg = up["message"]["text"].strip()
 
-                # Gestione flussi inserimento manuale OTC guidato da Gemini
+                if txt_msg == "/start":
+                    user_otc_state.pop(cid, None)
+                    user_selection.pop(cid, None)
+                    send_assets_menu(cid, 0)
+                    return "ok", 200
+
                 if cid in user_otc_state:
                     state = user_otc_state[cid]
                     step = state.get("step")
@@ -478,14 +477,12 @@ def webhook():
                             rsi = state["rsi"]
                             macd_line = state["macd"]
                             
-                            # Analisi Gemini / Algoritmica personalizzata basata sui dati immessi manualmente per OTC
                             user_otc_state.pop(cid, None)
                             
                             italian_tz = timezone(timedelta(hours=2))
                             current_it_time = datetime.now(italian_tz)
                             entry_time = (current_it_time + timedelta(minutes=1)).replace(second=0, microsecond=0).strftime('%H:%M:%S')
 
-                            # Logica di decisione basata sugli input manuali dell'utente
                             if rsi < 48 or macd_line > 0:
                                 sig_type = "ACQUISTA (BUY)"
                                 sig_emoji = "🟢"
@@ -493,7 +490,7 @@ def webhook():
                                 sig_type = "VENDI (SELL)"
                                 sig_emoji = "🔴"
                                 
-                            conf = round(82.5 + abs(macd_line) * 500, 1)
+                            conf = round(82.0 + abs(macd_line) * 500, 1)
                             conf = min(96.0, max(70.0, conf))
 
                             text = "🤖 **ANALISI GEMINI (OTC MANUALE)**\n\n"
@@ -513,7 +510,6 @@ def webhook():
                             send_message(cid, "⚠️ Valore non valido. Inserisci un numero valido per il MACD:")
                         return "ok", 200
 
-                # Messaggio standard: mostra il menu degli asset
                 send_assets_menu(cid, 0)
                 return "ok", 200
         except Exception as e:
