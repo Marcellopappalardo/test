@@ -486,7 +486,7 @@ def camera_page():
             let tg = window.Telegram.WebApp;
             tg.expand();
 
-            function uploadPhoto(input) {
+            function uploadPhoto(input) {{
                 if (input.files && input.files[0]) {{
                     let formData = new FormData();
                     formData.append('photo', input.files[0]);
