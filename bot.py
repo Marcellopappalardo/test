@@ -576,7 +576,7 @@ def fetch_market_data(asset_name):
   return None
 
 
-# --- ANALISI IMMAGINE CON GEMINI AI (AGGIORNATA) ---
+# --- ANALISI IMMAGINE CON GEMINI AI (OTTIMIZZATA E FORZATA JSON) ---
 def extract_asset_and_price_from_image(image_bytes):
   try:
     if gemini_client is None:
@@ -585,24 +585,22 @@ def extract_asset_and_price_from_image(image_bytes):
     img = Image.open(io.BytesIO(image_bytes))
 
     prompt = (
-        'Sei un assistente di trading esperto. Analizza questo screenshot di una piattaforma di trading binario/forex.\n'
-        'Individua con estrema attenzione:\n'
-        '1. Il nome esatto dell\'asset visualizzato in alto o nel grafico (es. EUR/USD, Bitcoin, Apple, EUR/USD OTC, ecc.).\n'
-        '2. Il prezzo di mercato attuale (il valore numerico più grande o principale associato al prezzo corrente dell\'asset, solitamente con decimali).\n\n'
-        'Fai attenzione a NON confondere il prezzo con la percentuale di profitto (payout es. 85%, 90%), il saldo del conto o l\'orario.\n\n'
-        'Rispondi ESCLUSIVAMENTE in formato JSON rigoroso, senza blocchi markdown o altro testo:\n'
-        '{"asset": "NomeAsset", "price": 00.00}'
+        'Analizza con estrema precisione questo screenshot di una piattaforma di trading online. '
+        'Il tuo obiettivo è leggere il testo stampato nell\'immagine.\n\n'
+        'Trova:\n'
+        "1. 'asset': Il nome esatto dell'asset, della coppia di valute (es. EUR/USD, GBP/JPY), della criptovaluta o dell'azione visibile nell'interfaccia (solitamente in alto a sinistra o vicino al grafico). Se c'è la scritta 'OTC', includila (es. 'EUR/USD OTC' o 'Bitcoin OTC'). Leggi le lettere esatte senza inventare nulla.\n"
+        "2. 'price': Il prezzo numerico attuale di mercato visibile a schermo.\n\n"
+        "Rispondi unicamente con un oggetto JSON avente le chiavi 'asset' (stringa) e 'price' (numero float)."
     )
 
     response = gemini_client.models.generate_content(
-        model='gemini-2.0-flash', contents=[img, prompt]
+        model='gemini-2.0-flash',
+        contents=[img, prompt],
+        config={'response_mime_type': 'application/json'},
     )
 
-    text_res = response.text.strip()
-    text_res = re.sub(r'```json\s*|\s*```', '', text_res).strip()
-
-    parsed = json.loads(text_res)
-    detected_asset = parsed.get('asset', 'EUR/USD')
+    parsed = json.loads(response.text.strip())
+    detected_asset = parsed.get('asset', 'EUR/USD').strip()
     price_val = float(parsed.get('price', 0.0))
 
     return detected_asset, price_val
