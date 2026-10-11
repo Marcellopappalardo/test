@@ -570,7 +570,7 @@ def fetch_market_data(asset_name):
   return None
 
 
-# --- ANALISI IMMAGINE CON GEMINI AI (gemini-2.0-flash) ---
+# --- ANALISI IMMAGINE CON GEMINI AI ---
 def extract_asset_and_price_from_image(image_bytes):
   try:
     if gemini_client is None:
@@ -579,7 +579,7 @@ def extract_asset_and_price_from_image(image_bytes):
     img = Image.open(io.BytesIO(image_bytes))
 
     prompt = (
-        'Analizza questo screenshot di una piattaforma di trading binario/OTC.\n'
+        'Analizza questo screenshot di una piattaforma di trading.\n'
         'Individua con precisione due informazioni:\n'
         '1. Il nome esatto dell\'asset o criptovaluta visualizzato nel grafico (es. Bitcoin, Ethereum, EUR/USD, ecc.).\n'
         '2. Il prezzo numerico attuale visibile sul grafico (es. 83022.70).\n\n'
@@ -598,14 +598,11 @@ def extract_asset_and_price_from_image(image_bytes):
     detected_asset = parsed.get('asset', 'Bitcoin')
     price_val = float(parsed.get('price', 83022.70))
 
-    if 'otc' not in detected_asset.lower():
-      detected_asset = f'{detected_asset} OTC'
-
     return detected_asset, price_val
 
   except Exception as e:
     print('Errore durante l\'analisi con Gemini:', e)
-    return 'Bitcoin OTC', 83022.70
+    return 'Bitcoin', 83022.70
 
 
 def process_otc_photo_background(cid, mid, file_id):
@@ -646,7 +643,7 @@ def process_otc_photo_background(cid, mid, file_id):
     sig_emoji = '🟢' if 'ACQUISTA' in sig_type else '🔴'
     conf = round(np.random.uniform(86.0, 96.0), 1)
 
-    text = f'⚡ **ANALISI FOTO MERCATO OTC (GEMINI AI)**\n\n'
+    text = f'⚡ **ANALISI FOTO MERCATO (GEMINI AI)**\n\n'
     text += f'1. **Asset Rilevato**: `{asset_detected}`\n'
     text += f'2. **Prezzo Attuale**: `{current_price}`\n'
     text += (
@@ -660,7 +657,7 @@ def process_otc_photo_background(cid, mid, file_id):
 
     kb = {
         'inline_keyboard': [
-            [{'text': '📷 Invia altra foto OTC', 'callback_data': 'req_photo_otc'}],
+            [{'text': '📷 Invia un altro screenshot', 'callback_data': 'req_photo_otc'}],
             [{'text': '🔙 Torna al menu principale', 'callback_data': 'back_market_type'}],
         ]
     }
@@ -680,7 +677,7 @@ def send_market_type_menu(chat_id, msg_id=None):
       'inline_keyboard': [
           [{'text': '🌐 Mercato Reale (Lista Asset)', 'callback_data': 'mtype_real'}],
           [{'text': '⚡ Mercato OTC (Seleziona Asset)', 'callback_data': 'mtype_otc_select'}],
-          [{'text': '📷 Invia Screenshot OTC', 'callback_data': 'req_photo_otc'}],
+          [{'text': '📷 Invia Screenshot', 'callback_data': 'req_photo_otc'}],
       ]
   }
   send_message(
@@ -774,7 +771,7 @@ def process_analysis_background(cid, mid, ast_name, exp_key, is_otc=False):
     sig_emoji = '🟢' if 'ACQUISTA' in sig_type else '🔴'
     conf = round(np.random.uniform(86.0, 96.0), 1)
 
-    tag_title = '⚡ ANALISI PROBABILITÀ OTC' if is_otc else '🐂🐻 ANALISI MERCATO REALE (1M)'
+    tag_title = '⚡ ANALISI PROBABILITÀ' if is_otc else '🐂🐻 ANALISI MERCATO REALE (1M)'
     back_target = 'back_otc_assets' if is_otc else 'back_assets'
 
     text = f'{tag_title}\n\n'
@@ -844,7 +841,7 @@ def webhook():
           edit_message(
               cid,
               mid,
-              '📷 **Invia ORA lo screenshot del tuo grafico OTC (es. Pocket Option).**\n\nGemini analizzerà l\'immagine riconoscendo istantaneamente asset e prezzo!',
+              '📷 **Invia ORA lo screenshot del tuo grafico.**\n\nGemini analizzerà l\'immagine riconoscendo istantaneamente asset e prezzo!',
               markup=kb,
           )
           return 'ok', 200
@@ -901,6 +898,9 @@ def webhook():
 
         if 'photo' in msg:
           file_id = msg['photo'][-1]['file_id']
+          user_msg_id = msg['message_id']
+          delete_message(cid, user_msg_id)
+
           temp_mid = send_message(
               cid, '🔍 **Screenshot ricevuto.** Gemini sta analizzando il grafico...'
           )
