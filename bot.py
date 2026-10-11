@@ -566,7 +566,7 @@ def fetch_market_data(asset_name):
   return None
 
 
-# --- ANALISI IMMAGINE CON GEMINI AI (gemini-2.5-flash) ---
+# --- ANALISI IMMAGINE CON GEMINI AI ---
 def extract_asset_and_price_from_image(image_bytes):
   try:
     img = Image.open(io.BytesIO(image_bytes))
