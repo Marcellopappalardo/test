@@ -1,5 +1,8 @@
 from datetime import datetime, timedelta
+from difflib import get_close_matches
+from flask import Flask, request
 from google import genai
+from PIL import Image, ImageEnhance, ImageOps
 import io
 import json
 import math
@@ -9,16 +12,14 @@ import threading
 import time
 import traceback
 from zoneinfo import ZoneInfo
-from flask import Flask, request
 import matplotlib
+import matplotlib.pyplot as plt
 import mplfinance as mpf
 import numpy as np
 import pandas as pd
-from PIL import Image, ImageEnhance, ImageOps
 import requests
 
 matplotlib.use('Agg')
-import matplotlib.pyplot as plt
 
 app = Flask(__name__)
 
@@ -576,20 +577,22 @@ def fetch_market_data(asset_name):
   return None
 
 
-# --- ANALISI IMMAGINE CON GEMINI AI (OTTIMIZZATA E FORZATA JSON) ---
+# --- ANALISI IMMAGINE CON GEMINI AI (OTTIMIZZATA, FORZATA JSON E CON MATCHING SICURO) ---
 def extract_asset_and_price_from_image(image_bytes):
   try:
     if gemini_client is None:
       return 'EUR/USD', 0.0
 
     img = Image.open(io.BytesIO(image_bytes))
+    assets_reference = ', '.join(ALL_ASSETS)
 
     prompt = (
         'Analizza con estrema precisione questo screenshot di una piattaforma di trading online. '
-        'Il tuo obiettivo è leggere il testo stampato nell\'immagine.\n\n'
-        'Trova:\n'
-        "1. 'asset': Il nome esatto dell'asset, della coppia di valute (es. EUR/USD, GBP/JPY), della criptovaluta o dell'azione visibile nell'interfaccia (solitamente in alto a sinistra o vicino al grafico). Se c'è la scritta 'OTC', includila (es. 'EUR/USD OTC' o 'Bitcoin OTC'). Leggi le lettere esatte senza inventare nulla.\n"
-        "2. 'price': Il prezzo numerico attuale di mercato visibile a schermo.\n\n"
+        'Il tuo compito è identificare con precisione chirurgica:\n'
+        '1. L\'asset o la coppia di valute presente nel grafico. '
+        f'DEVI scegliere obbligatoriamente un nome che sia il più vicino possibile o identico a uno di questi presenti nella lista ufficiale:\n[{assets_reference}]. '
+        "Se l'asset sullo schermo include la dicitura 'OTC', segnalalo chiaramente.\n"
+        "2. 'price': Il prezzo numerico attuale di mercato visibile a schermo (formato float).\n\n"
         "Rispondi unicamente con un oggetto JSON avente le chiavi 'asset' (stringa) e 'price' (numero float)."
     )
 
@@ -600,13 +603,39 @@ def extract_asset_and_price_from_image(image_bytes):
     )
 
     parsed = json.loads(response.text.strip())
-    detected_asset = parsed.get('asset', 'EUR/USD').strip()
+    detected_raw = parsed.get('asset', 'EUR/USD').strip()
     price_val = float(parsed.get('price', 0.0))
 
-    return detected_asset, price_val
+    # Controllo di pulizia e corrispondenza esatta/simile con ALL_ASSETS
+    is_otc_flag = 'OTC' in detected_raw.upper()
+    clean_detected = (
+        detected_raw.replace('OTC', '').replace('/', '').upper().strip()
+    )
+
+    best_match = 'EUR/USD'
+    highest_ratio = 0
+    for a in ALL_ASSETS:
+      a_clean = a.replace('/', '').upper().strip()
+      if clean_detected == a_clean:
+        best_match = a
+        break
+      if clean_detected in a_clean or a_clean in clean_detected:
+        if len(a_clean) > highest_ratio:
+          best_match = a
+          highest_ratio = len(a_clean)
+
+    if highest_ratio == 0:
+      matches = get_close_matches(
+          detected_raw, ALL_ASSETS, n=1, cutoff=0.3
+      )
+      if matches:
+        best_match = matches[0]
+
+    final_asset_name = f'{best_match} OTC' if is_otc_flag else best_match
+    return final_asset_name, price_val
 
   except Exception as e:
-    print('Errore durante l\'analisi con Gemini:', e)
+    print("Errore durante l'analisi con Gemini:", e)
     return 'EUR/USD', 0.0
 
 
