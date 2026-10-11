@@ -492,9 +492,9 @@ def webhook():
                     exp_key = val.split("_")[2]
                     sel = user_selection.get(cid, {})
                     ast_name = sel.get("asset", "EUR/USD OTC")
-                    # Imposta lo stato per richiedere tutti e tre i valori contemporaneamente
                     user_otc_state[cid] = {"asset": ast_name, "expiry": exp_key}
-                    edit_message(cid, mid, f"📊 **Mercato OTC ({ast_name} - {exp_map.get(exp_key, exp_key)})**\n\nInserisci **contemporaneamente** Prezzo, RSI (9) e MACD separati da virgola o spazio.\n\n*Esempio:* `1.08540, 54.2, 0.0012`")
+                    kb_otc = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
+                    edit_message(cid, mid, f"📊 **Mercato OTC ({ast_name} - {exp_map.get(exp_key, exp_key)})**\n\nInserisci **contemporaneamente** Prezzo, RSI (9) e MACD separati da virgola o spazio.\n\n*Esempio:* `1.08540, 54.2, 0.0012`", kb_otc)
 
                 elif val == "back_assets":
                     user_otc_state.pop(cid, None)
@@ -517,7 +517,6 @@ def webhook():
                     exp_key = state["expiry"]
                     
                     try:
-                        # Pulisce e separa i valori inseriti dall'utente (supporta virgola o spazio)
                         parts = [p.strip().replace(",", ".") for p in txt_msg.replace(" ", ",").split(",") if p.strip()]
                         if len(parts) < 3:
                             send_message(cid, "⚠️ Inserisci **tutti e tre i valori** (Prezzo, RSI, MACD) separati da virgola.\n*Esempio:* `1.08540, 54.2, 0.0012`")
@@ -533,7 +532,6 @@ def webhook():
                         current_it_time = datetime.now(italian_tz)
                         entry_time = (current_it_time + timedelta(minutes=1)).replace(second=0, microsecond=0).strftime('%H:%M:%S')
 
-                        # Analisi Gemini / Algoritmica OTC basata sui dati simultanei
                         if rsi < 48 or macd_line > 0:
                             sig_type = "ACQUISTA (BUY)"
                             sig_emoji = "🟢"
