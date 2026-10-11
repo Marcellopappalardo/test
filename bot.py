@@ -492,9 +492,9 @@ def webhook():
                     exp_key = val.split("_")[2]
                     sel = user_selection.get(cid, {})
                     ast_name = sel.get("asset", "EUR/USD OTC")
-                    # Avvia il flusso guidato OTC chiedendo il prezzo dopo aver scelto la scadenza
-                    user_otc_state[cid] = {"asset": ast_name, "expiry": exp_key, "step": "price"}
-                    edit_message(cid, mid, f"📊 **Mercato OTC ({ast_name} - {exp_map.get(exp_key, exp_key)})**\n\n1️⃣ Inserisci il **Prezzo attuale** letto sulla piattaforma (es. `1.08540`):")
+                    # Imposta lo stato per richiedere tutti e tre i valori contemporaneamente
+                    user_otc_state[cid] = {"asset": ast_name, "expiry": exp_key}
+                    edit_message(cid, mid, f"📊 **Mercato OTC ({ast_name} - {exp_map.get(exp_key, exp_key)})**\n\nInserisci **contemporaneamente** Prezzo, RSI (9) e MACD separati da virgola o spazio.\n\n*Esempio:* `1.08540, 54.2, 0.0012`")
 
                 elif val == "back_assets":
                     user_otc_state.pop(cid, None)
@@ -513,75 +513,60 @@ def webhook():
 
                 if cid in user_otc_state:
                     state = user_otc_state[cid]
-                    step = state.get("step")
+                    ast_name = state["asset"]
+                    exp_key = state["expiry"]
                     
-                    if step == "price":
-                        try:
-                            state["price"] = float(txt_msg.replace(",", "."))
-                            state["step"] = "rsi"
-                            send_message(cid, "2️⃣ Inserisci il valore di **RSI (9)** letto sul grafico OTC (es. `54.2`):")
-                        except ValueError:
-                            send_message(cid, "⚠️ Valore non valido. Inserisci un numero valido per il prezzo:")
-                        return "ok", 200
+                    try:
+                        # Pulisce e separa i valori inseriti dall'utente (supporta virgola o spazio)
+                        parts = [p.strip().replace(",", ".") for p in txt_msg.replace(" ", ",").split(",") if p.strip()]
+                        if len(parts) < 3:
+                            send_message(cid, "⚠️ Inserisci **tutti e tre i valori** (Prezzo, RSI, MACD) separati da virgola.\n*Esempio:* `1.08540, 54.2, 0.0012`")
+                            return "ok", 200
+                        
+                        price = float(parts[0])
+                        rsi = float(parts[1])
+                        macd_line = float(parts[2])
+                        
+                        user_otc_state.pop(cid, None)
+                        
+                        italian_tz = timezone(timedelta(hours=2))
+                        current_it_time = datetime.now(italian_tz)
+                        entry_time = (current_it_time + timedelta(minutes=1)).replace(second=0, microsecond=0).strftime('%H:%M:%S')
 
-                    elif step == "rsi":
-                        try:
-                            state["rsi"] = float(txt_msg.replace(",", "."))
-                            state["step"] = "macd"
-                            send_message(cid, "3️⃣ Inserisci il valore della **Linea MACD** letto sul grafico OTC (es. `0.0012`):")
-                        except ValueError:
-                            send_message(cid, "⚠️ Valore non valido. Inserisci un numero valido per RSI:")
-                        return "ok", 200
-
-                    elif step == "macd":
-                        try:
-                            state["macd"] = float(txt_msg.replace(",", "."))
-                            ast_name = state["asset"]
-                            exp_key = state["expiry"]
-                            price = state["price"]
-                            rsi = state["rsi"]
-                            macd_line = state["macd"]
+                        # Analisi Gemini / Algoritmica OTC basata sui dati simultanei
+                        if rsi < 48 or macd_line > 0:
+                            sig_type = "ACQUISTA (BUY)"
+                            sig_emoji = "🟢"
+                            trend_desc = "Rialzista (Analisi Gemini) 📈"
+                            pattern_name = "Candela di Rimbalzo / Spinta"
+                        else:
+                            sig_type = "VENDI (SELL)"
+                            sig_emoji = "🔴"
+                            trend_desc = "Ribassista (Analisi Gemini) 📉"
+                            pattern_name = "Rifiuto / Correzione Livello"
                             
-                            user_otc_state.pop(cid, None)
-                            
-                            italian_tz = timezone(timedelta(hours=2))
-                            current_it_time = datetime.now(italian_tz)
-                            entry_time = (current_it_time + timedelta(minutes=1)).replace(second=0, microsecond=0).strftime('%H:%M:%S')
+                        conf = round(83.0 + abs(macd_line) * 400, 1)
+                        conf = min(96.0, max(72.0, conf))
+                        timeframe_name = exp_map.get(exp_key, "1 Minuto (M1)")
 
-                            # Analisi Gemini / Algoritmica OTC avanzata basata sui 3 parametri inseriti
-                            if rsi < 48 or macd_line > 0:
-                                sig_type = "ACQUISTA (BUY)"
-                                sig_emoji = "🟢"
-                                trend_desc = "Rialzista (Analisi Gemini) 📈"
-                                pattern_name = "Candela di Rimbalzo / Spinta"
-                            else:
-                                sig_type = "VENDI (SELL)"
-                                sig_emoji = "🔴"
-                                trend_desc = "Ribassista (Analisi Gemini) 📉"
-                                pattern_name = "Rifiuto / Correzione Livello"
-                                
-                            conf = round(83.0 + abs(macd_line) * 400, 1)
-                            conf = min(96.0, max(72.0, conf))
-                            timeframe_name = exp_map.get(exp_key, "1 Minuto (M1)")
-
-                            text = "🤖 **ANALISI GEMINI (MERCATO OTC)**\n\n"
-                            text += f"💲💹 Asset: {ast_name}\n"
-                            text += f"💵 Prezzo Inserito: `{price}`\n"
-                            text += f"📊 Trend Rilevato: {trend_desc}\n"
-                            text += f"🕯️ Pattern Candele: {pattern_name}\n"
-                            text += f"🎯 Segnale: {sig_type} {sig_emoji}\n\n"
-                            text += f"🛠️ Indicatori Inseriti:\n"
-                            text += f"• RSI (9): {rsi}\n"
-                            text += f"• Linea MACD: `{macd_line}`\n\n"
-                            text += f"⚖️ Affidabilità: {conf}%\n"
-                            text += f"⏱️ Timeframe: {timeframe_name}\n"
-                            text += f"📌 Ora Esatta Ingresso: `{entry_time}`"
-                            
-                            kb = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
-                            send_message(cid, text, kb)
-                        except ValueError:
-                            send_message(cid, "⚠️ Valore non valido. Inserisci un numero valido per il MACD:")
-                        return "ok", 200
+                        text = "🤖 **ANALISI GEMINI (MERCATO OTC)**\n\n"
+                        text += f"💲💹 Asset: {ast_name}\n"
+                        text += f"💵 Prezzo Inserito: `{price}`\n"
+                        text += f"📊 Trend Rilevato: {trend_desc}\n"
+                        text += f"🕯️ Pattern Candele: {pattern_name}\n"
+                        text += f"🎯 Segnale: {sig_type} {sig_emoji}\n\n"
+                        text += f"🛠️ Indicatori Inseriti:\n"
+                        text += f"• RSI (9): {rsi}\n"
+                        text += f"• Linea MACD: `{macd_line}`\n\n"
+                        text += f"⚖️ Affidabilità: {conf}%\n"
+                        text += f"⏱️ Timeframe: {timeframe_name}\n"
+                        text += f"📌 Ora Esatta Ingresso: `{entry_time}`"
+                        
+                        kb = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
+                        send_message(cid, text, kb)
+                    except ValueError:
+                        send_message(cid, "⚠️ Valori non validi. Assicurati di inserire numeri corretti separati da virgola.\n*Esempio:* `1.08540, 54.2, 0.0012`")
+                    return "ok", 200
 
                 send_category_menu(cid)
                 return "ok", 200
