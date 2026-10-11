@@ -6,6 +6,7 @@ import os
 import re
 import threading
 import time
+import traceback
 from zoneinfo import ZoneInfo
 from flask import Flask, request
 import matplotlib
@@ -21,9 +22,8 @@ import matplotlib.pyplot as plt
 
 app = Flask(__name__)
 
-# --- CONFIGURAZIONE BOT ---
 TG_TOKEN = '8585533636:AAE_J2ospaddCWva9gPHzE26dCp2_WaziLk'
-BASE_URL = f'https://api.telegram.org/bot{TG_TOKEN}'
+BASE_URL = 'https://api.telegram.org/bot' + TG_TOKEN
 
 market_cache = {}
 CACHE_DURATION = 5
@@ -31,15 +31,20 @@ chart_lock = threading.Lock()
 
 ITALY_TZ = ZoneInfo('Europe/Rome')
 
-BASE_ASSETS = [
-    # Forex Majors e Cross
+ALL_ASSETS = [
     'EUR/USD',
     'GBP/USD',
     'USD/JPY',
     'AUD/USD',
     'USD/CAD',
-    'USD/CHF',
+    'AUD/CAD',
+    'USD/MXN',
+    'USD/PKR',
+    'EUR/RUB',
+    'EUR/TRY',
+    'AUD/CHF',
     'NZD/USD',
+    'USD/CHF',
     'EUR/GBP',
     'EUR/JPY',
     'GBP/JPY',
@@ -53,30 +58,7 @@ BASE_ASSETS = [
     'CHF/JPY',
     'GBP/CAD',
     'GBP/AUD',
-    'AUD/CAD',
-    'AUD/CHF',
-    'EUR/RUB',
-    'EUR/TRY',
-    'USD/MXN',
-    'USD/PKR',
     'USD/ARS',
-    'USD/BRL',
-    'USD/ZAR',
-    'USD/INR',
-    'USD/TRY',
-    'USD/SGD',
-    'USD/PHP',
-    'USD/IDR',
-    'USD/MYR',
-    'USD/VND',
-    'USD/COP',
-    'USD/AED',
-    'GBP/CHF',
-    'NZD/JPY',
-    'NZD/CAD',
-    'NZD/CHF',
-    'OMR/CNY',
-    # Criptovalute
     'Bitcoin',
     'Ethereum',
     'Cardano',
@@ -91,9 +73,6 @@ BASE_ASSETS = [
     'Polygon',
     'Avalanche',
     'Dash',
-    'Ripple',
-    'Shiba Inu',
-    # Azioni
     'APPLE',
     'MICROSOFT',
     'TESLA',
@@ -102,26 +81,6 @@ BASE_ASSETS = [
     'GOOGLE',
     'META',
     "MCDONALD'S",
-    'INTEL',
-    'COCA-COLA',
-    'BOEING',
-    'CISCO',
-    'DISNEY',
-    'JPMORGAN',
-    'TWITTER',
-    'ALIBABA',
-    # Materie Prime e Indici
-    'Gold',
-    'Silver',
-    'Brent Crude',
-    'WTI Crude',
-    'Natural Gas',
-    'S&P 500',
-    'NASDAQ',
-    'DAX',
-    'FTSE 100',
-    'DOW JONES',
-    'NIKKEI 225',
 ]
 
 user_selection = {}
@@ -129,7 +88,7 @@ user_selection = {}
 
 def api_call(method, data):
   try:
-    url = f'{BASE_URL}/{method}'
+    url = BASE_URL + '/' + method
     headers = {'Content-Type': 'application/json'}
     response = requests.post(url, json=data, headers=headers, timeout=5.0)
     return response.json()
@@ -153,7 +112,7 @@ def send_message(chat_id, text, markup=None):
 
 def send_photo_message(chat_id, photo_buf, caption, markup=None):
   try:
-    url = f'{BASE_URL}/sendPhoto'
+    url = BASE_URL + '/sendPhoto'
     files = {'photo': ('chart.png', photo_buf, 'image/png')}
     data = {'chat_id': chat_id, 'caption': caption, 'parse_mode': 'Markdown'}
     if markup:
@@ -177,7 +136,9 @@ def edit_message(chat_id, msg_id, text, markup=None):
       'text': text,
       'parse_mode': 'Markdown',
   }
-  p['reply_markup'] = markup if markup is not None else {'inline_keyboard': []}
+  p['reply_markup'] = (
+      markup if markup is not None else {'inline_keyboard': []}
+  )
   api_call('editMessageText', p)
 
 
@@ -210,8 +171,6 @@ def fetch_binance_data(clean_name):
       'Polygon': 'MATICUSDT',
       'Avalanche': 'AVAXUSDT',
       'Dash': 'DASHUSDT',
-      'Ripple': 'XRPUSDT',
-      'Shiba Inu': 'SHIBUSDT',
   }
   symbol = mapping.get(clean_name)
   if not symbol:
@@ -256,7 +215,6 @@ def fetch_coinbase_data(clean_name):
       'Litecoin': 'LTC-USD',
       'Chainlink': 'LINK-USD',
       'Solana': 'SOL-USD',
-      'Ripple': 'XRP-USD',
       'Dogecoin': 'DOGE-USD',
   }
   product_id = mapping.get(clean_name)
@@ -289,7 +247,6 @@ def fetch_bitget_data(clean_name):
       'Cardano': 'ADAUSDT',
       'Polkadot': 'DOTUSDT',
       'Solana': 'SOLUSDT',
-      'Ripple': 'XRPUSDT',
       'Dogecoin': 'DOGEUSDT',
       'Litecoin': 'LTCUSDT',
   }
@@ -328,16 +285,23 @@ def fetch_bitget_data(clean_name):
   return None
 
 
-# --- ANALISI TECNICA PER MENU ---
+# --- ANALISI TECNICA E INDICATORI ---
 def analyze_market_structure(df):
-  highs, lows = df['High'], df['Low']
+  highs = df['High']
+  lows = df['Low']
   if isinstance(highs, pd.DataFrame):
     highs = highs.iloc[:, 0]
   if isinstance(lows, pd.DataFrame):
     lows = lows.iloc[:, 0]
-  recent_highs, recent_lows = highs.tail(12), lows.tail(12)
-  is_higher_high = float(recent_highs.iloc[-1]) >= float(recent_highs.iloc[-6])
+
+  recent_highs = highs.tail(12)
+  recent_lows = lows.tail(12)
+
+  is_higher_high = float(recent_highs.iloc[-1]) >= float(
+      recent_highs.iloc[-6]
+  )
   is_higher_low = float(recent_lows.iloc[-1]) >= float(recent_lows.iloc[-6])
+
   if is_higher_high and is_higher_low:
     return 'Rialzista (HH / HL)', 2
   elif not is_higher_high and not is_higher_low:
@@ -349,17 +313,45 @@ def analyze_market_structure(df):
 def detect_candlestick_pattern(df):
   if len(df) < 2:
     return 'Dati insufficienti'
+
   c = df.iloc[-1]
+  p = df.iloc[-2]
+
   o = float(c['Open'].iloc[0] if isinstance(c['Open'], pd.Series) else c['Open'])
-  h = float(c['High'].iloc[0] if isinstance(c['High'], pd.Series) else c['High'])
+  h = float(
+      c['High'].iloc[0] if isinstance(c['High'], pd.Series) else c['High']
+  )
   l = float(c['Low'].iloc[0] if isinstance(c['Low'], pd.Series) else c['Low'])
-  cl = float(c['Close'].iloc[0] if isinstance(c['Close'], pd.Series) else c['Close'])
+  cl = float(
+      c['Close'].iloc[0] if isinstance(c['Close'], pd.Series) else c['Close']
+  )
+
+  po = float(
+      p['Open'].iloc[0] if isinstance(p['Open'], pd.Series) else p['Open']
+  )
+  pcl = float(
+      p['Close'].iloc[0] if isinstance(p['Close'], pd.Series) else p['Close']
+  )
+
   body = abs(cl - o)
   range_candle = h - l
   if range_candle == 0:
     return 'Candela Piatta'
+
+  upper_shadow = h - max(o, cl)
+  lower_shadow = min(o, cl) - l
+
   if body <= range_candle * 0.1:
     return 'Doji (Indecisione ⚖️)'
+  if cl > o and pcl < po and cl >= po and o <= pcl:
+    return 'Engulfing Rialzista 🟢'
+  if cl < o and pcl > po and cl <= po and o >= pcl:
+    return 'Engulfing Ribassista 🔴'
+  if lower_shadow >= body * 2 and upper_shadow <= body * 0.5 and cl > o:
+    return 'Martello / Hammer 🟢'
+  if upper_shadow >= body * 2 and lower_shadow <= body * 0.5 and cl < o:
+    return 'Stella Cadente / Shooting Star 🔴'
+
   return (
       'Candela Rialzista Standard 📈'
       if cl > o
@@ -367,19 +359,65 @@ def detect_candlestick_pattern(df):
   )
 
 
-def calculate_indicators(df):
+def check_trend_reversal(df, macd_hist):
   close = (
       df['Close'].iloc[:, 0]
       if isinstance(df['Close'], pd.DataFrame)
       else df['Close']
   )
+  ema20 = close.ewm(span=20, adjust=False).mean()
+
+  curr_close = float(close.iloc[-1])
+  prev_close = float(close.iloc[-2]) if len(close) > 1 else curr_close
+  curr_ema = float(ema20.iloc[-1])
+  prev_ema = float(ema20.iloc[-2]) if len(ema20) > 1 else curr_ema
+
+  exp1 = close.ewm(span=12, adjust=False).mean()
+  exp2 = close.ewm(span=26, adjust=False).mean()
+  prev_macd = float(exp1.iloc[-2] - exp2.iloc[-2]) if len(close) > 1 else 0
+  prev_sig = (
+      float(
+          exp1.ewm(span=9, adjust=False)
+          .mean()
+          .iloc[-2]
+      )
+      if len(close) > 1
+      else 0
+  )
+  prev_hist = prev_macd - prev_sig
+
+  reversal_messages = []
+  if prev_hist <= 0 and macd_hist > 0:
+    reversal_messages.append('Inversione Rialzista (MACD 🟢)')
+  elif prev_hist >= 0 and macd_hist < 0:
+    reversal_messages.append('Inversione Ribassista (MACD 🔴)')
+
+  if prev_close <= prev_ema and curr_close > curr_ema:
+    reversal_messages.append('Rottura Rialzista EMA 20 🚀')
+  elif prev_close >= prev_ema and curr_close < curr_ema:
+    reversal_messages.append('Rottura Ribassista EMA 20 🔻')
+
+  return (
+      ' | '.join(reversal_messages)
+      if reversal_messages
+      else 'Trend Stabile (Senza incroci critici)'
+  )
+
+
+def calculate_indicators(df):
+  close = df['Close']
+  if isinstance(close, pd.DataFrame):
+    close = close.iloc[:, 0]
+
   current_close = float(close.iloc[-1])
-  prev_close = float(close.iloc[-2]) if len(close) > 1 else float(close.iloc[-1])
+  prev_close = float(close.iloc[-2]) if len(close) > 1 else current_close
+
   delta = close.diff()
-  rsi_period = 9
-  gain = (delta.where(delta > 0, 0)).rolling(window=rsi_period).mean()
-  loss = (-delta.where(delta < 0, 0)).rolling(window=rsi_period).mean().replace(0, 1e-10)
-  rsi = 100 - (100 / (1 + (gain / loss)))
+  gain = (delta.where(delta > 0, 0)).rolling(window=9).mean()
+  loss = (-delta.where(delta < 0, 0)).rolling(window=9).mean()
+  loss = loss.replace(0, 1e-10)
+  rs = gain / loss
+  rsi = 100 - (100 / (1 + rs))
   current_rsi = round(float(rsi.iloc[-1]), 1)
   if math.isnan(current_rsi):
     current_rsi = 50.0
@@ -387,149 +425,228 @@ def calculate_indicators(df):
   exp1 = close.ewm(span=12, adjust=False).mean()
   exp2 = close.ewm(span=26, adjust=False).mean()
   macd = exp1 - exp2
-  hist = macd - macd.ewm(span=9, adjust=False).mean()
+  signal = macd.ewm(span=9, adjust=False).mean()
+  hist = macd - signal
+
+  m_line = round(float(macd.iloc[-1]), 5)
+  m_sig = (
+      round(float(signal.iloc[-1]) if not math.isnan(signal.iloc[-1]) else 0, 5)
+  )
   m_hist = round(float(hist.iloc[-1]), 5)
+
+  ema20 = close.ewm(span=20, adjust=False).mean()
+  current_ema = round(float(ema20.iloc[-1]), 5)
 
   structure_name, structure_score = analyze_market_structure(df)
   candlestick_pattern = detect_candlestick_pattern(df)
+  trend_reversal_status = check_trend_reversal(df, m_hist)
+
   return (
       current_rsi,
+      m_line,
+      m_sig,
       m_hist,
       current_close,
       prev_close,
+      current_ema,
       structure_name,
       structure_score,
       candlestick_pattern,
-      rsi_period,
+      trend_reversal_status,
   )
 
 
-def generate_chart_image(df, asset_name, market_type='REAL'):
+def generate_chart_image(df, asset_name):
   with chart_lock:
     try:
       plt.close('all')
       df_clean = df.copy()
+
       if df_clean.index.tz is None:
         df_clean.index = df_clean.index.tz_localize('UTC')
       df_clean.index = df_clean.index.tz_convert(ITALY_TZ)
+
       for col in ['Open', 'High', 'Low', 'Close']:
         df_clean[col] = df_clean[col].astype(float)
+
       close_series = (
           df_clean['Close'].iloc[:, 0]
           if isinstance(df_clean['Close'], pd.DataFrame)
           else df_clean['Close']
       )
-      ema20_plot = close_series.ewm(span=20, adjust=False).mean().tail(30)
+      ema20_full = close_series.ewm(span=20, adjust=False).mean()
+
+      df_plot = df_clean.tail(30).copy()
+      ema20_plot = ema20_full.tail(30)
 
       market_colors = mpf.make_marketcolors(
-          up='#26a69a',
-          down='#ef5350',
-          wick={'up': '#26a69a', 'down': '#ef5350'},
+          up='#00E676',
+          down='#FF5252',
+          wick={'up': '#00E676', 'down': '#FF5252'},
           edge='inherit',
           volume='inherit',
       )
       custom_style = mpf.make_mpf_style(
           base_mpf_style='nightclouds',
           marketcolors=market_colors,
-          facecolor='#131722',
-          edgecolor='#2a2e39',
-          figcolor='#131722',
-          gridcolor='#1e222d',
-          gridstyle='--',
+          facecolor='#1e1e1e',
+          edgecolor='#333333',
+          figcolor='#1e1e1e',
       )
+
       add_plots = [
           mpf.make_addplot(
-              ema20_plot, color='#2962ff', width=1.5, linestyle='-'
+              ema20_plot, color='#FFC107', width=1.5, linestyle='--'
           )
       ]
-      m_label = 'OTC (Pocket Option)' if market_type == 'OTC' else 'Reale'
+
       buf = io.BytesIO()
       fig, axes = mpf.plot(
-          df_clean.tail(30),
+          df_plot,
           type='candle',
           style=custom_style,
           addplot=add_plots,
-          title=f'\nGrafico 1M [{m_label}] - {asset_name}',
+          title=f'\nAnalisi Tecnica 1M: {asset_name}',
           volume=False,
-          figsize=(9, 5),
+          figsize=(8, 4.5),
           returnfig=True,
+          panel_ratios=(1,),
       )
+
       fig.savefig(
           buf,
           format='png',
-          facecolor='#131722',
+          facecolor='#1e1e1e',
           edgecolor='none',
           bbox_inches='tight',
-          dpi=120,
+          dpi=100,
       )
       buf.seek(0)
       plt.close(fig)
       return buf
     except Exception as e:
-      print('Errore grafico:', e)
+      print('ERRORE NELLA GENERAZIONE DEL GRAFICO:', e)
       plt.close('all')
       return None
 
 
-def fetch_market_data(asset_name, market_type='REAL'):
-  clean = asset_name.replace("'", '').replace('(OTC)', '').strip()
-  cache_key = f'{market_type}_{clean}'
+def get_yahoo_ticker(asset_name):
+  clean = asset_name.replace("'", '').strip()
+  mapping = {
+      'EUR/USD': 'EURUSD=X',
+      'GBP/USD': 'GBPUSD=X',
+      'USD/JPY': 'USDJPY=X',
+      'AUD/USD': 'AUDUSD=X',
+      'USD/CAD': 'USDCAD=X',
+      'AUD/CAD': 'AUDCAD=X',
+      'USD/MXN': 'USDMXN=X',
+      'USD/PKR': 'USDPKR=X',
+      'EUR/RUB': 'EURRUB=X',
+      'EUR/TRY': 'EURTRY=X',
+      'USD/CHF': 'USDCHF=X',
+      'EUR/GBP': 'EURGBP=X',
+      'EUR/JPY': 'EURJPY=X',
+      'GBP/JPY': 'GBPJPY=X',
+      'AUD/JPY': 'AUDJPY=X',
+      'AUD/CHF': 'AUDCHF=X',
+      'NZD/USD': 'NZDUSD=X',
+      'EUR/AUD': 'EURAUD=X',
+      'EUR/CAD': 'EURCAD=X',
+      'EUR/NZD': 'EURNZD=X',
+      'GBP/NZD': 'GBPNZD=X',
+      'AUD/NZD': 'AUDNZD=X',
+      'CAD/JPY': 'CADJPY=X',
+      'CHF/JPY': 'CHFJPY=X',
+      'GBP/CAD': 'GBPCAD=X',
+      'GBP/AUD': 'GBPAUD=X',
+      'USD/ARS': 'USDARS=X',
+      'APPLE': 'AAPL',
+      'MICROSOFT': 'MSFT',
+      'TESLA': 'TSLA',
+      'AMAZON': 'AMZN',
+      'NETFLIX': 'NFLX',
+      'GOOGLE': 'GOOGL',
+      'META': 'META',
+      "MCDONALD'S": 'MCD',
+  }
+  if clean in mapping:
+    return mapping[clean]
+  if '/' in clean and len(clean) == 7:
+    return clean.replace('/', '') + '=X'
+  return clean
+
+
+def fetch_market_data(asset_name):
+  clean = asset_name.replace("'", '').strip()
   current_time = time.time()
-  if cache_key in market_cache:
-    ts, cached_df = market_cache[cache_key]
+  if clean in market_cache:
+    ts, cached_df = market_cache[clean]
     if current_time - ts < CACHE_DURATION:
       return cached_df
 
-  # Prova prima gli exchange crypto se è una criptovaluta
+  # 1. Prova prima gli exchange crypto
   df = fetch_binance_data(clean)
   if df is None or df.empty:
     df = fetch_coinbase_data(clean)
   if df is None or df.empty:
     df = fetch_bitget_data(clean)
 
-  # Altrimenti usa Yahoo Finance per Forex, Azioni, Indici e Materie Prime
+  # 2. Se non è crypto o fallisce, usa Yahoo Finance
   if df is None or df.empty:
-    mapping = {
-        'EUR/USD': 'EURUSD=X',
-        'GBP/USD': 'GBPUSD=X',
-        'USD/JPY': 'USDJPY=X',
-        'OMR/CNY': 'OMRCNY=X',
-        'Gold': 'GC=F',
-        'S&P 500': '^GSPC',
+    ticker_symbol = get_yahoo_ticker(clean)
+    url = f'https://query1.finance.yahoo.com/v8/finance/chart/{ticker_symbol}?interval=1m&range=1d'
+    headers = {
+        'User-Agent': (
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,'
+            ' like Gecko) Chrome/122.0.0.0 Safari/537.36'
+        ),
+        'Accept': 'application/json',
     }
-    ticker = mapping.get(clean, clean.replace('/', '') + '=X')
-    url = f'https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1m&range=1d'
-
     try:
-      res = requests.get(
-          url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=3.0
-      ).json()
-      res_data = res['chart']['result'][0]
-      df = pd.DataFrame(
-          res_data['indicators']['quote'][0],
-          index=pd.to_datetime(res_data['timestamp'], unit='s', utc=True),
-      )
-      df = df.dropna().resample('1min').agg(
-          {'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last'}
-      )
-      df.columns = ['Open', 'High', 'Low', 'Close']
-      df = df.ffill().dropna()
-    except Exception as e:
-      print('Errore Yahoo Finance:', e)
+      response = requests.get(url, headers=headers, timeout=3.0)
+      if response.status_code == 200:
+        data = response.json()
+        result = data['chart']['result'][0]
+        timestamps = result['timestamp']
+        quote = result['indicators']['quote'][0]
 
-  if market_type == 'OTC' and df is not None and not df.empty:
-    np.random.seed(int(current_time) % 10000)
-    noise = np.random.normal(0, 0.0001, len(df))
-    df['Close'] = df['Close'] * (1 + noise)
-    df['Open'] = df['Open'] * (1 + noise * 0.5)
+        df_raw = pd.DataFrame(
+            {
+                'Open': quote['open'],
+                'High': quote['high'],
+                'Low': quote['low'],
+                'Close': quote['close'],
+            },
+            index=pd.to_datetime(timestamps, unit='s', utc=True),
+        )
+
+        df_raw = df_raw[~df_raw.index.duplicated(keep='first')]
+        df_raw = df_raw.dropna()
+
+        df = df_raw.resample('1min').agg(
+            {'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last'}
+        )
+
+        df['Close'] = df['Close'].ffill()
+        df['Open'] = df['Open'].fillna(df['Close'])
+        df['High'] = df['High'].fillna(df['Close'])
+        df['Low'] = df['Low'].fillna(df['Close'])
+        df = df.dropna()
+
+    except Exception as e:
+      print(f'Errore Yahoo per {asset_name}: {e}')
 
   if df is not None and not df.empty:
-    market_cache[cache_key] = (current_time, df)
+    market_cache[clean] = (current_time, df)
     return df
+
+  if clean in market_cache:
+    _, old_df = market_cache[clean]
+    return old_df
   return None
 
 
-# --- RILEVAMENTO DA FOTO CON OCR (SOLO TESTO COME DA ESEMPIO) ---
+# --- GESTIONE FOTO E OCR PER MERCATI OTC ---
 def extract_asset_and_price_from_image(image_bytes):
   try:
     img = Image.open(io.BytesIO(image_bytes))
@@ -597,178 +714,192 @@ def send_market_type_menu(chat_id, msg_id=None):
     delete_message(chat_id, msg_id)
   kb = {
       'inline_keyboard': [
-          [{'text': '🌐 Mercato Reale', 'callback_data': 'mtype_REAL'}],
-          [{'text': '⚡ Mercato OTC (Pocket Option)', 'callback_data': 'mtype_OTC'}],
-          [{'text': '📷 Invia Foto Grafico OTC', 'callback_data': 'req_photo_otc'}],
+          [{'text': '🌐 Mercato Reale (Lista Asset)', 'callback_data': 'mtype_real'}],
+          [{'text': '📷 Invia Screenshot OTC', 'callback_data': 'req_photo_otc'}],
       ]
   }
   send_message(
-      chat_id, '📊 Seleziona la tipologia di mercato o invia una foto:', kb
+      chat_id, '📊 Seleziona un\'opzione o invia direttamente una foto:', kb
   )
 
 
-def send_assets_menu(chat_id, market_type, page=0, msg_id=None):
+def send_assets_menu(chat_id, page=0, msg_id=None):
   if msg_id:
     delete_message(chat_id, msg_id)
+
   per_page = 9
-  sub = BASE_ASSETS[page * per_page : (page + 1) * per_page]
+  sub = ALL_ASSETS[page * per_page : (page + 1) * per_page]
   kb = []
   for i in range(0, len(sub), 3):
     row = []
     for j in range(3):
       if i + j < len(sub):
-        item = sub[i + j]
-        idx = BASE_ASSETS.index(item)
-        display_name = f'{item} (OTC)' if market_type == 'OTC' else item
-        row.append(
-            {'text': display_name, 'callback_data': f'ast_{market_type}_{idx}'}
-        )
+        asset_item = sub[i + j]
+        row.append({
+            'text': asset_item,
+            'callback_data': 'ast_' + str(ALL_ASSETS.index(asset_item)),
+        })
     kb.append(row)
 
   nav = []
   if page > 0:
-    nav.append({
-        'text': '◀️ Indietro',
-        'callback_data': f'pg_{market_type}_{page - 1}',
-    })
-  if (page + 1) * per_page < len(BASE_ASSETS):
-    nav.append({
-        'text': 'Avanti ▶️',
-        'callback_data': f'pg_{market_type}_{page + 1}',
-    })
+    nav.append({'text': '◀️ Indietro', 'callback_data': 'pg_' + str(page - 1)})
+  if (page + 1) * per_page < len(ALL_ASSETS):
+    nav.append({'text': 'Avanti ▶️', 'callback_data': 'pg_' + str(page + 1)})
   if nav:
     kb.append(nav)
 
-  kb.append(
-      [{'text': '🔙 Cambia Mercato', 'callback_data': 'back_market_type'}]
-  )
-  m_label = (
-      'Mercato OTC (Pocket Option)' if market_type == 'OTC' else 'Mercato Reale'
-  )
-  send_message(
-      chat_id,
-      f'👋 Seleziona un asset per **{m_label}** (Timeframe 1M):',
-      {'inline_keyboard': kb},
-  )
+  kb.append([{'text': '🔙 Indietro', 'callback_data': 'back_market_type'}])
+
+  text = '👋 Scegli un asset reale (Timeframe 1M):'
+  send_message(chat_id, text, {'inline_keyboard': kb})
 
 
-def send_expiry_menu(chat_id, asset_name, market_type, msg_id):
+def send_expiry_menu(chat_id, asset_name, msg_id):
   kb = {
       'inline_keyboard': [
-          [{'text': '1 Minuto', 'callback_data': f'exp_{market_type}_1m'}],
-          [{'text': '2 Minuti', 'callback_data': f'exp_{market_type}_2m'}],
-          [{'text': '3 Minuti', 'callback_data': f'exp_{market_type}_3m'}],
-          [{'text': '5 Minuti', 'callback_data': f'exp_{market_type}_5m'}],
-          [{'text': '≡ Cambia Asset', 'callback_data': f'back_assets_{market_type}'}],
+          [{'text': '1 Minuto', 'callback_data': 'exp_1m'}],
+          [{'text': '2 Minuti', 'callback_data': 'exp_2m'}],
+          [{'text': '3 Minuti', 'callback_data': 'exp_3m'}],
+          [{'text': '5 Minuti', 'callback_data': 'exp_5m'}],
+          [{'text': '≡ Cambia Asset', 'callback_data': 'back_assets'}],
       ]
   }
-  m_label = 'OTC' if market_type == 'OTC' else 'Reale'
   edit_message(
       chat_id,
       msg_id,
-      f'💲💹 Asset [{m_label}]: {asset_name}\n\nSeleziona la scadenza:',
+      f'💲💹 Asset Reale: {asset_name}\n\nSeleziona la scadenza:',
       kb,
   )
 
 
-def process_analysis_background(cid, mid, ast_name, market_type, exp_key):
+def process_analysis_background(cid, mid, ast_name, exp_key):
   try:
-    data = fetch_market_data(ast_name, market_type)
+    data = fetch_market_data(ast_name)
+
     if data is None or data.empty:
-      send_message(
-          cid,
-          f'⚠️ Impossibile recuperare i dati per {ast_name}.',
-          {
-              'inline_keyboard': [[{
-                  'text': '≡ Cambia Asset',
-                  'callback_data': f'back_assets_{market_type}',
-              }]]
-          },
+      error_text = (
+          f'⚠️ **Impossibile recuperare i dati per {ast_name}.**\n\nIl mercato'
+          ' potrebbe essere chiuso in questo momento.'
       )
+      error_kb = {
+          'inline_keyboard': [
+              [{'text': '🔄 Aggiorna', 'callback_data': f'retry_{ast_name}_{exp_key}'}],
+              [{'text': '≡ Cambia Asset', 'callback_data': 'back_assets'}],
+          ]
+      }
+      send_message(cid, error_text, error_kb)
       return
 
     now_it = datetime.now(ITALY_TZ)
-    entry_time = (
-        now_it.replace(second=0, microsecond=0) + timedelta(minutes=1)
-    ).strftime('%H:%M:%S')
+    next_entry_dt = now_it.replace(second=0, microsecond=0) + timedelta(minutes=1)
+    entry_time = next_entry_dt.strftime('%H:%M:%S')
 
     (
         rsi_val,
+        macd_line,
+        macd_signal,
         macd_hist,
         current_close,
         prev_close,
+        current_ema,
         structure_name,
         structure_score,
         candlestick_pattern,
-        rsi_period,
+        trend_reversal_status,
     ) = calculate_indicators(data)
 
-    score = (
-        structure_score
-        + (1 if current_close > prev_close else -1)
-        + (1 if macd_hist > 0 else -1)
-    )
-    sig_type = (
-        'ACQUISTA (BUY)'
-        if rsi_val < 25 or (rsi_val <= 55 and score >= 0)
-        else 'VENDI (SELL)'
-    )
-    sig_emoji = '🟢' if 'ACQUISTA' in sig_type else '🔴'
-    conf = min(
-        95.0,
-        max(
-            60.0,
-            round(
-                70.0
-                + abs(macd_hist * 1000)
-                + abs(rsi_val - 50) * 0.3
-                + abs(structure_score) * 2,
-                1,
-            ),
-        ),
-    )
+    score = 0
+    score += structure_score
+    score += 1 if current_close > prev_close else -1
+    score += 1 if macd_hist > 0 else -1
 
-    m_title = (
-        '⚡ ANALISI OTC (POCKET OPTION)'
-        if market_type == 'OTC'
-        else '🐂🐻 ANALISI MERCATO REALE'
+    if rsi_val > 55:
+      score += 1
+    elif rsi_val < 45:
+      score -= 1
+
+    if rsi_val < 20:
+      sig_type = 'ACQUISTA (BUY)'
+      filter_note = 'Rimbalzo Ipervenduto (RSI < 20) 🟢'
+    elif rsi_val > 80:
+      sig_type = 'VENDI (SELL)'
+      filter_note = 'Storno Ipercomprato (RSI > 80) 🔴'
+    else:
+      filter_note = 'Filtro RSI Normale ✅'
+      if score > 0:
+        sig_type = 'ACQUISTA (BUY)'
+      elif score < 0:
+        sig_type = 'VENDI (SELL)'
+      else:
+        sig_type = 'ACQUISTA (BUY)'
+
+    conf = round(
+        70.0
+        + abs(macd_hist * 1000)
+        + abs(rsi_val - 50) * 0.3
+        + abs(structure_score) * 2,
+        1,
     )
-    text = f'{m_title} (1M)\n\n'
+    conf = min(95.0, max(60.0, conf))
+
+    sig_emoji = '🟢' if 'ACQUISTA' in sig_type else '🔴'
+    exp_map = {
+        '1m': '1 Minuto (1M)',
+        '2m': '2 Minuti (2M)',
+        '3m': '3 Minuti (3M)',
+        '5m': '5 Minuti (5M)',
+    }
+    expiry_name = exp_map.get(exp_key, '1 Minuto (1M)')
+
+    text = '🐂🐻 ANALISI EASY TRACK (1M)\n\n'
     text += f'💲💹 Asset: {ast_name}\n'
-    text += f'💵 Prezzo: `{round(current_close, 5)}`\n'
+    text += f'💵 Prezzo Reale: `{round(current_close, 5)}`\n'
     text += f'🎯 Segnale: {sig_type} {sig_emoji}\n\n'
     text += '📈 Struttura di Mercato:\n'
-    text += f'• Trend: {structure_name}\n\n'
+    text += f'• Trend: {structure_name}\n'
+    text += f'• Stato: {trend_reversal_status}\n\n'
     text += '🕯️ Candela Attuale (1M):\n'
-    text += f'• Pattern: {candlestick_pattern}\n\n'
+    text += f'• Pattern: {candlestick_pattern}\n'
+    text += f'• Gestione RSI: {filter_note}\n\n'
     text += '🛠️ Indicatori:\n'
-    text += f'• RSI ({rsi_period}): {rsi_val}\n'
+    text += f'• RSI (9): {rsi_val}\n'
     text += f'• Istogramma MACD: {macd_hist}\n\n'
     text += f'⚖️ Affidabilità: {conf}%\n'
-    text += f'⏳ Scadenza: {exp_key.upper()}\n'
+    text += f'⏳ Scadenza: {expiry_name}\n'
     text += f'📌 Entrata: {entry_time}'
 
     kb = {
         'inline_keyboard': [
-            [{'text': '🔄 Aggiorna', 'callback_data': f'retry_{market_type}_{ast_name}_{exp_key}'}],
-            [{'text': '≡ Cambia Asset', 'callback_data': f'back_assets_{market_type}'}],
+            [{'text': '🔄 Aggiorna', 'callback_data': f'retry_{ast_name}_{exp_key}'}],
+            [{'text': '≡ Cambia Asset', 'callback_data': 'back_assets'}],
         ]
     }
-    chart_buf = generate_chart_image(data, ast_name, market_type)
+
+    chart_buf = generate_chart_image(data, ast_name)
     delete_message(cid, mid)
+
     if chart_buf:
       send_photo_message(cid, chart_buf, text, kb)
     else:
       send_message(cid, text, kb)
   except Exception as e:
-    print('Errore background:', e)
+    print('Errore nel background thread:', e)
     delete_message(cid, mid)
-    send_message(cid, '⚠️ Si è verificato un errore.')
+    send_message(
+        cid,
+        '⚠️ Si è verificato un errore durante l\'elaborazione. Riprova.',
+        {
+            'inline_keyboard': [
+                [{'text': '≡ Cambia Asset', 'callback_data': 'back_assets'}]
+            ]
+        },
+    )
 
 
 @app.route('/')
 def index():
-  return 'Bot operativo con crypto (Binance, Coinbase, Bitget) e grafici TradingView!', 200
+  return 'Bot operativo con Binance, Coinbase, Bitget e OCR OTC!', 200
 
 
 @app.route('/webhook', methods=['POST'])
@@ -785,10 +916,8 @@ def webhook():
         )
         answer_callback(cq['id'])
 
-        if val.startswith('mtype_'):
-          m_type = val.split('_')[1]
-          user_selection[cid] = {'market_type': m_type}
-          send_assets_menu(cid, m_type, page=0, msg_id=mid)
+        if val == 'mtype_real':
+          send_assets_menu(cid, page=0, msg_id=mid)
         elif val == 'req_photo_otc':
           kb = {
               'inline_keyboard': [
@@ -798,7 +927,7 @@ def webhook():
           edit_message(
               cid,
               mid,
-              '📷 **Invia ORA lo screenshot del tuo grafico OTC (es. Pocket Option).**\n\nIl sistema analizzerà la foto e invierà il segnale testuale.',
+              '📷 **Invia ORA lo screenshot del tuo grafico OTC.**\n\nIl sistema analizzerà la foto e genererà il segnale testuale.',
               markup=kb,
           )
           if cid not in user_selection:
@@ -806,48 +935,36 @@ def webhook():
           user_selection[cid]['awaiting_photo'] = True
           return 'ok', 200
         elif val.startswith('ast_'):
-          parts = val.split('_')
-          m_type = parts[1]
-          ast = BASE_ASSETS[int(parts[2])]
-          ast_display = f'{ast} (OTC)' if m_type == 'OTC' else ast
-          if cid not in user_selection:
-            user_selection[cid] = {}
-          user_selection[cid]['market_type'] = m_type
-          user_selection[cid]['asset'] = ast_display
-          send_expiry_menu(cid, ast_display, m_type, mid)
-        elif val.startswith('exp_'):
-          parts = val.split('_')
-          m_type, exp_key = parts[1], parts[2]
-          ast_name = user_selection.get(cid, {}).get('asset', 'EUR/USD')
+          ast = ALL_ASSETS[int(val.split('_')[1])]
+          user_selection[cid] = {'asset': ast}
+          send_expiry_menu(cid, ast, mid)
+        elif val.startswith('exp_') or val.startswith('retry_'):
+          if val.startswith('exp_'):
+            sel = user_selection.get(cid, {})
+            ast_name = sel.get('asset', 'EUR/USD')
+            exp_key = val.split('_')[1]
+          else:
+            parts = val.split('_')
+            exp_key = parts[-1]
+            ast_name = '_'.join(parts[1:-1])
+
           delete_message(cid, mid)
           temp_mid = send_message(
-              cid, f'⏳ Elaborazione in corso per {ast_name}...'
+              cid,
+              f'⏳ Elaborazione in tempo reale (1M) per {ast_name}'
+              f' ({exp_key.upper()})...',
           )
+
           threading.Thread(
               target=process_analysis_background,
-              args=(cid, temp_mid, ast_name, m_type, exp_key),
+              args=(cid, temp_mid, ast_name, exp_key),
           ).start()
           return 'ok', 200
-        elif val.startswith('retry_'):
-          parts = val.split('_')
-          m_type, exp_key = parts[1], parts[-1]
-          ast_name = '_'.join(parts[2:-1])
-          delete_message(cid, mid)
-          temp_mid = send_message(
-              cid, f'⏳ Aggiornamento in corso per {ast_name}...'
-          )
-          threading.Thread(
-              target=process_analysis_background,
-              args=(cid, temp_mid, ast_name, m_type, exp_key),
-          ).start()
-          return 'ok', 200
+
         elif val.startswith('pg_'):
-          parts = val.split('_')
-          send_assets_menu(
-              cid, market_type=parts[1], page=int(parts[2]), msg_id=mid
-          )
-        elif val.startswith('back_assets_'):
-          send_assets_menu(cid, val.split('_')[2], 0, msg_id=mid)
+          send_assets_menu(cid, int(val.split('_')[1]), msg_id=mid)
+        elif val == 'back_assets':
+          send_assets_menu(cid, 0, msg_id=mid)
         elif val == 'back_market_type':
           send_market_type_menu(cid, msg_id=mid)
 
@@ -872,7 +989,7 @@ def webhook():
           send_market_type_menu(cid)
           return 'ok', 200
     except Exception as e:
-      print('Errore webhook:', e)
+      print('Errore nel webhook:', e)
   return 'ok', 200
 
 
