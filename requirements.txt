@@ -1,9 +1,8 @@
 Flask
-gunicorn
 requests
 pandas
 numpy
 matplotlib
 mplfinance
 Pillow
-pytesseract
+google-genai
