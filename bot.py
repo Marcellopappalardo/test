@@ -22,7 +22,9 @@ app = Flask(__name__)
 # --- CONFIGURAZIONE ---
 TG_TOKEN = '8585533636:AAE_J2ospaddCWva9gPHzE26dCp2_WaziLk'
 BASE_URL = 'https://api.telegram.org/bot' + TG_TOKEN
-OPENAI_API_KEY = 'INSERISCI_QUI_LA_TUA_KEY_OPENAI'
+
+# Legge la chiave dalle variabili d'ambiente di Render (o usa il fallback se testato in locale)
+OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', 'INSERISCI_QUI_LA_TUA_KEY_OPENAI')
 
 market_cache = {}
 CACHE_DURATION = 5
@@ -344,7 +346,6 @@ def fetch_market_data(asset_name, market_type='REAL'):
     if current_time - ts < CACHE_DURATION:
       return cached_df
 
-  # Ticker per Yahoo
   mapping = {
       'EUR/USD': 'EURUSD=X',
       'GBP/USD': 'GBPUSD=X',
@@ -398,8 +399,8 @@ def fetch_market_data(asset_name, market_type='REAL'):
 def analyze_otc_image_with_gpt(image_bytes):
   if not OPENAI_API_KEY or 'INSERISCI' in OPENAI_API_KEY:
     return (
-        '⚠️ **Errore:** `OPENAI_API_KEY` non configurata nel codice per l\'analisi'
-        ' OTC.'
+        '⚠️ **Errore:** `OPENAI_API_KEY` non configurata nel codice o nelle'
+        ' variabili d\'ambiente di Render.'
     )
 
   base64_image = base64.b64encode(image_bytes).decode('utf-8')
@@ -444,13 +445,14 @@ def analyze_otc_image_with_gpt(image_bytes):
         json=payload,
         timeout=25.0,
     ).json()
-    return (
-        res['choices'][0]['message']['content']
-        if 'choices' in res
-        else '⚠️ Errore nell\'analisi dell\'immagine OTC.'
-    )
+    if 'choices' in res:
+      return res['choices'][0]['message']['content']
+    elif 'error' in res:
+      return f"⚠️ Errore API OpenAI: {res['error'].get('message', 'Errore sconosciuto')}"
+    else:
+      return '⚠️ Errore nell\'analisi dell\'immagine OTC.'
   except Exception as e:
-    return f'⚠️ Errore API OpenAI: {e}'
+    return f'⚠️ Errore di connessione API OpenAI: {e}'
 
 
 # --- MENU TELEGRAM ---
@@ -676,12 +678,17 @@ def webhook():
           user_selection[cid] = {'market_type': m_type}
           send_assets_menu(cid, m_type, page=0, msg_id=mid)
         elif val == 'req_photo_otc':
+          # Aggiunto il pulsante per tornare indietro se non si vuole inviare la foto
+          kb = {
+              'inline_keyboard': [
+                  [{'text': '🔙 Torna al menu principale', 'callback_data': 'back_market_type'}]
+              ]
+          }
           edit_message(
               cid,
               mid,
-              '📷 **Invia ORA lo screenshot del tuo grafico OTC (es. Pocket'
-              ' Option).**\n\nL\'intelligenza artificiale analizzerà'
-              ' direttamente l\'immagine.',
+              '📷 **Invia ORA lo screenshot del tuo grafico OTC (es. Pocket Option).**\n\nL\'intelligenza artificiale analizzerà direttamente l\'immagine.',
+              markup=kb
           )
           if cid not in user_selection:
             user_selection[cid] = {}
