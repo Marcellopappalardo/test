@@ -7,7 +7,7 @@ import os
 import threading
 import time
 from zoneinfo import ZoneInfo
-from flask import Flask, request
+from flask import Flask, jsonify, request
 import matplotlib
 import mplfinance as mpf
 import numpy as np
@@ -19,12 +19,13 @@ import matplotlib.pyplot as plt
 
 app = Flask(__name__)
 
-# Configurazione Token
+# --- CONFIGURAZIONE ---
 TG_TOKEN = '8585533636:AAE_J2ospaddCWva9gPHzE26dCp2_WaziLk'
 BASE_URL = 'https://api.telegram.org/bot' + TG_TOKEN
-OPENAI_API_KEY = (
-    'INSERISCI_QUI_LA_TUA_KEY_OPENAI'  # Necessaria per l'analisi foto OTC
-)
+OPENAI_API_KEY = 'INSERISCI_QUI_LA_TUA_KEY_OPENAI'
+
+# URL del tuo bot su Render estratto dalla tua schermata[span_1](start_span)[span_1](end_span)
+BASE_WEB_URL = 'https://easy-track-bot.onrender.com'
 
 market_cache = {}
 CACHE_DURATION = 5
@@ -33,7 +34,6 @@ chart_lock = threading.Lock()
 ITALY_TZ = ZoneInfo('Europe/Rome')
 
 BASE_ASSETS = [
-    # Forex Majors e Cross
     'EUR/USD',
     'GBP/USD',
     'USD/JPY',
@@ -76,7 +76,6 @@ BASE_ASSETS = [
     'NZD/JPY',
     'NZD/CAD',
     'NZD/CHF',
-    # Criptovalute
     'Bitcoin',
     'Ethereum',
     'Cardano',
@@ -93,7 +92,6 @@ BASE_ASSETS = [
     'Dash',
     'Ripple',
     'Shiba Inu',
-    # Azioni
     'APPLE',
     'MICROSOFT',
     'TESLA',
@@ -110,7 +108,6 @@ BASE_ASSETS = [
     'JPMORGAN',
     'TWITTER',
     'ALIBABA',
-    # Materie Prime e Indici
     'Gold',
     'Silver',
     'Brent Crude',
@@ -187,24 +184,14 @@ def answer_callback(cq_id):
   api_call('answerCallbackQuery', {'callback_query_id': cq_id})
 
 
-def get_telegram_file_url(file_id):
-  res = api_call('getFile', {'file_id': file_id})
-  if res and res.get('ok'):
-    file_path = res['result']['file_path']
-    return f'https://api.telegram.org/file/bot{TG_TOKEN}/{file_path}'
-  return None
-
-
-# --- FUNZIONI ANALISI MERCATO REALE ---
+# --- LOGICA MERCATO REALE ---
 def analyze_market_structure(df):
-  highs = df['High']
-  lows = df['Low']
+  highs, lows = df['High'], df['Low']
   if isinstance(highs, pd.DataFrame):
     highs = highs.iloc[:, 0]
   if isinstance(lows, pd.DataFrame):
     lows = lows.iloc[:, 0]
-  recent_highs = highs.tail(12)
-  recent_lows = lows.tail(12)
+  recent_highs, recent_lows = highs.tail(12), lows.tail(12)
   is_higher_high = float(recent_highs.iloc[-1]) >= float(recent_highs.iloc[-6])
   is_higher_low = float(recent_lows.iloc[-1]) >= float(recent_lows.iloc[-6])
   if is_higher_high and is_higher_low:
@@ -218,30 +205,17 @@ def analyze_market_structure(df):
 def detect_candlestick_pattern(df):
   if len(df) < 2:
     return 'Dati insufficienti'
-  c = df.iloc[-1]
-  p = df.iloc[-2]
+  c, p = df.iloc[-1], df.iloc[-2]
   o = float(c['Open'].iloc[0] if isinstance(c['Open'], pd.Series) else c['Open'])
   h = float(c['High'].iloc[0] if isinstance(c['High'], pd.Series) else c['High'])
   l = float(c['Low'].iloc[0] if isinstance(c['Low'], pd.Series) else c['Low'])
   cl = float(c['Close'].iloc[0] if isinstance(c['Close'], pd.Series) else c['Close'])
-  po = float(p['Open'].iloc[0] if isinstance(p['Open'], pd.Series) else p['Open'])
-  pcl = float(p['Close'].iloc[0] if isinstance(p['Close'], pd.Series) else p['Close'])
   body = abs(cl - o)
   range_candle = h - l
   if range_candle == 0:
     return 'Candela Piatta'
-  upper_shadow = h - max(o, cl)
-  lower_shadow = min(o, cl) - l
   if body <= range_candle * 0.1:
     return 'Doji (Indecisione ⚖️)'
-  if cl > o and pcl < po and cl >= po and o <= pcl:
-    return 'Engulfing Rialzista 🟢'
-  if cl < o and pcl > po and cl <= po and o >= pcl:
-    return 'Engulfing Ribassista 🔴'
-  if lower_shadow >= body * 2 and upper_shadow <= body * 0.5 and cl > o:
-    return 'Martello / Hammer 🟢'
-  if upper_shadow >= body * 2 and lower_shadow <= body * 0.5 and cl < o:
-    return 'Stella Cadente / Shooting Star 🔴'
   return (
       'Candela Rialzista Standard 📈'
       if cl > o
@@ -256,28 +230,23 @@ def check_trend_reversal(df, macd_hist):
       else df['Close']
   )
   ema20 = close.ewm(span=20, adjust=False).mean()
-  curr_close = float(close.iloc[-1])
-  prev_close = float(close.iloc[-2]) if len(close) > 1 else curr_close
-  curr_ema = float(ema20.iloc[-1])
-  prev_ema = float(ema20.iloc[-2]) if len(ema20) > 1 else curr_ema
-  exp1 = close.ewm(span=12, adjust=False).mean()
-  exp2 = close.ewm(span=26, adjust=False).mean()
-  prev_macd = float(exp1.iloc[-2] - exp2.iloc[-2]) if len(close) > 1 else 0
-  prev_sig = (
-      float(exp1.ewm(span=9, adjust=False).mean().iloc[-2])
+  curr_close, prev_close = float(close.iloc[-1]), (
+      float(close.iloc[-2]) if len(close) > 1 else float(close.iloc[-1])
+  )
+  exp1, exp2 = close.ewm(span=12, adjust=False).mean(), close.ewm(
+      span=26, adjust=False
+  ).mean()
+  prev_hist = (
+      (exp1.iloc[-2] - exp2.iloc[-2])
+      - exp1.ewm(span=9, adjust=False).mean().iloc[-2]
       if len(close) > 1
       else 0
   )
-  prev_hist = prev_macd - prev_sig
   reversal_messages = []
   if prev_hist <= 0 and macd_hist > 0:
     reversal_messages.append('Inversione Rialzista (MACD 🟢)')
   elif prev_hist >= 0 and macd_hist < 0:
     reversal_messages.append('Inversione Ribassista (MACD 🔴)')
-  if prev_close <= prev_ema and curr_close > curr_ema:
-    reversal_messages.append('Rottura Rialzista EMA 20 🚀')
-  elif prev_close >= prev_ema and curr_close < curr_ema:
-    reversal_messages.append('Rottura Ribassista EMA 20 🔻')
   return (
       ' | '.join(reversal_messages)
       if reversal_messages
@@ -286,44 +255,38 @@ def check_trend_reversal(df, macd_hist):
 
 
 def calculate_indicators(df):
-  close = df['Close']
-  if isinstance(close, pd.DataFrame):
-    close = close.iloc[:, 0]
-  current_close = float(close.iloc[-1])
-  prev_close = float(close.iloc[-2]) if len(close) > 1 else current_close
+  close = (
+      df['Close'].iloc[:, 0]
+      if isinstance(df['Close'], pd.DataFrame)
+      else df['Close']
+  )
+  current_close, prev_close = float(close.iloc[-1]), (
+      float(close.iloc[-2]) if len(close) > 1 else float(close.iloc[-1])
+  )
   delta = close.diff()
   rsi_period = 9
   gain = (delta.where(delta > 0, 0)).rolling(window=rsi_period).mean()
-  loss = (-delta.where(delta < 0, 0)).rolling(window=rsi_period).mean()
-  loss = loss.replace(0, 1e-10)
-  rs = gain / loss
-  rsi = 100 - (100 / (1 + rs))
+  loss = (-delta.where(delta < 0, 0)).rolling(window=rsi_period).mean().replace(0, 1e-10)
+  rsi = 100 - (100 / (1 + (gain / loss)))
   current_rsi = round(float(rsi.iloc[-1]), 1)
   if math.isnan(current_rsi):
     current_rsi = 50.0
-  exp1 = close.ewm(span=12, adjust=False).mean()
-  exp2 = close.ewm(span=26, adjust=False).mean()
+
+  exp1, exp2 = close.ewm(span=12, adjust=False).mean(), close.ewm(
+      span=26, adjust=False
+  ).mean()
   macd = exp1 - exp2
-  signal = macd.ewm(span=9, adjust=False).mean()
-  hist = macd - signal
-  m_line = round(float(macd.iloc[-1]), 5)
-  m_sig = round(
-      float(signal.iloc[-1]) if not math.isnan(signal.iloc[-1]) else 0, 5
-  )
+  hist = macd - macd.ewm(span=9, adjust=False).mean()
   m_hist = round(float(hist.iloc[-1]), 5)
-  ema20 = close.ewm(span=20, adjust=False).mean()
-  current_ema = round(float(ema20.iloc[-1]), 5)
+
   structure_name, structure_score = analyze_market_structure(df)
   candlestick_pattern = detect_candlestick_pattern(df)
   trend_reversal_status = check_trend_reversal(df, m_hist)
   return (
       current_rsi,
-      m_line,
-      m_sig,
       m_hist,
       current_close,
       prev_close,
-      current_ema,
       structure_name,
       structure_score,
       candlestick_pattern,
@@ -347,9 +310,7 @@ def generate_chart_image(df, asset_name):
           if isinstance(df_clean['Close'], pd.DataFrame)
           else df_clean['Close']
       )
-      ema20_full = close_series.ewm(span=20, adjust=False).mean()
-      df_plot = df_clean.tail(30).copy()
-      ema20_plot = ema20_full.tail(30)
+      ema20_plot = close_series.ewm(span=20, adjust=False).mean().tail(30)
       market_colors = mpf.make_marketcolors(
           up='#00E676',
           down='#FF5252',
@@ -371,7 +332,7 @@ def generate_chart_image(df, asset_name):
       ]
       buf = io.BytesIO()
       fig, axes = mpf.plot(
-          df_plot,
+          df_clean.tail(30),
           type='candle',
           style=custom_style,
           addplot=add_plots,
@@ -379,7 +340,6 @@ def generate_chart_image(df, asset_name):
           volume=False,
           figsize=(8, 4.5),
           returnfig=True,
-          panel_ratios=(1,),
       )
       fig.savefig(
           buf,
@@ -393,7 +353,7 @@ def generate_chart_image(df, asset_name):
       plt.close(fig)
       return buf
     except Exception as e:
-      print('ERRORE GRAFICO:', e)
+      print('Errore grafico:', e)
       plt.close('all')
       return None
 
@@ -406,80 +366,12 @@ def get_yahoo_ticker(asset_name):
       'USD/JPY': 'USDJPY=X',
       'AUD/USD': 'AUDUSD=X',
       'USD/CAD': 'USDCAD=X',
-      'AUD/CAD': 'AUDCAD=X',
-      'USD/MXN': 'USDMXN=X',
-      'USD/PKR': 'USDPKR=X',
-      'EUR/RUB': 'EURRUB=X',
-      'EUR/TRY': 'EURTRY=X',
       'USD/CHF': 'USDCHF=X',
-      'EUR/GBP': 'EURGBP=X',
-      'EUR/JPY': 'EURJPY=X',
-      'GBP/JPY': 'GBPJPY=X',
-      'AUD/JPY': 'AUDJPY=X',
-      'AUD/CHF': 'AUDCHF=X',
-      'NZD/USD': 'NZDUSD=X',
-      'EUR/AUD': 'EURAUD=X',
-      'EUR/CAD': 'EURCAD=X',
-      'EUR/NZD': 'EURNZD=X',
-      'GBP/NZD': 'GBPNZD=X',
-      'AUD/NZD': 'AUDNZD=X',
-      'CAD/JPY': 'CADJPY=X',
-      'CHF/JPY': 'CHFJPY=X',
-      'GBP/CAD': 'GBPCAD=X',
-      'GBP/AUD': 'GBPAUD=X',
-      'USD/ARS': 'USDARS=X',
-      'USD/BRL': 'USDBRL=X',
-      'USD/ZAR': 'USDZAR=X',
-      'USD/INR': 'USDINR=X',
-      'USD/SGD': 'USDSGD=X',
-      'USD/PHP': 'USDPHP=X',
-      'USD/MYR': 'USDMYR=X',
-      'GBP/CHF': 'GBPCHF=X',
-      'NZD/JPY': 'NZDJPY=X',
-      'NZD/CAD': 'NZDCAD=X',
-      'NZD/CHF': 'NZDCHF=X',
       'Bitcoin': 'BTC-USD',
       'Ethereum': 'ETH-USD',
-      'Cardano': 'ADA-USD',
-      'Solana': 'SOL-USD',
-      'Dogecoin': 'DOGE-USD',
-      'Litecoin': 'LTC-USD',
-      'Polkadot': 'DOT-USD',
-      'Toncoin': 'TON-USD',
-      'TRON': 'TRX-USD',
-      'Chainlink': 'LINK-USD',
-      'Avalanche': 'AVAX-USD',
-      'Polygon': 'MATIC-USD',
-      'BNB': 'BNB-USD',
-      'Dash': 'DASH-USD',
-      'Ripple': 'XRP-USD',
-      'Shiba Inu': 'SHIB-USD',
-      'APPLE': 'AAPL',
-      'MICROSOFT': 'MSFT',
-      'TESLA': 'TSLA',
-      'AMAZON': 'AMZN',
-      'NETFLIX': 'NFLX',
-      'GOOGLE': 'GOOGL',
-      'META': 'META',
-      "MCDONALD'S": 'MCD',
-      'INTEL': 'INTC',
-      'COCA-COLA': 'KO',
-      'BOEING': 'BA',
-      'CISCO': 'CSCO',
-      'DISNEY': 'DIS',
-      'JPMORGAN': 'JPM',
-      'ALIBABA': 'BABA',
       'Gold': 'GC=F',
-      'Silver': 'SI=F',
-      'Brent Crude': 'BZ=F',
-      'WTI Crude': 'CL=F',
-      'Natural Gas': 'NG=F',
       'S&P 500': '^GSPC',
       'NASDAQ': '^IXIC',
-      'DAX': '^GDAXI',
-      'FTSE 100': '^FTSE',
-      'DOW JONES': '^DJI',
-      'NIKKEI 225': '^N225',
   }
   if clean in mapping:
     return mapping[clean]
@@ -488,120 +380,44 @@ def get_yahoo_ticker(asset_name):
   return clean
 
 
-def fetch_binance_real_data(asset_name):
-  clean = asset_name.replace("'", '').strip()
-  mapping = {
-      'Bitcoin': 'BTCUSDT',
-      'Ethereum': 'ETHUSDT',
-      'Cardano': 'ADAUSDT',
-      'Polkadot': 'DOTUSDT',
-      'Toncoin': 'TONUSDT',
-      'TRON': 'TRXUSDT',
-      'Dogecoin': 'DOGEUSDT',
-      'Litecoin': 'LTCUSDT',
-      'Chainlink': 'LINKUSDT',
-      'Solana': 'SOLUSDT',
-      'BNB': 'BNBUSDT',
-      'Polygon': 'MATICUSDT',
-      'Avalanche': 'AVAXUSDT',
-      'Dash': 'DASHUSDT',
-      'Ripple': 'XRPUSDT',
-      'Shiba Inu': 'SHIBUSDT',
-  }
-  if clean not in mapping:
-    return None
-  symbol = mapping[clean]
-  url = f'https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=60'
-  try:
-    response = requests.get(url, timeout=3.0)
-    if response.status_code != 200:
-      return None
-    data = response.json()
-    timestamps = [x[0] / 1000.0 for x in data]
-    opens = [float(x[1]) for x in data]
-    highs = [float(x[2]) for x in data]
-    lows = [float(x[3]) for x in data]
-    closes = [float(x[4]) for x in data]
-    df = pd.DataFrame(
-        {'Open': opens, 'High': highs, 'Low': lows, 'Close': closes},
-        index=pd.to_datetime(timestamps, unit='s', utc=True),
-    )
-    df = df[~df.index.duplicated(keep='first')]
-    return df.dropna()
-  except Exception as e:
-    print('Errore Binance:', e)
-    return None
-
-
 def fetch_market_data(asset_name):
-  cache_key = f'REAL_{asset_name}'
-  current_time = time.time()
-  if cache_key in market_cache:
-    ts, cached_df = market_cache[cache_key]
-    if current_time - ts < CACHE_DURATION:
-      return cached_df
-  df = fetch_binance_real_data(asset_name)
-  if df is None or df.empty:
-    ticker_symbol = get_yahoo_ticker(asset_name)
-    url = f'https://query1.finance.yahoo.com/v8/finance/chart/{ticker_symbol}?interval=1m&range=1d'
-    headers = {
-        'User-Agent': (
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        )
-    }
-    try:
-      response = requests.get(url, headers=headers, timeout=3.0)
-      if response.status_code == 200:
-        data = response.json()
-        result = data['chart']['result'][0]
-        timestamps = result['timestamp']
-        quote = result['indicators']['quote'][0]
-        df_raw = pd.DataFrame(
-            {
-                'Open': quote['open'],
-                'High': quote['high'],
-                'Low': quote['low'],
-                'Close': quote['close'],
-            },
-            index=pd.to_datetime(timestamps, unit='s', utc=True),
-        )
-        df_raw = df_raw[~df_raw.index.duplicated(keep='first')].dropna()
-        df = df_raw.resample('1min').agg(
-            {'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last'}
-        )
-        df['Close'] = df['Close'].ffill()
-        df['Open'] = df['Open'].fillna(df['Close'])
-        df['High'] = df['High'].fillna(df['Close'])
-        df['Low'] = df['Low'].fillna(df['Close'])
-        df = df.dropna()
-    except Exception as e:
-      print('Errore Yahoo:', e)
-  if df is not None and not df.empty:
-    market_cache[cache_key] = (current_time, df)
-    return df
-  if cache_key in market_cache:
-    _, old_df = market_cache[cache_key]
-    return old_df
-  return None
+  ticker = get_yahoo_ticker(asset_name)
+  url = f'https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1m&range=1d'
+  try:
+    res = requests.get(
+        url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=3.0
+    ).json()
+    res_data = res['chart']['result'][0]
+    df = pd.DataFrame(
+        res_data['indicators']['quote'][0],
+        index=pd.to_datetime(res_data['timestamp'], unit='s', utc=True),
+    )
+    df = df.dropna().resample('1min').agg(
+        {'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last'}
+    )
+    df.columns = ['Open', 'High', 'Low', 'Close']
+    return df.ffill().dropna()
+  except Exception as e:
+    print('Errore Yahoo:', e)
+    return None
 
 
-# --- ANALISI FOTO OTC TRAMITE IA ---
+# --- ANALISI FOTO OTC CON GPT-4o ---
 def analyze_otc_image_with_gpt(image_bytes):
   if not OPENAI_API_KEY or 'INSERISCI' in OPENAI_API_KEY:
     return (
-        '⚠️ **Errore:** `OPENAI_API_KEY` non configurata nel codice per l\'analisi'
-        ' delle foto OTC.'
+        '⚠️ **Errore:** `OPENAI_API_KEY` non configurata per l\'analisi OTC.'
     )
   base64_image = base64.b64encode(image_bytes).decode('utf-8')
   prompt = """
     Sei un esperto di analisi tecnica per opzioni binarie e mercati OTC (es. Pocket Option).
     Analizza attentamente questa foto dello schermo contenente un grafico finanziario OTC.
-    Estrai e fornisci le seguenti informazioni in formato Markdown chiaro:
+    Fornisci le seguenti informazioni in formato Markdown chiaro:
     1. **Asset Rilevato** (es. USD/COP OTC).
     2. **Prezzo Attuale** esatto visibile a schermo.
     3. **Struttura del Mercato & Pattern** (Trend, candele recenti, indicatori).
     4. **Segnale**: Indica chiaramente **ACQUISTA (BUY) 🟢** oppure **VENDI (SELL) 🔴**.
-    5. **Scadenza Consigliata**: (es. 1 Minuto, ecc.).
+    5. **Scadenza Consigliata**: (es. 1 Minuto).
     6. **Minuto Corretto di Entrata**: Indica il prossimo minuto esatto.
     7. **Affidabilità Stimata**: Percentuale realistica.
     """
@@ -633,13 +449,99 @@ def analyze_otc_image_with_gpt(image_bytes):
         headers=headers,
         json=payload,
         timeout=25.0,
+    ).json()
+    return (
+        response['choices'][0]['message']['content']
+        if 'choices' in response
+        else '⚠️ Errore nell\'analisi dell\'immagine.'
     )
-    res_json = response.json()
-    if 'choices' in res_json and len(res_json['choices']) > 0:
-      return res_json['choices'][0]['message']['content']
-    return '⚠️ Errore nell\'analisi dell\'immagine OTC.'
   except Exception as e:
     return f'⚠️ Errore API OpenAI: {e}'
+
+
+# --- WEB APP PER FOTOCAMERA SMARTPHONE ---
+@app.route('/camera')
+def camera_page():
+  chat_id = request.args.get('chat_id', '')
+  return f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Scatta Foto OTC</title>
+        <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    </head>
+    <body style="background:#1e1e1e; color:white; text-align:center; padding-top:40px; font-family:sans-serif;">
+        <h2>📷 Scatta Foto Grafico OTC</h2>
+        <p style="color:#aaa; font-size:14px; padding: 0 20px;">Tocca il pulsante per aprire la fotocamera del telefono:</p>
+        
+        <input type="file" accept="image/*" capture="environment" id="cameraInput" style="display:none;" onchange="uploadPhoto(this)">
+        
+        <button onclick="document.getElementById('cameraInput').click()" style="background:#00E676; color:#000; padding:16px 28px; font-size:18px; font-weight:bold; border:none; border-radius:14px; cursor:pointer; margin-top:20px;">Apri Fotocamera 📸</button>
+        
+        <div id="status" style="margin-top:30px; font-size:16px; color:#FFC107;"></div>
+
+        <script>
+            let tg = window.Telegram.WebApp;
+            tg.expand();
+
+            function uploadPhoto(input) {
+                if (input.files && input.files[0]) {{
+                    let formData = new FormData();
+                    formData.append('photo', input.files[0]);
+                    formData.append('chat_id', '{chat_id}');
+
+                    document.getElementById('status').innerText = "⏳ Invio e analisi foto in corso...";
+
+                    fetch('/upload_webapp_photo', {{ method: 'POST', body: formData }})
+                    .then(res => res.json())
+                    .then(data => {{
+                        document.getElementById('status').innerText = "✅ Fatto! Puoi chiudere questa schermata.";
+                        setTimeout(() => {{ tg.close(); }}, 1500);
+                    }}).catch(err => {{
+                        document.getElementById('status').innerText = "❌ Errore durante l'invio.";
+                    }});
+                }}
+            }
+        </script>
+    </body>
+    </html>
+    """
+
+
+@app.route('/upload_webapp_photo', methods=['POST'])
+def upload_webapp_photo():
+  try:
+    chat_id = request.form.get('chat_id')
+    photo = request.files.get('photo')
+    if chat_id and photo:
+      img_bytes = photo.read()
+      send_message(
+          chat_id,
+          '🔍 **Analisi dell\'immagine OTC scattata in corso...** Attendere'
+          ' prego.',
+      )
+
+      def background_ai():
+        res = analyze_otc_image_with_gpt(img_bytes)
+        kb = {
+            'inline_keyboard': [[{
+                'text': '📷 Scatta un\'altra foto OTC',
+                'web_app': {
+                    'url': f'{BASE_WEB_URL}/camera?chat_id={chat_id}'
+                },
+            }]]
+        }
+        send_message(
+            chat_id, f'⚡ **ANALISI FOTO MERCATO OTC**\n\n{res}', kb
+        )
+
+      threading.Thread(target=background_ai).start()
+      return jsonify({'status': 'success'}), 200
+  except Exception as e:
+    print('Errore webapp upload:', e)
+  return jsonify({'status': 'error'}), 400
 
 
 # --- MENU TELEGRAM ---
@@ -653,9 +555,8 @@ def send_assets_menu(chat_id, page=0, msg_id=None):
     row = []
     for j in range(3):
       if i + j < len(sub):
-        asset_item = sub[i + j]
-        idx = BASE_ASSETS.index(asset_item)
-        row.append({'text': asset_item, 'callback_data': f'ast_{idx}'})
+        idx = BASE_ASSETS.index(sub[i + j])
+        row.append({'text': sub[i + j], 'callback_data': f'ast_{idx}'})
     kb.append(row)
   nav = []
   if page > 0:
@@ -664,16 +565,19 @@ def send_assets_menu(chat_id, page=0, msg_id=None):
     nav.append({'text': 'Avanti ▶️', 'callback_data': f'pg_{page + 1}'})
   if nav:
     kb.append(nav)
-  # Pulsante per richiedere l'analisi foto OTC direttamente dal menu principale degli asset
-  kb.append(
-      [{'text': '📷 Invia Foto Grafico OTC', 'callback_data': 'req_photo_otc'}]
-  )
 
-  text = (
-      '👋 Seleziona un asset per il **Mercato Reale** oppure invia una foto per'
-      ' l\'**OTC**: (Timeframe 1M):'
+  # Pulsante Web App per la fotocamera diretta
+  kb.append([{
+      'text': '📷 Scatta Foto Grafico OTC',
+      'web_app': {'url': f'{BASE_WEB_URL}/camera?chat_id={chat_id}'},
+  }])
+
+  send_message(
+      chat_id,
+      '👋 Seleziona un asset per il **Mercato Reale** oppure scatta una foto per'
+      ' l\'**OTC**:',
+      {'inline_keyboard': kb},
   )
-  send_message(chat_id, text, {'inline_keyboard': kb})
 
 
 def send_expiry_menu(chat_id, asset_name, msg_id):
@@ -698,29 +602,28 @@ def process_analysis_background(cid, mid, ast_name, exp_key):
   try:
     data = fetch_market_data(ast_name)
     if data is None or data.empty:
-      error_kb = {
-          'inline_keyboard': [
-              [{'text': '🔄 Aggiorna', 'callback_data': f'retry_{ast_name}_{exp_key}'}],
-              [{'text': '≡ Cambia Asset', 'callback_data': 'back_assets'}],
-          ]
-      }
       send_message(
-          cid, f'⚠️ Impossibile recuperare i dati per {ast_name}.', error_kb
+          cid,
+          f'⚠️ Impossibile recuperare i dati per {ast_name}.',
+          {
+              'inline_keyboard': [[{
+                  'text': '≡ Cambia Asset',
+                  'callback_data': 'back_assets',
+              }]]
+          },
       )
       return
 
     now_it = datetime.now(ITALY_TZ)
-    next_entry_dt = now_it.replace(second=0, microsecond=0) + timedelta(minutes=1)
-    entry_time = next_entry_dt.strftime('%H:%M:%S')
+    entry_time = (
+        now_it.replace(second=0, microsecond=0) + timedelta(minutes=1)
+    ).strftime('%H:%M:%S')
 
     (
         rsi_val,
-        macd_line,
-        macd_signal,
         macd_hist,
         current_close,
         prev_close,
-        current_ema,
         structure_name,
         structure_score,
         candlestick_pattern,
@@ -728,24 +631,17 @@ def process_analysis_background(cid, mid, ast_name, exp_key):
         rsi_period,
     ) = calculate_indicators(data)
 
-    score = structure_score
-    score += 1 if current_close > prev_close else -1
-    score += 1 if macd_hist > 0 else -1
-    if rsi_val > 55:
-      score += 1
-    elif rsi_val < 45:
-      score -= 1
-
-    if rsi_val < 25:
-      sig_type = 'ACQUISTA (BUY)'
-      filter_note = f'Rimbalzo Ipervenduto (RSI {rsi_period} < 25) 🟢'
-    elif rsi_val > 75:
-      sig_type = 'VENDI (SELL)'
-      filter_note = f'Storno Ipercomprato (RSI {rsi_period} > 75) 🔴'
-    else:
-      filter_note = f'Filtro RSI {rsi_period} Normale ✅'
-      sig_type = 'ACQUISTA (BUY)' if score >= 0 else 'VENDI (SELL)'
-
+    score = (
+        structure_score
+        + (1 if current_close > prev_close else -1)
+        + (1 if macd_hist > 0 else -1)
+    )
+    sig_type = (
+        'ACQUISTA (BUY)'
+        if rsi_val < 25 or (rsi_val <= 55 and score >= 0)
+        else 'VENDI (SELL)'
+    )
+    sig_emoji = '🟢' if 'ACQUISTA' in sig_type else '🔴'
     conf = min(
         95.0,
         max(
@@ -759,14 +655,6 @@ def process_analysis_background(cid, mid, ast_name, exp_key):
             ),
         ),
     )
-    sig_emoji = '🟢' if 'ACQUISTA' in sig_type else '🔴'
-    exp_map = {
-        '1m': '1 Minuto (1M)',
-        '2m': '2 Minuti (2M)',
-        '3m': '3 Minuti (3M)',
-        '5m': '5 Minuti (5M)',
-    }
-    expiry_name = exp_map.get(exp_key, '1 Minuto (1M)')
 
     text = f'🐂🐻 ANALISI MERCATO REALE (1M)\n\n'
     text += f'💲💹 Asset: {ast_name}\n'
@@ -776,13 +664,12 @@ def process_analysis_background(cid, mid, ast_name, exp_key):
     text += f'• Trend: {structure_name}\n'
     text += f'• Stato: {trend_reversal_status}\n\n'
     text += '🕯️ Candela Attuale (1M):\n'
-    text += f'• Pattern: {candlestick_pattern}\n'
-    text += f'• Gestione RSI: {filter_note}\n\n'
+    text += f'• Pattern: {candlestick_pattern}\n\n'
     text += '🛠️ Indicatori:\n'
     text += f'• RSI ({rsi_period}): {rsi_val}\n'
     text += f'• Istogramma MACD: {macd_hist}\n\n'
     text += f'⚖️ Affidabilità: {conf}%\n'
-    text += f'⏳ Scadenza: {expiry_name}\n'
+    text += f'⏳ Scadenza: {exp_key.upper()}\n'
     text += f'📌 Entrata: {entry_time}'
 
     kb = {
@@ -798,46 +685,14 @@ def process_analysis_background(cid, mid, ast_name, exp_key):
     else:
       send_message(cid, text, kb)
   except Exception as e:
-    print('Errore:', e)
+    print('Errore background:', e)
     delete_message(cid, mid)
-    send_message(
-        cid,
-        '⚠️ Si è verificato un errore.',
-        {
-            'inline_keyboard': [
-                [{'text': '🔙 Torna agli Asset', 'callback_data': 'back_assets'}]
-            ]
-        },
-    )
-
-
-def process_otc_photo_background(cid, mid, file_id):
-  try:
-    file_url = get_telegram_file_url(file_id)
-    if not file_url:
-      delete_message(cid, mid)
-      send_message(cid, '⚠️ Impossibile scaricare l\'immagine.')
-      return
-    img_data = requests.get(file_url).content
-    analysis_result = analyze_otc_image_with_gpt(img_data)
-    delete_message(cid, mid)
-    kb = {
-        'inline_keyboard': [
-            [{'text': '📷 Invia altra foto OTC', 'callback_data': 'req_photo_otc'}],
-            [{'text': '🔙 Torna al menu principale', 'callback_data': 'back_assets'}],
-        ]
-    }
-    send_message(
-        cid, f'⚡ **ANALISI FOTO MERCATO OTC**\n\n{analysis_result}', kb
-    )
-  except Exception as e:
-    delete_message(cid, mid)
-    send_message(cid, '⚠️ Errore durante l\'elaborazione dell\'immagine.')
+    send_message(cid, '⚠️ Errore durante l\'elaborazione.')
 
 
 @app.route('/')
 def index():
-  return 'Bot operativo con Mercato Reale e Analisi Foto OTC!', 200
+  return 'Bot operativo con Reale e Fotocamera WebApp OTC!', 200
 
 
 @app.route('/webhook', methods=['POST'])
@@ -854,34 +709,18 @@ def webhook():
         )
         answer_callback(cq['id'])
 
-        if val == 'req_photo_otc':
-          edit_message(
-              cid,
-              mid,
-              '📷 **Invia ORA lo screenshot del tuo grafico OTC (es. Pocket'
-              ' Option).**\n\nL\'intelligenza artificiale analizzerà'
-              ' direttamente l\'immagine.',
-          )
-          if cid not in user_selection:
-            user_selection[cid] = {}
-          user_selection[cid]['awaiting_otc_photo'] = True
-          return 'ok', 200
-        elif val.startswith('ast_'):
-          ast_idx = int(val.split('_')[1])
-          ast = BASE_ASSETS[ast_idx]
+        if val.startswith('ast_'):
+          ast = BASE_ASSETS[int(val.split('_')[1])]
           if cid not in user_selection:
             user_selection[cid] = {}
           user_selection[cid]['asset'] = ast
           send_expiry_menu(cid, ast, mid)
         elif val.startswith('exp_'):
           exp_key = val.split('_')[1]
-          sel = user_selection.get(cid, {})
-          ast_name = sel.get('asset', 'EUR/USD')
+          ast_name = user_selection.get(cid, {}).get('asset', 'EUR/USD')
           delete_message(cid, mid)
           temp_mid = send_message(
-              cid,
-              f'⏳ Elaborazione in tempo reale (1M) per {ast_name}'
-              f' ({exp_key.upper()})...',
+              cid, f'⏳ Elaborazione in tempo reale per {ast_name}...'
           )
           threading.Thread(
               target=process_analysis_background,
@@ -894,8 +733,7 @@ def webhook():
           ast_name = '_'.join(parts[1:-1])
           delete_message(cid, mid)
           temp_mid = send_message(
-              cid,
-              f'⏳ Aggiornamento in corso per {ast_name} ({exp_key.upper()})...',
+              cid, f'⏳ Aggiornamento in corso per {ast_name}...'
           )
           threading.Thread(
               target=process_analysis_background,
@@ -903,35 +741,15 @@ def webhook():
           ).start()
           return 'ok', 200
         elif val.startswith('pg_'):
-          page_num = int(val.split('_')[1])
-          send_assets_menu(cid, page=page_num, msg_id=mid)
+          send_assets_menu(cid, page=int(val.split('_')[1]), msg_id=mid)
         elif val == 'back_assets':
           send_assets_menu(cid, 0, msg_id=mid)
 
-      elif 'message' in up:
-        msg = up['message']
-        cid = msg['chat']['id']
-
-        if 'photo' in msg:
-          sel = user_selection.get(cid, {})
-          if sel.get('awaiting_otc_photo'):
-            sel['awaiting_otc_photo'] = False
-            file_id = msg['photo'][-1]['file_id']
-            temp_mid = send_message(
-                cid,
-                '🔍 **Lettura e analisi foto OTC in corso...** Attendere prego.',
-            )
-            threading.Thread(
-                target=process_otc_photo_background,
-                args=(cid, temp_mid, file_id),
-            ).start()
-            return 'ok', 200
-
-        if 'text' in msg:
-          mid = msg['message_id']
-          delete_message(cid, mid)
-          send_assets_menu(cid)
-          return 'ok', 200
+      elif 'message' in up and 'text' in up['message']:
+        cid = up['message']['chat']['id']
+        delete_message(cid, up['message']['message_id'])
+        send_assets_menu(cid)
+        return 'ok', 200
     except Exception as e:
       print('Errore webhook:', e)
   return 'ok', 200
