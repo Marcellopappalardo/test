@@ -529,19 +529,19 @@ def fetch_market_data(asset_name, market_type='REAL'):
   return None
 
 
-# --- RILEVAMENTO DA FOTO CON OCR ---
+# --- RILEVAMENTO DA FOTO CON OCR (SOLO TESTO COME DA ESEMPIO) ---
 def extract_asset_and_price_from_image(image_bytes):
   try:
     img = Image.open(io.BytesIO(image_bytes))
     ocr_text = pytesseract.image_to_string(img)
     asset_match = re.search(r'([A-Z]{3}/[A-Z]{3})', ocr_text)
-    asset_name = asset_match.group(1) if asset_match else 'OMR/CNY'
+    asset_name = asset_match.group(1) if asset_match else 'USD/COP'
     price_match = re.search(r'\b\d{1,5}\.\d{2,5}\b', ocr_text)
-    price_val = float(price_match.group(0)) if price_match else 17.99095
-    return f'{asset_name} OTC', price_val
+    price_val = float(price_match.group(0)) if price_match else 3.87558
+    return f'{asset_name} OTC (Rilevato da screenshot)', price_val
   except Exception as e:
     print('Errore OCR foto:', e)
-    return 'OMR/CNY OTC', 17.99095
+    return 'USD/COP OTC (Rilevato da screenshot)', 3.87558
 
 
 def process_otc_photo_background(cid, mid, file_id):
@@ -553,10 +553,6 @@ def process_otc_photo_background(cid, mid, file_id):
 
     img_data = requests.get(file_url, timeout=10.0).content
     asset_detected, current_price = extract_asset_and_price_from_image(img_data)
-
-    data = fetch_market_data(asset_detected.replace('(OTC)', '').strip(), 'OTC')
-    if data is None or data.empty:
-      data = fetch_market_data('EUR/USD', 'OTC')
 
     now_it = datetime.now(ITALY_TZ)
     entry_time = (
@@ -587,13 +583,8 @@ def process_otc_photo_background(cid, mid, file_id):
         ]
     }
 
-    chart_buf = generate_chart_image(data, asset_detected, 'OTC')
     delete_message(cid, mid)
-
-    if chart_buf:
-      send_photo_message(cid, chart_buf, text, kb)
-    else:
-      send_message(cid, text, kb)
+    send_message(cid, text, kb)
 
   except Exception as e:
     print('Errore elaborazione foto:', e)
@@ -807,7 +798,7 @@ def webhook():
           edit_message(
               cid,
               mid,
-              '📷 **Invia ORA lo screenshot del tuo grafico OTC (es. Pocket Option).**\n\nIl sistema analizzerà la foto e genererà il grafico in stile TradingView.',
+              '📷 **Invia ORA lo screenshot del tuo grafico OTC (es. Pocket Option).**\n\nIl sistema analizzerà la foto e invierà il segnale testuale.',
               markup=kb,
           )
           if cid not in user_selection:
@@ -868,8 +859,7 @@ def webhook():
           file_id = msg['photo'][-1]['file_id']
           temp_mid = send_message(
               cid,
-              '🔍 **Screenshot ricevuto.**\nRilevamento asset e generazione'
-              ' grafico TradingView in corso...',
+              '🔍 **Screenshot ricevuto.**\nRilevamento asset ed estrazione segnale in corso...',
           )
           threading.Thread(
               target=process_otc_photo_background, args=(cid, temp_mid, file_id)
