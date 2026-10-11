@@ -179,8 +179,7 @@ def fetch_binance_data(asset_name):
         "Chainlink": "LINKUSDT", "Avalanche": "AVAXUSDT", "Polygon": "MATICUSDT", "BNB": "BNBUSDT"
     }
     symbol = mapping.get(clean)
-    if not symbol:
-        return None
+    if not symbol: return None
     url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=100"
     try:
         res = requests.get(url, timeout=3.0).json()
@@ -499,22 +498,5 @@ def webhook():
                             text += f"🎯 Segnale: {sig_type} {sig_emoji}\n\n"
                             text += "🛠️ Indicatori Inseriti:\n"
                             text += f"• RSI (9): {rsi}\n"
-                            text += f"• Linea MACD: {macd_line}\n\n"
-                            text += f"⚖️ Affidabilità: {conf}%\n"
-                            text += f"⏳ Scadenza: 1 Minuto (1M)\n"
-                            text += f"📌 Entrata: {entry_time}"
-                            
-                            kb = {"inline_keyboard": [[{"text": "≡ Cambia Asset", "callback_data": "back_assets"}]]}
-                            send_message(cid, text, kb)
-                        except ValueError:
-                            send_message(cid, "⚠️ Valore non valido. Inserisci un numero valido per il MACD:")
-                        return "ok", 200
-
-                send_assets_menu(cid, 0)
-                return "ok", 200
-        except Exception as e:
-            print("Errore nel webhook:", e)
-    return "ok", 200
-
-if __name__ == "__main__":
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
+                            text += f"• Linea MACD: `{"
+                            # Fix string template literal below
