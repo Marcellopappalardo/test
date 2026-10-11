@@ -386,8 +386,14 @@ def calculate_indicators(df):
   hist = (exp1 - exp2) - (exp1 - exp2).ewm(span=9, adjust=False).mean()
   m_hist = round(float(hist.iloc[-1]), 5)
 
-  highs = df['High'].iloc[:, 0] if isinstance(df['High'], pd.DataFrame) else df['High']
-  lows = df['Low'].iloc[:, 0] if isinstance(df['Low'], pd.DataFrame) else df['Low']
+  highs = (
+      df['High'].iloc[:, 0]
+      if isinstance(df['High'], pd.DataFrame)
+      else df['High']
+  )
+  lows = (
+      df['Low'].iloc[:, 0] if isinstance(df['Low'], pd.DataFrame) else df['Low']
+  )
 
   recent_highs = highs.tail(12)
   recent_lows = lows.tail(12)
@@ -570,19 +576,20 @@ def fetch_market_data(asset_name):
   return None
 
 
-# --- ANALISI IMMAGINE CON GEMINI AI ---
+# --- ANALISI IMMAGINE CON GEMINI AI (AGGIORNATA) ---
 def extract_asset_and_price_from_image(image_bytes):
   try:
     if gemini_client is None:
-      return 'Bitcoin OTC', 83022.70
+      return 'EUR/USD', 0.0
 
     img = Image.open(io.BytesIO(image_bytes))
 
     prompt = (
-        'Analizza questo screenshot di una piattaforma di trading.\n'
-        'Individua con precisione due informazioni:\n'
-        '1. Il nome esatto dell\'asset o criptovaluta visualizzato nel grafico (es. Bitcoin, Ethereum, EUR/USD, ecc.).\n'
-        '2. Il prezzo numerico attuale visibile sul grafico (es. 83022.70).\n\n'
+        'Sei un assistente di trading esperto. Analizza questo screenshot di una piattaforma di trading binario/forex.\n'
+        'Individua con estrema attenzione:\n'
+        '1. Il nome esatto dell\'asset visualizzato in alto o nel grafico (es. EUR/USD, Bitcoin, Apple, EUR/USD OTC, ecc.).\n'
+        '2. Il prezzo di mercato attuale (il valore numerico più grande o principale associato al prezzo corrente dell\'asset, solitamente con decimali).\n\n'
+        'Fai attenzione a NON confondere il prezzo con la percentuale di profitto (payout es. 85%, 90%), il saldo del conto o l\'orario.\n\n'
         'Rispondi ESCLUSIVAMENTE in formato JSON rigoroso, senza blocchi markdown o altro testo:\n'
         '{"asset": "NomeAsset", "price": 00.00}'
     )
@@ -595,14 +602,14 @@ def extract_asset_and_price_from_image(image_bytes):
     text_res = re.sub(r'```json\s*|\s*```', '', text_res).strip()
 
     parsed = json.loads(text_res)
-    detected_asset = parsed.get('asset', 'Bitcoin')
-    price_val = float(parsed.get('price', 83022.70))
+    detected_asset = parsed.get('asset', 'EUR/USD')
+    price_val = float(parsed.get('price', 0.0))
 
     return detected_asset, price_val
 
   except Exception as e:
     print('Errore durante l\'analisi con Gemini:', e)
-    return 'Bitcoin', 83022.70
+    return 'EUR/USD', 0.0
 
 
 def process_otc_photo_background(cid, mid, file_id):
@@ -613,7 +620,9 @@ def process_otc_photo_background(cid, mid, file_id):
       return
 
     img_data = requests.get(file_url, timeout=10.0).content
-    asset_detected, current_price = extract_asset_and_price_from_image(img_data)
+    asset_detected, current_price = extract_asset_and_price_from_image(
+        img_data
+    )
 
     clean_asset = asset_detected.replace('OTC', '').strip()
     data = fetch_market_data(clean_asset)
@@ -750,7 +759,9 @@ def process_analysis_background(cid, mid, ast_name, exp_key, is_otc=False):
       data = fetch_market_data('Bitcoin')
 
     now_it = datetime.now(ITALY_TZ)
-    next_entry_dt = now_it.replace(second=0, microsecond=0) + timedelta(minutes=1)
+    next_entry_dt = now_it.replace(second=0, microsecond=0) + timedelta(
+        minutes=1
+    )
     entry_time = next_entry_dt.strftime('%H:%M:%S')
 
     (
@@ -771,7 +782,9 @@ def process_analysis_background(cid, mid, ast_name, exp_key, is_otc=False):
     sig_emoji = '🟢' if 'ACQUISTA' in sig_type else '🔴'
     conf = round(np.random.uniform(86.0, 96.0), 1)
 
-    tag_title = '⚡ ANALISI PROBABILITÀ' if is_otc else '🐂🐻 ANALISI MERCATO REALE (1M)'
+    tag_title = (
+        '⚡ ANALISI PROBABILITÀ' if is_otc else '🐂🐻 ANALISI MERCATO REALE (1M)'
+    )
     back_target = 'back_otc_assets' if is_otc else 'back_assets'
 
     text = f'{tag_title}\n\n'
@@ -856,12 +869,18 @@ def webhook():
           user_selection[cid] = {'asset': ast, 'is_otc': True}
           send_expiry_menu(cid, ast, is_otc=True, msg_id=mid)
 
-        elif val.startswith('exp_') or val.startswith('otcexp_') or val.startswith('retry_'):
+        elif (
+            val.startswith('exp_')
+            or val.startswith('otcexp_')
+            or val.startswith('retry_')
+        ):
           is_otc = 'otc' in val
           if 'retry_' in val:
             parts = val.split('_')
             exp_key = parts[-1]
-            ast_name = '_'.join(parts[2:-1]) if is_otc else '_'.join(parts[1:-1])
+            ast_name = (
+                '_'.join(parts[2:-1]) if is_otc else '_'.join(parts[1:-1])
+            )
           else:
             sel = user_selection.get(cid, {})
             ast_name = sel.get('asset', 'EUR/USD')
@@ -905,7 +924,8 @@ def webhook():
               cid, '🔍 **Screenshot ricevuto.** Gemini sta analizzando il grafico...'
           )
           threading.Thread(
-              target=process_otc_photo_background, args=(cid, temp_mid, file_id)
+              target=process_otc_photo_background,
+              args=(cid, temp_mid, file_id),
           ).start()
           return 'ok', 200
 
