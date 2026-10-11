@@ -337,6 +337,138 @@ def generate_chart_image(df, asset_name, market_type='REAL'):
       return None
 
 
+def fetch_binance_data(clean_name):
+  mapping = {
+      'Bitcoin': 'BTCUSDT',
+      'Ethereum': 'ETHUSDT',
+      'Cardano': 'ADAUSDT',
+      'Polkadot': 'DOTUSDT',
+      'Toncoin': 'TONUSDT',
+      'TRON': 'TRXUSDT',
+      'Dogecoin': 'DOGEUSDT',
+      'Litecoin': 'LTCUSDT',
+      'Chainlink': 'LINKUSDT',
+      'Solana': 'SOLUSDT',
+      'BNB': 'BNBUSDT',
+      'Polygon': 'MATICUSDT',
+      'Avalanche': 'AVAXUSDT',
+      'Dash': 'DASHUSDT',
+      'Ripple': 'XRPUSDT',
+      'Shiba Inu': 'SHIBUSDT',
+  }
+  symbol = mapping.get(clean_name)
+  if not symbol:
+    return None
+  url = f'https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=100'
+  try:
+    res = requests.get(url, timeout=3.0).json()
+    if isinstance(res, list) and len(res) > 0:
+      df = pd.DataFrame(
+          res,
+          columns=[
+              'open_time',
+              'open',
+              'high',
+              'low',
+              'close',
+              'volume',
+              'close_time',
+              'quote_asset_volume',
+              'number_of_trades',
+              'taker_buy_base_asset_volume',
+              'taker_buy_quote_asset_volume',
+              'ignore',
+          ],
+      )
+      df['timestamp'] = pd.to_datetime(df['open_time'], unit='ms', utc=True)
+      df.set_index('timestamp', inplace=True)
+      df = df[['open', 'high', 'low', 'close']].astype(float)
+      df.columns = ['Open', 'High', 'Low', 'Close']
+      return df
+  except Exception as e:
+    print('Errore Binance:', e)
+  return None
+
+
+def fetch_coinbase_data(clean_name):
+  mapping = {
+      'Bitcoin': 'BTC-USD',
+      'Ethereum': 'ETH-USD',
+      'Cardano': 'ADA-USD',
+      'Polkadot': 'DOT-USD',
+      'Litecoin': 'LTC-USD',
+      'Chainlink': 'LINK-USD',
+      'Solana': 'SOL-USD',
+      'Ripple': 'XRP-USD',
+      'Dogecoin': 'DOGE-USD',
+  }
+  product_id = mapping.get(clean_name)
+  if not product_id:
+    return None
+  url = f'https://api.exchange.coinbase.com/products/{product_id}/candles?granularity=60'
+  try:
+    res = requests.get(
+        url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=3.0
+    ).json()
+    if isinstance(res, list) and len(res) > 0:
+      # Coinbase restituisce [time, low, high, open, close, volume]
+      df = pd.DataFrame(res, columns=['time', 'low', 'high', 'open', 'close', 'volume'])
+      df['timestamp'] = pd.to_datetime(df['time'], unit='s', utc=True)
+      df.set_index('timestamp', inplace=True)
+      df = df[['open', 'high', 'low', 'close']].astype(float)
+      df.columns = ['Open', 'High', 'Low', 'Close']
+      df = df.sort_index()
+      return df
+  except Exception as e:
+    print('Errore Coinbase:', e)
+  return None
+
+
+def fetch_bitget_data(clean_name):
+  mapping = {
+      'Bitcoin': 'BTCUSDT',
+      'Ethereum': 'ETHUSDT',
+      'Cardano': 'ADAUSDT',
+      'Polkadot': 'DOTUSDT',
+      'Solana': 'SOLUSDT',
+      'Ripple': 'XRPUSDT',
+      'Dogecoin': 'DOGEUSDT',
+      'Litecoin': 'LTCUSDT',
+  }
+  symbol = mapping.get(clean_name)
+  if not symbol:
+    return None
+  url = f'https://api.bitget.com/api/v2/spot/market/candles?symbol={symbol}&granularity=1min&limit=100'
+  try:
+    res = requests.get(url, timeout=3.0).json()
+    if res.get('code') == '00000' and 'data' in res:
+      raw = res['data']
+      if isinstance(raw, list) and len(raw) > 0:
+        # Bitget restituisce [time, open, high, low, close, ...]
+        df = pd.DataFrame(
+            raw,
+            columns=[
+                'time',
+                'open',
+                'high',
+                'low',
+                'close',
+                'baseVol',
+                'quoteVol',
+                'usdtVol',
+            ],
+        )
+        df['timestamp'] = pd.to_datetime(df['time'].astype(int), unit='ms', utc=True)
+        df.set_index('timestamp', inplace=True)
+        df = df[['open', 'high', 'low', 'close']].astype(float)
+        df.columns = ['Open', 'High', 'Low', 'Close']
+        df = df.sort_index()
+        return df
+  except Exception as e:
+    print('Errore Bitget:', e)
+  return None
+
+
 def fetch_market_data(asset_name, market_type='REAL'):
   clean = asset_name.replace("'", '').replace('(OTC)', '').strip()
   cache_key = f'{market_type}_{clean}'
@@ -346,42 +478,56 @@ def fetch_market_data(asset_name, market_type='REAL'):
     if current_time - ts < CACHE_DURATION:
       return cached_df
 
-  mapping = {
-      'EUR/USD': 'EURUSD=X',
-      'GBP/USD': 'GBPUSD=X',
-      'USD/JPY': 'USDJPY=X',
-      'AUD/USD': 'AUDUSD=X',
-      'USD/CAD': 'USDCAD=X',
-      'USD/CHF': 'USDCHF=X',
-      'Bitcoin': 'BTC-USD',
-      'Ethereum': 'ETH-USD',
-      'Gold': 'GC=F',
-      'S&P 500': '^GSPC',
-  }
-  ticker = (
-      mapping.get(clean, clean.replace('/', '') + '=X')
-      if '/' in clean
-      else mapping.get(clean, clean)
-  )
-  url = f'https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1m&range=1d'
-
   df = None
-  try:
-    res = requests.get(
-        url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=3.0
-    ).json()
-    res_data = res['chart']['result'][0]
-    df = pd.DataFrame(
-        res_data['indicators']['quote'][0],
-        index=pd.to_datetime(res_data['timestamp'], unit='s', utc=True),
+
+  # 1. Tentativo con Binance
+  df = fetch_binance_data(clean)
+
+  # 2. Se fallisce, tentativo con Coinbase
+  if df is None or df.empty:
+    df = fetch_coinbase_data(clean)
+
+  # 3. Se fallisce, tentativo con Bitget
+  if df is None or df.empty:
+    df = fetch_bitget_data(clean)
+
+  # 4. Fallback finale su Yahoo Finance (per Forex, Azioni, Indici o Crypto di riserva)
+  if df is None or df.empty:
+    mapping = {
+        'EUR/USD': 'EURUSD=X',
+        'GBP/USD': 'GBPUSD=X',
+        'USD/JPY': 'USDJPY=X',
+        'AUD/USD': 'AUDUSD=X',
+        'USD/CAD': 'USDCAD=X',
+        'USD/CHF': 'USDCHF=X',
+        'Bitcoin': 'BTC-USD',
+        'Ethereum': 'ETH-USD',
+        'Gold': 'GC=F',
+        'S&P 500': '^GSPC',
+    }
+    ticker = (
+        mapping.get(clean, clean.replace('/', '') + '=X')
+        if '/' in clean
+        else mapping.get(clean, clean)
     )
-    df = df.dropna().resample('1min').agg(
-        {'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last'}
-    )
-    df.columns = ['Open', 'High', 'Low', 'Close']
-    df = df.ffill().dropna()
-  except Exception as e:
-    print('Errore dati:', e)
+    url = f'https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?interval=1m&range=1d'
+
+    try:
+      res = requests.get(
+          url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=3.0
+      ).json()
+      res_data = res['chart']['result'][0]
+      df = pd.DataFrame(
+          res_data['indicators']['quote'][0],
+          index=pd.to_datetime(res_data['timestamp'], unit='s', utc=True),
+      )
+      df = df.dropna().resample('1min').agg(
+          {'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last'}
+      )
+      df.columns = ['Open', 'High', 'Low', 'Close']
+      df = df.ffill().dropna()
+    except Exception as e:
+      print('Errore Yahoo Finance:', e)
 
   if market_type == 'OTC' and df is not None and not df.empty:
     np.random.seed(int(current_time) % 10000)
@@ -656,7 +802,7 @@ def process_otc_photo_background(cid, mid, file_id):
 
 @app.route('/')
 def index():
-  return 'Bot completo pronto con Reale, OTC e Analisi Foto IA!', 200
+  return 'Bot completo pronto con Reale, Binance, Coinbase, Bitget, OTC e Analisi IA!', 200
 
 
 @app.route('/webhook', methods=['POST'])
@@ -678,7 +824,6 @@ def webhook():
           user_selection[cid] = {'market_type': m_type}
           send_assets_menu(cid, m_type, page=0, msg_id=mid)
         elif val == 'req_photo_otc':
-          # Aggiunto il pulsante per tornare indietro se non si vuole inviare la foto
           kb = {
               'inline_keyboard': [
                   [{'text': '🔙 Torna al menu principale', 'callback_data': 'back_market_type'}]
