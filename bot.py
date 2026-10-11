@@ -352,7 +352,7 @@ def send_assets_menu(chat_id, category="real", page=0, msg_id=None):
     if (page + 1) * per_page < len(assets_list): nav.append({"text": "Avanti", "callback_data": f"pg_{category}_{page+1}"})
     if nav: kb.append(nav)
         
-    kb.append([{"text": "⬅️ Torna Indietro", "callback_data": f"cat_{category}_0"}], [{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}])
+    kb.append([{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}])
     title_cat = "Reali" if category == "real" else "OTC"
     text = f"👋 Scegli un asset **{title_cat}**:"
     if msg_id:
@@ -363,14 +363,13 @@ def send_assets_menu(chat_id, category="real", page=0, msg_id=None):
 
 def send_expiry_menu(chat_id, asset_name, msg_id, is_otc=False):
     prefix = "exp_o_" if is_otc else "exp_r_"
-    cat_type = "otc" if is_otc else "real"
     kb = {
         "inline_keyboard": [
             [{"text": "S5", "callback_data": prefix + "s5"}, {"text": "S10", "callback_data": prefix + "s10"}, {"text": "S15", "callback_data": prefix + "s15"}, {"text": "S30", "callback_data": prefix + "s30"}],
             [{"text": "M1", "callback_data": prefix + "m1"}, {"text": "M2", "callback_data": prefix + "m2"}, {"text": "M3", "callback_data": prefix + "m3"}, {"text": "M5", "callback_data": prefix + "m5"}],
             [{"text": "M10", "callback_data": prefix + "m10"}, {"text": "M15", "callback_data": prefix + "m15"}, {"text": "M30", "callback_data": prefix + "m30"}],
             [{"text": "H1", "callback_data": prefix + "h1"}, {"text": "H4", "callback_data": prefix + "h4"}, {"text": "D1", "callback_data": prefix + "d1"}],
-            [{"text": "⬅️ Torna Indietro", "callback_data": f"cat_{cat_type}_0"}, {"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]
+            [{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]
         ]
     }
     edit_message(chat_id, msg_id, f"💲💹 Asset: {asset_name}\n\nSeleziona l'intervallo / timeframe:", kb)
@@ -438,7 +437,7 @@ def webhook():
                     data = fetch_yahoo_real_data(ast_name)
                     if data is None or data.empty:
                         error_text = f"⚠️ **Impossibile recuperare i dati per {ast_name}.**\n\nIl mercato potrebbe essere chiuso in questo momento."
-                        error_kb = {"inline_keyboard": [[{"text": "🔄 Aggiorna", "callback_data": "retry_" + ast_name + "_" + exp_key}], [{"text": "⬅️ Torna Indietro", "callback_data": "cat_real_0"}, {"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
+                        error_kb = {"inline_keyboard": [[{"text": "🔄 Aggiorna", "callback_data": "retry_" + ast_name + "_" + exp_key}], [{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
                         edit_message(cid, mid, error_text, error_kb)
                         return "ok", 200
 
@@ -480,7 +479,7 @@ def webhook():
                     text += f"⏱️ Timeframe: {timeframe_name}\n"
                     text += f"📌 Ora Esatta Ingresso: `{entry_time}`"
                     
-                    kb = {"inline_keyboard": [[{"text": "🔄 Aggiorna", "callback_data": "retry_" + ast_name + "_" + exp_key}], [{"text": "⬅️ Torna Indietro", "callback_data": "cat_real_0"}, {"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
+                    kb = {"inline_keyboard": [[{"text": "🔄 Aggiorna", "callback_data": "retry_" + ast_name + "_" + exp_key}], [{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
                     chart_buf = generate_chart_image(data, ast_name, target_entry_time=entry_time)
                     
                     api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
@@ -493,6 +492,7 @@ def webhook():
                     exp_key = val.split("_")[2]
                     sel = user_selection.get(cid, {})
                     ast_name = sel.get("asset", "EUR/USD OTC")
+                    # Imposta lo stato per richiedere tutti e tre i valori contemporaneamente
                     user_otc_state[cid] = {"asset": ast_name, "expiry": exp_key}
                     edit_message(cid, mid, f"📊 **Mercato OTC ({ast_name} - {exp_map.get(exp_key, exp_key)})**\n\nInserisci **contemporaneamente** Prezzo, RSI (9) e MACD separati da virgola o spazio.\n\n*Esempio:* `1.08540, 54.2, 0.0012`")
 
@@ -517,6 +517,7 @@ def webhook():
                     exp_key = state["expiry"]
                     
                     try:
+                        # Pulisce e separa i valori inseriti dall'utente (supporta virgola o spazio)
                         parts = [p.strip().replace(",", ".") for p in txt_msg.replace(" ", ",").split(",") if p.strip()]
                         if len(parts) < 3:
                             send_message(cid, "⚠️ Inserisci **tutti e tre i valori** (Prezzo, RSI, MACD) separati da virgola.\n*Esempio:* `1.08540, 54.2, 0.0012`")
@@ -532,6 +533,7 @@ def webhook():
                         current_it_time = datetime.now(italian_tz)
                         entry_time = (current_it_time + timedelta(minutes=1)).replace(second=0, microsecond=0).strftime('%H:%M:%S')
 
+                        # Analisi Gemini / Algoritmica OTC basata sui dati simultanei
                         if rsi < 48 or macd_line > 0:
                             sig_type = "ACQUISTA (BUY)"
                             sig_emoji = "🟢"
@@ -560,7 +562,7 @@ def webhook():
                         text += f"⏱️ Timeframe: {timeframe_name}\n"
                         text += f"📌 Ora Esatta Ingresso: `{entry_time}`"
                         
-                        kb = {"inline_keyboard": [[{"text": "⬅️ Torna Indietro", "callback_data": "cat_otc_0"}, {"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
+                        kb = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
                         send_message(cid, text, kb)
                     except ValueError:
                         send_message(cid, "⚠️ Valori non validi. Assicurati di inserire numeri corretti separati da virgola.\n*Esempio:* `1.08540, 54.2, 0.0012`")
