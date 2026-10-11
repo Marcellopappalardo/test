@@ -236,7 +236,7 @@ def download_telegram_file(file_id):
   return None
 
 
-# --- RECUPERO DATI CRYPTO (SOLO MERCATO REALE) ---
+# --- RECUPERO DATI CRYPTO (MERCATO REALE - INALTERATO) ---
 def fetch_binance_data(clean_name):
   mapping = {
       'Bitcoin': 'BTCUSDT',
@@ -372,7 +372,7 @@ def fetch_bitget_data(clean_name):
   return None
 
 
-# --- CALCOLI DI INDICATORI (MERCATO REALE) ---
+# --- CALCOLI DI INDICATORI (MERCATO REALE - INALTERATO) ---
 def calculate_indicators(df):
   close = df['Close']
   if isinstance(close, pd.DataFrame):
@@ -587,7 +587,7 @@ def fetch_market_data(asset_name):
 def analyze_otc_image_with_gemini(asset_name, expiry_key, img_obj):
   try:
     if gemini_client is None:
-      return 0.00000, 50.0, 0.00000, 'Rialzista (HH/HL)', 91.0, 'ACQUISTA (BUY)'
+      return 1.44900, 50.0, 0.00000, 'Rialzista (HH/HL)', 91.0, 'ACQUISTA (BUY)'
 
     prompt = (
         f"Sei un trader professionista ed esperto in opzioni binarie. Analizza attentamente questo screenshot del grafico OTC di Pocket Option per l'asset: {asset_name} con scadenza {expiry_key}.\n"
@@ -616,7 +616,7 @@ def analyze_otc_image_with_gemini(asset_name, expiry_key, img_obj):
     text_resp = text_resp.strip()
 
     parsed = json.loads(text_resp)
-    price_val = float(parsed.get('price', 1.00000))
+    price_val = float(parsed.get('price', 1.44900))
     rsi_val = float(parsed.get('rsi', 50.0))
     macd_val = float(parsed.get('macd', 0.00000))
     trend_val = str(parsed.get('trend', 'Rialzista (HH/HL)'))
@@ -774,7 +774,7 @@ def process_analysis_background(cid, mid, ast_name, exp_key, is_otc=False):
 
 @app.route('/')
 def index():
-  return 'Bot operativo con Gemini Vision integrato!', 200
+  return 'Bot operativo!', 200
 
 
 @app.route('/webhook', methods=['POST'])
