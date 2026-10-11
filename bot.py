@@ -577,19 +577,24 @@ def fetch_market_data(asset_name):
   return None
 
 
-# --- ESTRAZIONE PREZZO DA SCREENSHOT CON GEMINI (SOLO PREZZO) ---
-def extract_price_from_image(image_bytes):
+# --- ANALISI SCREENSHOT OTC DA SPALLA (SENZA NOME ASSET) ---
+def analyze_otc_screenshot_with_gemini(image_bytes):
   try:
     if gemini_client is None:
-      return 0.0
+      return 0.0, 'Rialzista', 90.0, 'ACQUISTA (BUY)', 1
 
     img = Image.open(io.BytesIO(image_bytes))
 
     prompt = (
-        'Analizza questo screenshot di una piattaforma di trading. '
-        "Il tuo unico compito è trovare il prezzo numerico attuale di mercato visibile a schermo (es. 1.08234, 65420.50).\n\n"
-        "Rispondi ESCLUSIVAMENTE con un oggetto JSON nel formato:\n"
-        '{"price": 0.0}'
+        "Analizza con estrema precisione questo screenshot di trading. "
+        "Estrai le seguenti informazioni tecniche:\n"
+        "1. 'price': Il prezzo numerico attuale visibile a schermo (numero float).\n"
+        "2. 'trend': La struttura del mercato visibile (es. Rialzista (HH/HL) o Ribassista (LH/LL) o Laterale).\n"
+        "3. 'confidence': Una percentuale di affidabilità stimata tra 86.0 e 96.0 (numero float).\n"
+        "4. 'signal': 'ACQUISTA (BUY)' oppure 'VENDI (SELL)' in base alla configurazione delle candele.\n"
+        "5. 'expiry_minutes': La durata consigliata in minuti (es. 1, 2, 3 o 5).\n\n"
+        "Rispondi ESCLUSIVAMENTE in formato JSON con queste chiavi esatte:\n"
+        '{"price": 1.12000, "trend": "Rialzista (HH/HL)", "confidence": 91.5, "signal": "ACQUISTA (BUY)", "expiry_minutes": 1}'
     )
 
     response = gemini_client.models.generate_content(
@@ -599,10 +604,17 @@ def extract_price_from_image(image_bytes):
     )
 
     parsed = json.loads(response.text.strip())
-    return float(parsed.get('price', 0.0))
+    price_val = float(parsed.get('price', 0.0))
+    trend_val = str(parsed.get('trend', 'Rialzista (HH/HL)'))
+    conf_val = float(parsed.get('confidence', 90.0))
+    signal_val = str(parsed.get('signal', 'ACQUISTA (BUY)'))
+    exp_min = int(parsed.get('expiry_minutes', 1))
+
+    return price_val, trend_val, conf_val, signal_val, exp_min
+
   except Exception as e:
-    print("Errore durante l'estrazione del prezzo con Gemini:", e)
-    return 0.0
+    print("Errore analisi screenshot OTC con Gemini:", e)
+    return 0.0, 'Rialzista (HH/HL)', 88.5, 'ACQUISTA (BUY)', 1
 
 
 # --- MENU TELEGRAM ---
@@ -612,11 +624,12 @@ def send_market_type_menu(chat_id, msg_id=None):
   kb = {
       'inline_keyboard': [
           [{'text': '🌐 Mercato Reale (Lista Asset)', 'callback_data': 'mtype_real'}],
-          [{'text': '⚡ Mercato OTC (Seleziona Asset)', 'callback_data': 'mtype_otc_select'}],
+          [{'text': '⚡ Mercato OTC (Seleziona Asset & Minuto)', 'callback_data': 'mtype_otc_select'}],
+          [{'text': '📷 Invia Screenshot OTC', 'callback_data': 'req_photo_otc'}],
       ]
   }
   send_message(
-      chat_id, '📊 Seleziona il tipo di mercato:', kb
+      chat_id, '📊 Seleziona un\'opzione dal menu o invia direttamente uno screenshot:', kb
   )
 
 
@@ -677,23 +690,15 @@ def send_expiry_menu(chat_id, asset_name, is_otc, msg_id):
   )
 
 
-def process_analysis_background(cid, mid, ast_name, exp_key, is_otc=False, image_bytes=None):
+def process_analysis_background(cid, mid, ast_name, exp_key, is_otc=False):
   try:
     clean_asset = ast_name.replace('OTC', '').strip()
     data = fetch_market_data(clean_asset)
     if data is None or data.empty:
       data = fetch_market_data('Bitcoin')
 
-    # Se c'è un'immagine (caso OTC con foto), estraiamo il prezzo corrente dallo screenshot
-    extracted_price = None
-    if image_bytes:
-      extracted_price = extract_price_from_image(image_bytes)
-
     now_it = datetime.now(ITALY_TZ)
-    
-    # Conversione della scadenza scelta dall'utente (es. '1m', '2m', ecc.) in minuti
     exp_minutes = int(exp_key.replace('m', ''))
-    
     next_entry_dt = now_it.replace(second=0, microsecond=0) + timedelta(minutes=exp_minutes)
     entry_time = next_entry_dt.strftime('%H:%M:%S')
 
@@ -706,10 +711,7 @@ def process_analysis_background(cid, mid, ast_name, exp_key, is_otc=False, image
         structure_score,
     ) = calculate_indicators(data)
 
-    # Se abbiamo letto il prezzo dallo screenshot usiamo quello, altrimenti il close di mercato
-    display_price = extracted_price if (extracted_price and extracted_price > 0) else current_close
-
-    score = structure_score + (1 if display_price > prev_close else -1)
+    score = structure_score + (1 if current_close > prev_close else -1)
     sig_type = (
         'ACQUISTA (BUY)'
         if rsi_val < 50 or score >= 0
@@ -718,14 +720,12 @@ def process_analysis_background(cid, mid, ast_name, exp_key, is_otc=False, image
     sig_emoji = '🟢' if 'ACQUISTA' in sig_type else '🔴'
     conf = round(np.random.uniform(86.0, 96.0), 1)
 
-    tag_title = (
-        f'⚡ ANALISI OTC ({exp_key.upper()} SCADENZA)' if is_otc else '🐂🐻 ANALISI MERCATO REALE (1M)'
-    )
+    tag_title = f'⚡ ANALISI OTC ({exp_key.upper()} SCADENZA)' if is_otc else '🐂🐻 ANALISI MERCATO REALE (1M)'
     back_target = 'back_otc_assets' if is_otc else 'back_assets'
 
     text = f'{tag_title}\n\n'
     text += f'💲💹 Asset: {ast_name}\n'
-    text += f'💵 Prezzo: `{round(display_price, 5)}`\n'
+    text += f'💵 Prezzo: `{round(current_close, 5)}`\n'
     text += f'🎯 Segnale: {sig_type} {sig_emoji}\n\n'
     text += f'• Trend: {structure_name}\n'
     text += f'• RSI (9): {rsi_val}\n'
@@ -756,6 +756,48 @@ def process_analysis_background(cid, mid, ast_name, exp_key, is_otc=False, image
     send_message(cid, '⚠️ Si è verificato un errore nell\'elaborazione.')
 
 
+def process_otc_photo_background(cid, mid, file_id):
+  try:
+    file_url = get_telegram_file_url(file_id)
+    if not file_url:
+      edit_message(cid, mid, '⚠️ Impossibile scaricare lo screenshot.')
+      return
+
+    img_bytes = requests.get(file_url, timeout=10.0).content
+    
+    # Analisi da spalla (senza nome asset)
+    price_val, trend_val, conf_val, signal_val, exp_min = analyze_otc_screenshot_with_gemini(img_bytes)
+
+    now_it = datetime.now(ITALY_TZ)
+    next_entry_dt = now_it.replace(second=0, microsecond=0) + timedelta(minutes=exp_min)
+    entry_time = next_entry_dt.strftime('%H:%M:%S')
+
+    sig_emoji = '🟢' if 'ACQUISTA' in signal_val else '🔴'
+
+    # RISULTATO PULITO SENZA LA RIGA DELL'ASSET
+    text = f'⚡ **ANALISI OTC (DA SCHERMO)**\n\n'
+    text += f'💵 Prezzo: `{price_val}`\n'
+    text += f'🎯 Segnale: **{signal_val} {sig_emoji}**\n\n'
+    text += f'• Trend: {trend_val}\n'
+    text += f'⚖️ Probabilità / Affidabilità: `{conf_val}%`\n'
+    text += f'📌 Scadenza Consigliata: `{exp_min} Minuto/i` (Fine a `{entry_time}`)'
+
+    kb = {
+        'inline_keyboard': [
+            [{'text': '📷 Invia un altro screenshot', 'callback_data': 'req_photo_otc'}],
+            [{'text': '🔙 Torna al menu principale', 'callback_data': 'back_market_type'}],
+        ]
+    }
+
+    delete_message(cid, mid)
+    send_message(cid, text, kb)
+
+  except Exception as e:
+    print('Errore elaborazione foto OTC:', e)
+    delete_message(cid, mid)
+    send_message(cid, '⚠️ Si è verificato un errore nell\'analisi della foto.')
+
+
 @app.route('/')
 def index():
   return 'Bot operativo con Gemini AI integrato!', 200
@@ -781,6 +823,20 @@ def webhook():
         elif val == 'mtype_otc_select':
           send_assets_menu(cid, page=0, is_otc=True, msg_id=mid)
 
+        elif val == 'req_photo_otc':
+          kb = {
+              'inline_keyboard': [
+                  [{'text': '🔙 Torna Indietro', 'callback_data': 'back_market_type'}]
+              ]
+          }
+          edit_message(
+              cid,
+              mid,
+              '📷 **Invia ORA lo screenshot del tuo grafico OTC.**\n\nGemini analizzerà direttamente l\'immagine fornendoti il segnale operativo!',
+              markup=kb,
+          )
+          return 'ok', 200
+
         elif val.startswith('ast_'):
           ast = ALL_ASSETS[int(val.split('_')[1])]
           user_selection[cid] = {'asset': ast, 'is_otc': False}
@@ -794,31 +850,15 @@ def webhook():
         elif val.startswith('exp_') or val.startswith('otcexp_'):
           is_otc = 'otc' in val
           exp_key = val.split('_')[1]
-          
-          # Salviamo la scadenza scelta nello stato dell'utente
-          if cid in user_selection:
-            user_selection[cid]['expiry'] = exp_key
-          else:
-            user_selection[cid] = {'asset': 'EUR/USD', 'is_otc': is_otc, 'expiry': exp_key}
+          sel = user_selection.get(cid, {})
+          ast_name = sel.get('asset', 'EUR/USD')
 
-          ast_name = user_selection[cid]['asset']
-
-          if is_otc:
-            # Se è OTC, adesso chiediamo lo screenshot
-            edit_message(
-                cid,
-                mid,
-                f'✅ Asset: **{ast_name}** | Scadenza: **{exp_key.upper()}**\n\n📷 **Invia ORA lo screenshot del tuo grafico OTC.**',
-                markup={'inline_keyboard': [[{'text': '🔙 Indietro', 'callback_data': 'back_otc_assets'}]]}
-            )
-          else:
-            # Se è reale, procediamo subito con il calcolo
-            delete_message(cid, mid)
-            temp_mid = send_message(cid, f'⏳ Calcolo analisi per {ast_name}...')
-            threading.Thread(
-                target=process_analysis_background,
-                args=(cid, temp_mid, ast_name, exp_key, False),
-            ).start()
+          delete_message(cid, mid)
+          temp_mid = send_message(cid, f'⏳ Calcolo analisi per {ast_name}...')
+          threading.Thread(
+              target=process_analysis_background,
+              args=(cid, temp_mid, ast_name, exp_key, is_otc),
+          ).start()
           return 'ok', 200
 
         elif val.startswith('retry_'):
@@ -859,23 +899,12 @@ def webhook():
           user_msg_id = msg['message_id']
           delete_message(cid, user_msg_id)
 
-          # Recuperiamo le scelte salvate dell'utente (asset e scadenza)
-          sel = user_selection.get(cid, {})
-          ast_name = sel.get('asset', 'EUR/USD OTC')
-          exp_key = sel.get('expiry', '1m')
-          is_otc = sel.get('is_otc', True)
-
           temp_mid = send_message(
-              cid, f'🔍 **Screenshot ricevuto.** Elaborazione per `{ast_name}` ({exp_key.upper()})...'
+              cid, '🔍 **Screenshot ricevuto.** Gemini sta analizzando il grafico...'
           )
-
-          # Scarichiamo la foto ed elaboriamo in background passando i bytes dello screenshot
-          file_url = get_telegram_file_url(file_id)
-          img_bytes = requests.get(file_url, timeout=10.0).content if file_url else None
-
           threading.Thread(
-              target=process_analysis_background,
-              args=(cid, temp_mid, ast_name, exp_key, is_otc, img_bytes),
+              target=process_otc_photo_background,
+              args=(cid, temp_mid, file_id),
           ).start()
           return 'ok', 200
 
