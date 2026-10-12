@@ -15,6 +15,9 @@ import requests
 import pandas as pd
 import numpy as np
 import PIL.Image
+
+# Configurazione del file di credenziali per Google Cloud Vision
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "credentials.json"
 from google.cloud import vision
 
 app = Flask(__name__)
@@ -336,19 +339,19 @@ def process_otc_analysis(cid, ast_name, exp_key, price, rsi, macd_line):
     if rsi < 48 or macd_line > 0:
         sig_type = "ACQUISTA (BUY)"
         sig_emoji = "🟢"
-        trend_desc = "Rialzista (Analisi OCR) 📈"
+        trend_desc = "Rialzista (Cloud Vision) 📈"
         pattern_name = "Candela di Rimbalzo / Spinta"
     else:
         sig_type = "VENDI (SELL)"
         sig_emoji = "🔴"
-        trend_desc = "Ribassista (Analisi OCR) 📉"
+        trend_desc = "Ribassista (Cloud Vision) 📉"
         pattern_name = "Rifiuto / Correzione Livello"
         
     conf = round(83.0 + abs(macd_line) * 400, 1)
     conf = min(96.0, max(72.0, conf))
     timeframe_name = exp_map.get(exp_key, "1 Minuto (M1)")
 
-    text = "🤖 **ANALISI CLOUD VISION OCR (OTC)**\n\n"
+    text = "🤖 **ANALISI CLOUD VISION (OTC)**\n\n"
     text += f"💲💹 Asset: {ast_name}\n"
     text += f"💵 Prezzo: `{price}`\n"
     text += f"📊 Trend Rilevato: {trend_desc}\n"
@@ -429,7 +432,7 @@ def send_expiry_menu(chat_id, asset_name, msg_id, is_otc=False):
 
 @app.route('/')
 def index():
-    return "Bot operativo al 100%!", 200
+    return "Bot Cloud Vision operativo al 100%!", 200
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -549,12 +552,7 @@ def webhook():
                     kb_otc = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
                     edit_message(cid, mid, f"📊 **Mercato OTC ({ast_name} - {exp_map.get(exp_key, exp_key)})**\n\n📸 **Invia lo screenshot del grafico** oppure inserisci **Prezzo, RSI e MACD** a mano separati da virgola.\n\n*Esempio manuale:* `1.08540, 54.2, 0.0012`", kb_otc)
 
-                elif val == "back_assets":
-                    user_otc_state.pop(cid, None)
-                    api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
-                    send_category_menu(cid)
-
-            # --- GESTIONE VISIONE TRAMITE GOOGLE CLOUD VISION OCR ---
+            # --- GESTIONE OCR CON GOOGLE CLOUD VISION API ---
             elif "message" in up and ("photo" in up["message"] or "document" in up["message"]):
                 cid = up["message"]["chat"]["id"]
                 user_msg_id = up["message"]["message_id"]
@@ -582,37 +580,27 @@ def webhook():
                             download_url = f"https://api.telegram.org/file/bot{TG_TOKEN}/{file_path}"
                             
                             img_response = requests.get(download_url, timeout=15.0)
-                            image_bytes = img_response.content
+                            content_bytes = img_response.content
                             
-                            # Inizializzazione client Cloud Vision OCR
+                            # Chiamata pulita a Google Cloud Vision
                             client = vision.ImageAnnotatorClient()
-                            image = vision.Image(content=image_bytes)
+                            image = vision.Image(content=content_bytes)
                             response = client.text_detection(image=image)
-                            
-                            if response.error.message:
-                                raise Exception(f"Errore Vision API: {response.error.message}")
-                                
                             texts = response.text_annotations
-                            full_text = texts[0].description if texts else ""
-                            print("OCR Estratto:\n", full_text)
                             
-                            # Estrazione numerica intelligente tramite Regex dal testo OCR
-                            numbers = re.findall(r'\b\d{1,3}(?:[.,]\d{2,5})+\b|\b\d{1,3}\.\d+\b|\b\d{1,2}\.\d\b', full_text)
+                            extracted_full_text = texts[0].description if texts else ""
+                            print("Testo OCR estratto:", extracted_full_text)
                             
-                            # Fallback ricerca numeri generici se il pattern rigido non basta
-                            if len(numbers) < 3:
-                                numbers = re.findall(r'-?\d+[.,]?\d*', full_text)
-                                
+                            # Estrazione sicura dei numeri tramite Regex
+                            numbers = re.findall(r'-?\d+[.,]?\d*', extracted_full_text)
+                            
                             if len(numbers) >= 3:
                                 price = float(numbers[0].replace(",", "."))
                                 rsi = float(numbers[1].replace(",", "."))
                                 macd_line = float(numbers[2].replace(",", "."))
                             else:
-                                # Valori di sicurezza predefiniti se l'OCR legge parzialmente
-                                price = 1.32739
-                                rsi = 54.2
-                                macd_line = 0.0012
-                                
+                                raise Exception("Numeri insufficienti estratti dall'OCR")
+                            
                             if wait_msg_id:
                                 api_call("deleteMessage", {"chat_id": cid, "message_id": wait_msg_id})
                                 
@@ -624,7 +612,7 @@ def webhook():
                             send_message(cid, "⚠️ Errore nel download del file.")
                             return "ok", 200
                     except Exception as e:
-                        print("Errore dettagliato OCR Cloud Vision:", traceback.format_exc())
+                        print("Errore dettagliato Cloud Vision:", traceback.format_exc())
                         if wait_msg_id:
                             api_call("deleteMessage", {"chat_id": cid, "message_id": wait_msg_id})
                         send_message(cid, "⚠️ Estrazione non riuscita. Inserisci i valori manualmente (es: `1.32739, 54.2, 0.0012`).")
