@@ -556,7 +556,7 @@ def webhook():
                     api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
                     send_category_menu(cid)
 
-            # --- GESTIONE VISIONE TRAMITE FILE API DI GOOGLE ---
+            # --- GESTIONE VISIONE TRAMITE FILE API DI GOOGLE CON JSON FORZATO ---
             elif "message" in up and ("photo" in up["message"] or "document" in up["message"]):
                 cid = up["message"]["chat"]["id"]
                 user_msg_id = up["message"]["message_id"]
@@ -598,28 +598,24 @@ def webhook():
                                 os.remove(temp_filename)
                             
                             prompt = (
-                                "Sei un trader esperto e analista OCR. Guarda con attenzione questo screenshot di una piattaforma di opzioni binarie. "
-                                "Estrai con precisione assoluta questi tre dati chiave: "
-                                "1. 'price': Il valore numerico del prezzo corrente dell'asset (es. 1.32739 o 209.540). "
+                                "Analizza questa schermata di trading di opzioni binarie. "
+                                "Estrai con precisione: "
+                                "1. 'price': Il valore numerico del prezzo corrente (es. 1.32739 o 209.540). "
                                 "2. 'rsi': Il valore numerico dell'indicatore RSI periodo 9. "
                                 "3. 'macd': Il valore numerico della linea MACD nel pannello inferiore. "
-                                "Restituisci esclusivamente un oggetto JSON puro senza formattazione markdown, usando questa struttura esatta: "
+                                "Restituisci i dati usando esattamente questa struttura JSON: "
                                 '{"price": 0.0, "rsi": 0.0, "macd": 0.0}'
                             )
                             
                             response = client.models.generate_content(
                                 model='gemini-2.5-flash',
-                                contents=[gemini_file, prompt]
+                                contents=[gemini_file, prompt],
+                                config=types.GenerateContentConfig(
+                                    response_mime_type="application/json"
+                                )
                             )
                             
-                            raw_text = response.text.strip()
-                            if raw_text.startswith("```json"):
-                                raw_text = raw_text[7:]
-                            if raw_text.endswith("```"):
-                                raw_text = raw_text[:-3]
-                            raw_text = raw_text.strip()
-                            
-                            extracted_data = json.loads(raw_text)
+                            extracted_data = json.loads(response.text.strip())
                             price = float(extracted_data["price"])
                             rsi = float(extracted_data["rsi"])
                             macd_line = float(extracted_data["macd"])
@@ -635,7 +631,7 @@ def webhook():
                             send_message(cid, "⚠️ Errore nel download del file.")
                             return "ok", 200
                     except Exception as e:
-                        print("Errore caricamento file Google:", traceback.format_exc())
+                        print("Errore dettagliato Google Vision:", traceback.format_exc())
                         if wait_msg_id:
                             api_call("deleteMessage", {"chat_id": cid, "message_id": wait_msg_id})
                         send_message(cid, "⚠️ Estrazione non riuscita. Inserisci i valori manualmente (es: `1.32739, 54.2, 0.0012`).")
