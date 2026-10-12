@@ -7,3 +7,4 @@ mplfinance
 gunicorn
 pillow
 google-genai
+pydantic
