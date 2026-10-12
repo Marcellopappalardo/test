@@ -2,9 +2,8 @@ Flask
 requests
 pandas
 numpy
+pillow
 matplotlib
 mplfinance
+google-cloud-vision
 gunicorn
-pillow
-google-genai
-pydantic
