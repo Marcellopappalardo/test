@@ -22,7 +22,6 @@ app = Flask(__name__)
 TG_TOKEN = "8585533636:AAE_J2ospaddCWva9gPHzE26dCp2_WaziLk"
 BASE_URL = "https://api.telegram.org/bot" + TG_TOKEN
 
-# Chiave API prelevata in modo sicuro dalle variabili d'ambiente o di fallback
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "AQ.Ab8RN6IDlTHsxy-8n-Uie0x-MQsFt3F22lNlqhIwA-Mg13XDLA")
 
 market_cache = {}
@@ -76,7 +75,7 @@ def send_photo_message(chat_id, photo_buf, caption, markup=None):
     try:
         url = BASE_URL + "/sendPhoto"
         files = {'photo': ('chart.png', photo_buf, 'image/png')}
-        data = {'chat_id": chat_id, 'caption': caption, 'parse_mode': 'Markdown'}
+        data = {'chat_id': chat_id, 'caption': caption, 'parse_mode': 'Markdown'}
         if markup:
             data['reply_markup'] = json.dumps(markup)
         response = requests.post(url, data=data, files=files, timeout=10.0)
