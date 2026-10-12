@@ -556,7 +556,7 @@ def webhook():
                     api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
                     send_category_menu(cid)
 
-            # --- GESTIONE VISIONE ARTIFICIALE AVANZATA (STILE GOOGLE) ---
+            # --- GESTIONE VISIONE ARTIFICIALE OTTIMIZZATA ---
             elif "message" in up and ("photo" in up["message"] or "document" in up["message"]):
                 cid = up["message"]["chat"]["id"]
                 user_msg_id = up["message"]["message_id"]
@@ -569,7 +569,7 @@ def webhook():
                     exp_key = state["expiry"]
                     user_otc_state.pop(cid, None)
                     
-                    wait_msg_id = send_message(cid, "🔬 *Elaborazione visiva avanzata in corso...*")
+                    wait_msg_id = send_message(cid, "🔬 *Analisi dei dati in corso...*")
 
                     try:
                         if "photo" in up["message"]:
@@ -584,29 +584,26 @@ def webhook():
                             download_url = f"https://api.telegram.org/file/bot{TG_TOKEN}/{file_path}"
                             
                             img_response = requests.get(download_url, timeout=15.0)
-                            image = PIL.Image.open(io.BytesIO(img_response.content))
-                            
-                            # Trattamento professionale con upscaling LANCZOS 2x per i piccoli numeri
-                            image = image.convert("RGB")
-                            w, h = image.size
-                            image = image.resize((w * 2, h * 2), PIL.Image.Resampling.LANCZOS)
+                            image_bytes = img_response.content
                             
                             client = genai.Client(api_key=GEMINI_API_KEY)
                             
                             prompt = (
-                                "Sei un sistema OCR ed esperto di analisi finanziaria per opzioni binarie. "
-                                "Analizza con la massima attenzione questo screenshot di trading ad alta definizione. "
-                                "Individua ed estrai senza commettere errori: "
-                                "1. 'price': Il valore numerico del prezzo corrente dell'asset (es. 209.540, solitamente nel riquadro in alto a destra). "
-                                "2. 'rsi': Il valore numerico dell'indicatore RSI periodo 9 (nel pannello centrale). "
-                                "3. 'macd': Il valore numerico della linea MACD (nel pannello in basso). "
-                                "Fornisci il risultato esclusivamente sotto forma di oggetto JSON puro, senza testo aggiuntivo, rispettando questa struttura esatta: "
-                                '{"price": 0.0, "rsi": 0.0, "macd": 0.0}'
+                                "Analizza questa schermata di trading. Estrai esattamente tre numeri e restituiscili in formato JSON puro senza markdown, con queste chiavi esatte:\n"
+                                '{"price": 0.0, "rsi": 0.0, "macd": 0.0}\n'
+                                "Esempio:\n"
+                                '{"price": 1.32739, "rsi": 54.2, "macd": 0.0012}'
                             )
                             
                             response = client.models.generate_content(
                                 model='gemini-2.5-flash',
-                                contents=[image, prompt]
+                                contents=[
+                                    types.Part.from_bytes(
+                                        data=image_bytes,
+                                        mime_type="image/jpeg",
+                                    ),
+                                    prompt
+                                ]
                             )
                             
                             raw_text = response.text.strip()
@@ -632,10 +629,10 @@ def webhook():
                             send_message(cid, "⚠️ Errore nel download del file.")
                             return "ok", 200
                     except Exception as e:
-                        print("Errore pipeline OCR avanzata:", traceback.format_exc())
+                        print("Errore dettagliato OCR:", traceback.format_exc())
                         if wait_msg_id:
                             api_call("deleteMessage", {"chat_id": cid, "message_id": wait_msg_id})
-                        send_message(cid, "⚠️ Estrazione non riuscita. Inserisci i valori manualmente (es: `209.540, 54.2, 0.0012`).")
+                        send_message(cid, "⚠️ Estrazione non riuscita. Inserisci i valori manualmente separati da virgola (es: `1.32739, 54.2, 0.0012`).")
                         return "ok", 200
 
             # --- GESTIONE TESTO MANUALE (OTC) ---
