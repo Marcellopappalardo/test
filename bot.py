@@ -13,11 +13,16 @@ from flask import Flask, request
 import requests
 import pandas as pd
 import numpy as np
+import PIL.Image
+from google import genai
 
 app = Flask(__name__)
 
 TG_TOKEN = "8585533636:AAE_J2ospaddCWva9gPHzE26dCp2_WaziLk"
 BASE_URL = "https://api.telegram.org/bot" + TG_TOKEN
+
+# Chiave API prelevata in modo sicuro dalle variabili d'ambiente (es. su Render)
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "AQ.Ab8RN6IDlTHsxy-8n-Uie0x-MQsFt3F22lNlqhIwA-Mg13XDLA")
 
 market_cache = {}
 CACHE_DURATION = 300
@@ -318,6 +323,56 @@ def fetch_yahoo_real_data(asset_name):
         if asset_name in market_cache: return market_cache[asset_name][1]
         return None
 
+def process_otc_analysis(cid, ast_name, exp_key, price, rsi, macd_line):
+    exp_map = {
+        "s5": "5 Secondi (S5)", "s10": "10 Secondi (S10)", "s15": "15 Secondi (S15)", "s30": "30 Secondi (S30)",
+        "m1": "1 Minuto (M1)", "m2": "2 Minuti (M2)", "m3": "3 Minuti (M3)", "m5": "5 Minuti (M5)",
+        "m10": "10 Minuti (M10)", "m15": "15 Minuti (M15)", "m30": "30 Minuti (M30)",
+        "h1": "1 Ora (H1)", "h4": "4 Ore (H4)", "d1": "1 Giorno (D1)"
+    }
+    
+    italian_tz = timezone(timedelta(hours=2))
+    current_it_time = datetime.now(italian_tz)
+    entry_time = (current_it_time + timedelta(minutes=1)).replace(second=0, microsecond=0).strftime('%H:%M:%S')
+
+    if rsi < 48 or macd_line > 0:
+        sig_type = "ACQUISTA (BUY)"
+        sig_emoji = "🟢"
+        trend_desc = "Rialzista (Analisi Gemini) 📈"
+        pattern_name = "Candela di Rimbalzo / Spinta"
+    else:
+        sig_type = "VENDI (SELL)"
+        sig_emoji = "🔴"
+        trend_desc = "Ribassista (Analisi Gemini) 📉"
+        pattern_name = "Rifiuto / Correzione Livello"
+        
+    conf = round(83.0 + abs(macd_line) * 400, 1)
+    conf = min(96.0, max(72.0, conf))
+    timeframe_name = exp_map.get(exp_key, "1 Minuto (M1)")
+
+    text = "🤖 **ANALISI GEMINI (MERCATO OTC)**\n\n"
+    text += f"💲💹 Asset: {ast_name}\n"
+    text += f"💵 Prezzo: `{price}`\n"
+    text += f"📊 Trend Rilevato: {trend_desc}\n"
+    text += f"🕯️ Pattern Candele: {pattern_name}\n"
+    text += f"🎯 Segnale: {sig_type} {sig_emoji}\n\n"
+    text += f"🛠️ Indicatori:\n"
+    text += f"• RSI (9): {rsi}\n"
+    text += f"• Linea MACD: `{macd_line}`\n\n"
+    text += f"⚖️ Affidabilità: {conf}%\n"
+    text += f"⏱️ Timeframe: {timeframe_name}\n"
+    text += f"📌 Ora Esatta Ingresso: `{entry_time}`"
+    
+    kb = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
+    
+    data = fetch_yahoo_real_data(ast_name)
+    chart_buf = generate_chart_image(data, ast_name, target_entry_time=entry_time) if data is not None else None
+    
+    if chart_buf:
+        send_photo_message(cid, chart_buf, text, kb)
+    else:
+        send_message(cid, text, kb)
+
 def send_category_menu(chat_id, msg_id=None):
     kb = {
         "inline_keyboard": [
@@ -494,13 +549,70 @@ def webhook():
                     ast_name = sel.get("asset", "EUR/USD OTC")
                     user_otc_state[cid] = {"asset": ast_name, "expiry": exp_key}
                     kb_otc = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
-                    edit_message(cid, mid, f"📊 **Mercato OTC ({ast_name} - {exp_map.get(exp_key, exp_key)})**\n\nInserisci **contemporaneamente** Prezzo, RSI (9) e MACD separati da virgola o spazio.\n\n*Esempio:* `1.08540, 54.2, 0.0012`", kb_otc)
+                    edit_message(cid, mid, f"📊 **Mercato OTC ({ast_name} - {exp_map.get(exp_key, exp_key)})**\n\n📸 **Invia lo screenshot del grafico** (Gemini leggerà automaticamente Prezzo, RSI e MACD) oppure digitali a mano separati da virgola.\n\n*Esempio manuale:* `1.08540, 54.2, 0.0012`", kb_otc)
 
                 elif val == "back_assets":
                     user_otc_state.pop(cid, None)
                     api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
                     send_category_menu(cid)
+
+            # --- GESTIONE LETTURA FOTO TRAMITE GEMINI VISION (OCR) ---
+            elif "message" in up and "photo" in up["message"]:
+                cid = up["message"]["chat"]["id"]
+                if cid in user_otc_state:
+                    state = user_otc_state[cid]
+                    ast_name = state["asset"]
+                    exp_key = state["expiry"]
+                    user_otc_state.pop(cid, None)
                     
+                    send_message(cid, "🔍 Sto leggendo i dati dallo screenshot con Gemini...")
+
+                    try:
+                        photo = up["message"]["photo"][-1]
+                        file_id = photo["file_id"]
+                        file_info_res = api_call("getFile", {"file_id": file_id})
+                        
+                        if file_info_res and file_info_res.get("ok"):
+                            file_path = file_info_res["result"]["file_path"]
+                            download_url = f"https://api.telegram.org/file/bot{TG_TOKEN}/{file_path}"
+                            
+                            img_response = requests.get(download_url)
+                            image = PIL.Image.open(io.BytesIO(img_response.content))
+                            
+                            client = genai.Client(api_key=GEMINI_API_KEY)
+                            prompt = (
+                                "Analizza questo screenshot di trading OTC. "
+                                "Estrai esattamente tre valori numerici visibili nell'immagine: "
+                                "1. Il prezzo attuale dell'asset. "
+                                "2. Il valore dell'indicatore RSI (periodo 9). "
+                                "3. Il valore della linea MACD. "
+                                "Rispondi ESCLUSIVAMENTE in formato JSON puro con le chiavi esatte: 'price', 'rsi', 'macd'. "
+                                "Esempio di risposta: {\"price\": 1.09534, \"rsi\": 64.0, \"macd\": 0.000036}"
+                            )
+                            
+                            response = client.models.generate_content(
+                                model='gemini-2.5-flash',
+                                contents=[image, prompt]
+                            )
+                            
+                            res_text = response.text.strip().replace("```json", "").replace("```", "").strip()
+                            extracted_data = json.loads(res_text)
+                            
+                            price = float(extracted_data["price"])
+                            rsi = float(extracted_data["rsi"])
+                            macd_line = float(extracted_data["macd"])
+                            
+                            process_otc_analysis(cid, ast_name, exp_key, price, rsi, macd_line)
+                            return "ok", 200
+                        else:
+                            send_message(cid, "⚠️ Impossibile scaricare la foto da Telegram. Riprova.")
+                            return "ok", 200
+                    except Exception as e:
+                        print("Errore lettura immagine Gemini:", e)
+                        send_message(cid, "⚠️ Non sono riuscito a interpretare chiaramente i valori nell'immagine. Riprova con uno screenshot più nitido oppure inserisci i dati a mano.")
+                        return "ok", 200
+
+            # --- GESTIONE TESTO MANUALE (OTC) ---
             elif "message" in up and "text" in up["message"]:
                 cid = up["message"]["chat"]["id"]
                 txt_msg = up["message"]["text"].strip()
@@ -519,7 +631,7 @@ def webhook():
                     try:
                         parts = [p.strip().replace(",", ".") for p in txt_msg.replace(" ", ",").split(",") if p.strip()]
                         if len(parts) < 3:
-                            send_message(cid, "⚠️ Inserisci **tutti e tre i valori** (Prezzo, RSI, MACD) separati da virgola.\n*Esempio:* `1.08540, 54.2, 0.0012`")
+                            send_message(cid, "⚠️ Invia una **foto dello screenshot** oppure inserisci **tutti e tre i valori** (Prezzo, RSI, MACD) separati da virgola.\n*Esempio:* `1.08540, 54.2, 0.0012`")
                             return "ok", 200
                         
                         price = float(parts[0])
@@ -527,43 +639,10 @@ def webhook():
                         macd_line = float(parts[2])
                         
                         user_otc_state.pop(cid, None)
+                        process_otc_analysis(cid, ast_name, exp_key, price, rsi, macd_line)
                         
-                        italian_tz = timezone(timedelta(hours=2))
-                        current_it_time = datetime.now(italian_tz)
-                        entry_time = (current_it_time + timedelta(minutes=1)).replace(second=0, microsecond=0).strftime('%H:%M:%S')
-
-                        if rsi < 48 or macd_line > 0:
-                            sig_type = "ACQUISTA (BUY)"
-                            sig_emoji = "🟢"
-                            trend_desc = "Rialzista (Analisi Gemini) 📈"
-                            pattern_name = "Candela di Rimbalzo / Spinta"
-                        else:
-                            sig_type = "VENDI (SELL)"
-                            sig_emoji = "🔴"
-                            trend_desc = "Ribassista (Analisi Gemini) 📉"
-                            pattern_name = "Rifiuto / Correzione Livello"
-                            
-                        conf = round(83.0 + abs(macd_line) * 400, 1)
-                        conf = min(96.0, max(72.0, conf))
-                        timeframe_name = exp_map.get(exp_key, "1 Minuto (M1)")
-
-                        text = "🤖 **ANALISI GEMINI (MERCATO OTC)**\n\n"
-                        text += f"💲💹 Asset: {ast_name}\n"
-                        text += f"💵 Prezzo Inserito: `{price}`\n"
-                        text += f"📊 Trend Rilevato: {trend_desc}\n"
-                        text += f"🕯️ Pattern Candele: {pattern_name}\n"
-                        text += f"🎯 Segnale: {sig_type} {sig_emoji}\n\n"
-                        text += f"🛠️ Indicatori Inseriti:\n"
-                        text += f"• RSI (9): {rsi}\n"
-                        text += f"• Linea MACD: `{macd_line}`\n\n"
-                        text += f"⚖️ Affidabilità: {conf}%\n"
-                        text += f"⏱️ Timeframe: {timeframe_name}\n"
-                        text += f"📌 Ora Esatta Ingresso: `{entry_time}`"
-                        
-                        kb = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
-                        send_message(cid, text, kb)
                     except ValueError:
-                        send_message(cid, "⚠️ Valori non validi. Assicurati di inserire numeri corretti separati da virgola.\n*Esempio:* `1.08540, 54.2, 0.0012`")
+                        send_message(cid, "⚠️ Valori non validi. Assicurati di inviare una foto oppure numeri separati da virgola.\n*Esempio:* `1.08540, 54.2, 0.0012`")
                     return "ok", 200
 
                 send_category_menu(cid)
