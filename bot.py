@@ -581,13 +581,13 @@ def webhook():
                             
                             client = genai.Client(api_key=GEMINI_API_KEY)
                             prompt = (
-                                "Analizza questo screenshot di trading OTC. "
-                                "Estrai esattamente tre valori numerici visibili nell'immagine: "
-                                "1. Il prezzo attuale dell'asset. "
-                                "2. Il valore dell'indicatore RSI (periodo 9). "
-                                "3. Il valore della linea MACD. "
-                                "Rispondi ESCLUSIVAMENTE in formato JSON puro con le chiavi esatte: 'price', 'rsi', 'macd'. "
-                                "Esempio di risposta: {\"price\": 1.09534, \"rsi\": 64.0, \"macd\": 0.000036}"
+                                "Analizza questo screenshot di una piattaforma di trading. "
+                                "Devi estrarre esattamente 3 valori numerici: "
+                                "1. Il prezzo dell'asset (es. 1.09568) "
+                                "2. Il valore dell'indicatore RSI (periodo 9) "
+                                "3. Il valore della linea MACD (es. 0.000036 o simile) "
+                                "Scrivi la risposta in formato JSON puro SENZA backticks o markdown, usando esattamente queste chiavi: "
+                                '{"price": numero, "rsi": numero, "macd": numero}'
                             )
                             
                             response = client.models.generate_content(
@@ -595,7 +595,13 @@ def webhook():
                                 contents=[image, prompt]
                             )
                             
-                            res_text = response.text.strip().replace("```json", "").replace("```", "").strip()
+                            res_text = response.text.strip()
+                            if "```" in res_text:
+                                res_text = res_text.split("```")[1]
+                                if res_text.startswith("json"):
+                                    res_text = res_text[4:]
+                            res_text = res_text.strip()
+                            
                             extracted_data = json.loads(res_text)
                             
                             price = float(extracted_data["price"])
@@ -609,7 +615,7 @@ def webhook():
                             return "ok", 200
                     except Exception as e:
                         print("Errore lettura immagine Gemini:", e)
-                        send_message(cid, "⚠️ Non sono riuscito a interpretare chiaramente i valori nell'immagine. Riprova con uno screenshot più nitido oppure inserisci i dati a mano.")
+                        send_message(cid, "⚠️ Non sono riuscito a interpretare chiaramente i valori nell'immagine. Assicurati che lo screenshot mostri bene i numeri in basso degli indicatori oppure inseriscili a mano.")
                         return "ok", 200
 
             # --- GESTIONE TESTO MANUALE (OTC) ---
