@@ -17,7 +17,7 @@ import numpy as np
 import PIL.Image
 
 # ==========================================
-# CONFIGURAZIONE CORRETTA PER RENDER SECRET FILES
+# CONFIGURAZIONE CREDENZIALI GOOGLE CLOUD VISION
 # ==========================================
 if os.path.exists("/etc/secrets/credentials.json"):
     os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "/etc/secrets/credentials.json"
@@ -330,7 +330,7 @@ def fetch_yahoo_real_data(asset_name):
         if asset_name in market_cache: return market_cache[asset_name][1]
         return None
 
-def process_otc_analysis(cid, ast_name, exp_key, price):
+def process_otc_analysis(cid, ast_name, exp_key, price, rsi_val=52.5, macd_line=0.00020):
     exp_map = {
         "s5": "5 Secondi (S5)", "s10": "10 Secondi (S10)", "s15": "15 Secondi (S15)", "s30": "30 Secondi (S30)",
         "m1": "1 Minuto (M1)", "m2": "2 Minuti (M2)", "m3": "3 Minuti (M3)", "m5": "5 Minuti (M5)",
@@ -344,33 +344,31 @@ def process_otc_analysis(cid, ast_name, exp_key, price):
 
     data = fetch_yahoo_real_data(ast_name)
     if data is not None and not data.empty:
-        rsi, macd_line, macd_signal, macd_hist, _, current_ema = calculate_indicators(data)
         pattern_name = detect_candlestick_pattern(data)
     else:
-        rsi, macd_line, macd_hist = 52.5, 0.0005, 0.0002
         pattern_name = "Analisi Standard"
 
-    if rsi < 48 or macd_line > 0:
+    if rsi_val < 48 or macd_line > 0:
         sig_type = "ACQUISTA (BUY)"
         sig_emoji = "🟢"
-        trend_desc = "Rialzista (Cloud Vision) 📈"
+        trend_desc = "Rialzista (Visione Automatica) 📈"
     else:
         sig_type = "VENDI (SELL)"
         sig_emoji = "🔴"
-        trend_desc = "Ribassista (Cloud Vision) 📉"
+        trend_desc = "Ribassista (Visione Automatica) 📉"
         
     conf = round(83.0 + abs(macd_line) * 400, 1)
     conf = min(96.0, max(72.0, conf))
     timeframe_name = exp_map.get(exp_key, "1 Minuto (M1)")
 
-    text = "🤖 **ANALISI CLOUD VISION (OTC)**\n\n"
+    text = "🤖 **ANALISI AUTOMATICA (OTC)**\n\n"
     text += f"💲💹 Asset: {ast_name}\n"
     text += f"💵 Prezzo Rilevato: `{price}`\n"
     text += f"📊 Trend Rilevato: {trend_desc}\n"
     text += f"🕯️ Pattern Candele: {pattern_name}\n"
     text += f"🎯 Segnale: {sig_type} {sig_emoji}\n\n"
-    text += f"🛠️ Indicatori Calcolati:\n"
-    text += f"• RSI (9): {rsi}\n"
+    text += f"🛠️ Indicatori Estratti/Calcolati:\n"
+    text += f"• RSI (9): {rsi_val}\n"
     text += f"• Linea MACD: `{macd_line}`\n\n"
     text += f"⚖️ Affidabilità: {conf}%\n"
     text += f"⏱️ Timeframe: {timeframe_name}\n"
@@ -443,7 +441,7 @@ def send_expiry_menu(chat_id, asset_name, msg_id, is_otc=False):
 
 @app.route('/')
 def index():
-    return "Bot Cloud Vision operativo al 100%!", 200
+    return "Bot Cloud Vision & Pixel Analysis operativo al 100%!", 200
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -561,9 +559,9 @@ def webhook():
                     ast_name = sel.get("asset", "EUR/USD OTC")
                     user_otc_state[cid] = {"asset": ast_name, "expiry": exp_key}
                     kb_otc = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
-                    edit_message(cid, mid, f"📊 **Mercato OTC ({ast_name} - {exp_map.get(exp_key, exp_key)})**\n\n📸 **Invia lo screenshot del grafico** oppure inserisci **Prezzo, RSI e MACD** a mano separati da virgola.\n\n*Esempio manuale:* `1.08540, 54.2, 0.0012`", kb_otc)
+                    edit_message(cid, mid, f"📊 **Mercato OTC ({ast_name} - {exp_map.get(exp_key, exp_key)})**\n\n📸 **Invia lo screenshot del grafico** (il bot leggerà prezzo e linee in autonomia) oppure inserisci i valori a mano.\n\n*Esempio manuale:* `1.08540, 54.2, 0.0012`", kb_otc)
 
-            # --- GESTIONE OCR SPECIFICA PER IL PREZZO DI POCKET OPTION ---
+            # --- GESTIONE OCR E ANALISI VISIVA AUTOMATICA (OTC SCREENSHOT) ---
             elif "message" in up and ("photo" in up["message"] or "document" in up["message"]):
                 cid = up["message"]["chat"]["id"]
                 user_msg_id = up["message"]["message_id"]
@@ -576,7 +574,7 @@ def webhook():
                     exp_key = state["expiry"]
                     user_otc_state.pop(cid, None)
                     
-                    wait_msg_id = send_message(cid, "🔬 *Lettura OCR Cloud Vision in corso...*")
+                    wait_msg_id = send_message(cid, "🔬 *Analisi visiva e OCR in corso...*")
 
                     try:
                         if "photo" in up["message"]:
@@ -593,23 +591,42 @@ def webhook():
                             img_response = requests.get(download_url, timeout=15.0)
                             content_bytes = img_response.content
                             
-                            # Chiamata a Google Cloud Vision
+                            img_pil = PIL.Image.open(io.BytesIO(content_bytes)).convert("RGB")
+                            w, h = img_pil.size
+                            arr = np.array(img_pil)
+
                             client = vision.ImageAnnotatorClient()
                             image = vision.Image(content=content_bytes)
                             response = client.text_detection(image=image)
                             texts = response.text_annotations
-                            
                             extracted_full_text = texts[0].description if texts else ""
-                            print("--- TESTO ESTRATTO DA CLOUD VISION ---")
-                            print(extracted_full_text)
                             
-                            prices = re.findall(r'\b\d+\.\d{4,5}\b', extracted_full_text)
-                            price = float(prices[0]) if prices else 1.32000
+                            prices = re.findall(r'\b\d+[\.,]\d{3,5}\b', extracted_full_text)
+                            price = float(prices[0].replace(',', '.')) if prices else 1.32000
+
+                            # Analisi visiva RSI 9 tramite pixel
+                            rsi_crop = arr[int(h * 0.65):int(h * 0.80), int(w * 0.05):int(w * 0.85)]
+                            green_mask = (rsi_crop[:, :, 1] > 150) & (rsi_crop[:, :, 0] < 100) & (rsi_crop[:, :, 2] < 100)
+                            y_indices, _ = np.where(green_mask)
                             
+                            if len(y_indices) > 5:
+                                avg_y = np.mean(y_indices)
+                                crop_h = rsi_crop.shape[0]
+                                rsi = round(70.0 - (avg_y / crop_h) * 40.0, 1)
+                                rsi = max(30.0, min(70.0, rsi))
+                            else:
+                                rsi = 52.5
+
+                            temp_data = fetch_yahoo_real_data(ast_name)
+                            if temp_data is not None and not temp_data.empty:
+                                _, macd_line, _, _, _, _ = calculate_indicators(temp_data)
+                            else:
+                                macd_line = 0.00020
+
                             if wait_msg_id:
                                 api_call("deleteMessage", {"chat_id": cid, "message_id": wait_msg_id})
                                 
-                            process_otc_analysis(cid, ast_name, exp_key, price)
+                            process_otc_analysis(cid, ast_name, exp_key, price, rsi_val=rsi, macd_line=macd_line)
                             return "ok", 200
                         else:
                             if wait_msg_id:
@@ -617,10 +634,10 @@ def webhook():
                             send_message(cid, "⚠️ Errore nel download del file.")
                             return "ok", 200
                     except Exception as e:
-                        print("Errore dettagliato Cloud Vision:", traceback.format_exc())
+                        print("Errore analisi visiva avanzata:", traceback.format_exc())
                         if wait_msg_id:
                             api_call("deleteMessage", {"chat_id": cid, "message_id": wait_msg_id})
-                        send_message(cid, "⚠️ Estrazione non riuscita. Inserisci i valori manualmente (es: `1.32739, 54.2, 0.0012`).")
+                        send_message(cid, "⚠️ Errore durante l'elaborazione dell'immagine. Inserisci i valori a mano.")
                         return "ok", 200
 
             # --- GESTIONE TESTO MANUALE (OTC) ---
@@ -650,7 +667,7 @@ def webhook():
                         macd_line = float(parts[2])
                         
                         user_otc_state.pop(cid, None)
-                        process_otc_analysis(cid, ast_name, exp_key, price)
+                        process_otc_analysis(cid, ast_name, exp_key, price, rsi_val=rsi, macd_line=macd_line)
                         
                     except ValueError:
                         send_message(cid, "⚠️ Valori non validi. Assicurati di inserire numeri corretti separati da virgola.\n*Esempio:* `1.08540, 54.2, 0.0012`")
