@@ -16,8 +16,14 @@ import pandas as pd
 import numpy as np
 import PIL.Image
 
-# Configurazione del file di credenziali per Google Cloud Vision
-os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "credentials.json"
+# ==========================================
+# CONFIGURAZIONE CORRETTA PER RENDER SECRET FILES
+# ==========================================
+if os.path.exists("/etc/secrets/credentials.json"):
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "/etc/secrets/credentials.json"
+else:
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "credentials.json"
+
 from google.cloud import vision
 
 app = Flask(__name__)
@@ -336,7 +342,6 @@ def process_otc_analysis(cid, ast_name, exp_key, price):
     current_it_time = datetime.now(italian_tz)
     entry_time = (current_it_time + timedelta(minutes=1)).replace(second=0, microsecond=0).strftime('%H:%M:%S')
 
-    # Recupera i dati storici per calcolare RSI e MACD reali basati sul prezzo estratto
     data = fetch_yahoo_real_data(ast_name)
     if data is not None and not data.empty:
         rsi, macd_line, macd_signal, macd_hist, _, current_ema = calculate_indicators(data)
@@ -598,7 +603,6 @@ def webhook():
                             print("--- TESTO ESTRATTO DA CLOUD VISION ---")
                             print(extracted_full_text)
                             
-                            # Estrae esclusivamente il prezzo a 5 decimali (es. 1.32739)
                             prices = re.findall(r'\b\d+\.\d{4,5}\b', extracted_full_text)
                             price = float(prices[0]) if prices else 1.32000
                             
