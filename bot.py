@@ -15,6 +15,8 @@ import pandas as pd
 import numpy as np
 import PIL.Image
 from google import genai
+from google.genai import types
+from pydantic import BaseModel
 
 app = Flask(__name__)
 
@@ -26,6 +28,12 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "AQ.Ab8RN6IDlTHsxy-8n-Uie0x-MQ
 
 market_cache = {}
 CACHE_DURATION = 300
+
+# Struttura rigida Pydantic per forzare Gemini a restituire i dati corretti dallo screenshot
+class TradingExtraction(BaseModel):
+    price: float
+    rsi: float
+    macd: float
 
 REAL_ASSETS = [
     "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD", "AUD/CAD", "USD/CHF",
@@ -373,7 +381,6 @@ def process_otc_analysis(cid, ast_name, exp_key, price, rsi, macd_line, user_msg
     else:
         send_message(cid, text, kb)
         
-    # Elimina la foto inviata dall'utente solo adesso che l'analisi è stata completata e inviata
     if user_msg_id:
         api_call("deleteMessage", {"chat_id": cid, "message_id": user_msg_id})
 
@@ -560,7 +567,7 @@ def webhook():
                     api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
                     send_category_menu(cid)
 
-            # --- GESTIONE LETTURA FOTO TRAMITE GEMINI VISION (ELIMINAZIONE A FINE ANALISI) ---
+            # --- GESTIONE LETTURA FOTO TRAMITE GEMINI VISION CON STRUCTURED OUTPUTS E PYDANTIC ---
             elif "message" in up and "photo" in up["message"]:
                 cid = up["message"]["chat"]["id"]
                 user_msg_id = up["message"]["message_id"]
@@ -571,7 +578,7 @@ def webhook():
                     exp_key = state["expiry"]
                     user_otc_state.pop(cid, None)
                     
-                    send_message(cid, "🔍 Leggo i dati dallo screenshot con calma...")
+                    send_message(cid, "🔍 Analisi avanzata dello screenshot in corso...")
 
                     try:
                         photo = up["message"]["photo"][-1]
@@ -586,31 +593,30 @@ def webhook():
                             image = PIL.Image.open(io.BytesIO(img_response.content))
                             
                             client = genai.Client(api_key=GEMINI_API_KEY)
+                            
                             prompt = (
-                                "Estrai esclusivamente tre numeri da questo screenshot di trading: "
-                                "1. Il prezzo corrente. "
-                                "2. Il valore dell'RSI (periodo 9). "
-                                "3. Il valore del MACD. "
-                                "Scrivi solo i tre numeri separati da virgola, senza altro testo. "
-                                "Esempio: 1.09568, 54.2, 0.000036"
+                                "Analizza questo screenshot di trading OTC. "
+                                "Estrai con assoluta precisione: "
+                                "1. Il prezzo attuale dell'asset (es. 1.09568) "
+                                "2. Il valore dell'indicatore RSI (periodo 9) "
+                                "3. Il valore numerico della linea MACD"
                             )
                             
                             response = client.models.generate_content(
                                 model='gemini-2.5-flash',
-                                contents=[image, prompt]
+                                contents=[image, prompt],
+                                config=types.GenerateContentConfig(
+                                    response_mime_type="application/json",
+                                    response_schema=TradingExtraction,
+                                    temperature=0.0
+                                )
                             )
                             
-                            res_text = response.text.strip().replace("`", "").strip()
-                            parts = [p.strip().replace(",", ".") for p in res_text.replace(" ", ",").split(",") if p.strip()]
+                            extracted_data = json.loads(response.text)
+                            price = float(extracted_data["price"])
+                            rsi = float(extracted_data["rsi"])
+                            macd_line = float(extracted_data["macd"])
                             
-                            if len(parts) >= 3:
-                                price = float(parts[0])
-                                rsi = float(parts[1])
-                                macd_line = float(parts[2])
-                            else:
-                                raise Exception("Valori non sufficienti estratti dall'immagine")
-                            
-                            # Esegue l'analisi e invia il risultato, eliminando contestualmente la foto dell'utente
                             process_otc_analysis(cid, ast_name, exp_key, price, rsi, macd_line, user_msg_id=user_msg_id)
                             return "ok", 200
                         else:
