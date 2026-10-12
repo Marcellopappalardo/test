@@ -557,14 +557,14 @@ def webhook():
                     ast_name = sel.get("asset", "EUR/USD OTC")
                     user_otc_state[cid] = {"asset": ast_name, "expiry": exp_key}
                     kb_otc = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
-                    edit_message(cid, mid, f"📊 **Mercato OTC ({ast_name} - {exp_map.get(exp_key, exp_key)})**\n\n📸 **Invia lo screenshot del grafico (Quotex o Pocket Option)** oppure inserisci **Prezzo, RSI e MACD** a mano separati da virgola.\n\n*Esempio manuale:* `1.08540, 54.2, 0.0012`", kb_otc)
+                    edit_message(cid, mid, f"📊 **Mercato OTC ({ast_name} - {exp_map.get(exp_key, exp_key)})**\n\n📸 **Invia lo screenshot del grafico** oppure inserisci **Prezzo, RSI e MACD** a mano separati da virgola.\n\n*Esempio manuale:* `1.08540, 54.2, 0.0012`", kb_otc)
 
                 elif val == "back_assets":
                     user_otc_state.pop(cid, None)
                     api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
                     send_category_menu(cid)
 
-            # --- GESTIONE LETTURA FOTO TRAMITE GEMINI VISION (UNIVERSALE: QUOTEX / POCKET OPTION) ---
+            # --- GESTIONE LETTURA FOTO TRAMITE GEMINI VISION (INTERA IMMAGINE UPSCALED + CANCELLAZIONE) ---
             elif "message" in up and "photo" in up["message"]:
                 cid = up["message"]["chat"]["id"]
                 user_msg_id = up["message"]["message_id"]
@@ -578,7 +578,7 @@ def webhook():
                     exp_key = state["expiry"]
                     user_otc_state.pop(cid, None)
                     
-                    wait_msg_id = send_message(cid, "🔍 Analisi dello screenshot (Quotex / Pocket Option)...")
+                    wait_msg_id = send_message(cid, "🔍 Analisi approfondita dello screenshot in corso...")
 
                     try:
                         photo = up["message"]["photo"][-1]
@@ -592,23 +592,15 @@ def webhook():
                             img_response = requests.get(download_url, timeout=5.0)
                             image = PIL.Image.open(io.BytesIO(img_response.content))
                             
-                            # Ritaglio universale ottimizzato per isolare grafici e indicatori di Quotex e Pocket Option
-                            width, height = image.size
-                            left = int(width * 0.01)
-                            top = int(height * 0.08)
-                            right = int(width * 0.99)
-                            bottom = int(height * 0.92)
-                            image = image.crop((left, top, right, bottom))
-                            
-                            # Upscaling al 200% con resampling LANCZOS per chiarezza massima dei numeri
+                            # Upscaling al 200% con resampling LANCZOS sull'INTERA immagine (senza tagliare nulla in alto)
                             image = image.resize((image.width * 2, image.height * 2), PIL.Image.Resampling.LANCZOS)
                             
                             client = genai.Client(api_key=GEMINI_API_KEY)
                             
                             prompt = (
-                                "Analizza questo screenshot ritagliato di una piattaforma di trading binario (Quotex o Pocket Option). "
-                                "Estrai con assoluta precisione i tre valori richiesti: "
-                                "1. Il prezzo corrente dell'asset (visibile in alto o nel riquadro del grafico) "
+                                "Analizza questo screenshot completo di una piattaforma di trading binario (Quotex o Pocket Option). "
+                                "Estrai con assoluta precisione millimetrica i tre dati richiesti: "
+                                "1. Il prezzo corrente dell'asset (visibile nel riquadro in alto a destra, es. 1.32739) "
                                 "2. Il valore numerico dell'indicatore RSI (periodo 9) "
                                 "3. Il valore numerico della linea MACD (nei pannelli in basso)"
                             )
