@@ -567,7 +567,7 @@ def webhook():
                     api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
                     send_category_menu(cid)
 
-            # --- GESTIONE LETTURA FOTO TRAMITE GEMINI VISION CON UPSCALING PIL E PYDANTIC ---
+            # --- GESTIONE LETTURA FOTO TRAMITE GEMINI VISION (MODELLO AGGIORNATO) ---
             elif "message" in up and "photo" in up["message"]:
                 cid = up["message"]["chat"]["id"]
                 user_msg_id = up["message"]["message_id"]
@@ -605,8 +605,9 @@ def webhook():
                                 "3. Il valore numerico della linea MACD (nel pannello in basso)."
                             )
                             
+                            # Modello aggiornato a gemini-3.8-flash
                             response = client.models.generate_content(
-                                model='gemini-2.5-flash',
+                                model='gemini-3.8-flash',
                                 contents=[image, prompt],
                                 config=types.GenerateContentConfig(
                                     response_mime_type="application/json",
