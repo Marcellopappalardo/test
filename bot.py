@@ -323,7 +323,7 @@ def fetch_yahoo_real_data(asset_name):
         if asset_name in market_cache: return market_cache[asset_name][1]
         return None
 
-def process_otc_analysis(cid, ast_name, exp_key, price, rsi, macd_line):
+def process_otc_analysis(cid, ast_name, exp_key, price, rsi, macd_line, user_msg_id=None):
     exp_map = {
         "s5": "5 Secondi (S5)", "s10": "10 Secondi (S10)", "s15": "15 Secondi (S15)", "s30": "30 Secondi (S30)",
         "m1": "1 Minuto (M1)", "m2": "2 Minuti (M2)", "m3": "3 Minuti (M3)", "m5": "5 Minuti (M5)",
@@ -372,6 +372,10 @@ def process_otc_analysis(cid, ast_name, exp_key, price, rsi, macd_line):
         send_photo_message(cid, chart_buf, text, kb)
     else:
         send_message(cid, text, kb)
+        
+    # Elimina la foto inviata dall'utente solo adesso che l'analisi è stata completata e inviata
+    if user_msg_id:
+        api_call("deleteMessage", {"chat_id": cid, "message_id": user_msg_id})
 
 def send_category_menu(chat_id, msg_id=None):
     kb = {
@@ -549,23 +553,25 @@ def webhook():
                     ast_name = sel.get("asset", "EUR/USD OTC")
                     user_otc_state[cid] = {"asset": ast_name, "expiry": exp_key}
                     kb_otc = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
-                    edit_message(cid, mid, f"📊 **Mercato OTC ({ast_name} - {exp_map.get(exp_key, exp_key)})**\n\n📸 **Invia lo screenshot del grafico** (Gemini leggerà automaticamente Prezzo, RSI e MACD) oppure digitali a mano separati da virgola.\n\n*Esempio manuale:* `1.08540, 54.2, 0.0012`", kb_otc)
+                    edit_message(cid, mid, f"📊 **Mercato OTC ({ast_name} - {exp_map.get(exp_key, exp_key)})**\n\n📸 **Invia lo screenshot del grafico** oppure inserisci **Prezzo, RSI e MACD** a mano separati da virgola.\n\n*Esempio manuale:* `1.08540, 54.2, 0.0012`", kb_otc)
 
                 elif val == "back_assets":
                     user_otc_state.pop(cid, None)
                     api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
                     send_category_menu(cid)
 
-            # --- GESTIONE LETTURA FOTO TRAMITE GEMINI VISION (OCR) ---
+            # --- GESTIONE LETTURA FOTO TRAMITE GEMINI VISION (ELIMINAZIONE A FINE ANALISI) ---
             elif "message" in up and "photo" in up["message"]:
                 cid = up["message"]["chat"]["id"]
+                user_msg_id = up["message"]["message_id"]
+                
                 if cid in user_otc_state:
                     state = user_otc_state[cid]
                     ast_name = state["asset"]
                     exp_key = state["expiry"]
                     user_otc_state.pop(cid, None)
                     
-                    send_message(cid, "🔍 Sto leggendo i dati dallo screenshot con Gemini...")
+                    send_message(cid, "🔍 Leggo i dati dallo screenshot con calma...")
 
                     try:
                         photo = up["message"]["photo"][-1]
@@ -581,13 +587,12 @@ def webhook():
                             
                             client = genai.Client(api_key=GEMINI_API_KEY)
                             prompt = (
-                                "Analizza questo screenshot di una piattaforma di trading. "
-                                "Devi estrarre esattamente 3 valori numerici: "
-                                "1. Il prezzo dell'asset (es. 1.09568) "
-                                "2. Il valore dell'indicatore RSI (periodo 9) "
-                                "3. Il valore della linea MACD (es. 0.000036 o simile) "
-                                "Scrivi la risposta in formato JSON puro SENZA backticks o markdown, usando esattamente queste chiavi: "
-                                '{"price": numero, "rsi": numero, "macd": numero}'
+                                "Estrai esclusivamente tre numeri da questo screenshot di trading: "
+                                "1. Il prezzo corrente. "
+                                "2. Il valore dell'RSI (periodo 9). "
+                                "3. Il valore del MACD. "
+                                "Scrivi solo i tre numeri separati da virgola, senza altro testo. "
+                                "Esempio: 1.09568, 54.2, 0.000036"
                             )
                             
                             response = client.models.generate_content(
@@ -595,27 +600,25 @@ def webhook():
                                 contents=[image, prompt]
                             )
                             
-                            res_text = response.text.strip()
-                            if "```" in res_text:
-                                res_text = res_text.split("```")[1]
-                                if res_text.startswith("json"):
-                                    res_text = res_text[4:]
-                            res_text = res_text.strip()
+                            res_text = response.text.strip().replace("`", "").strip()
+                            parts = [p.strip().replace(",", ".") for p in res_text.replace(" ", ",").split(",") if p.strip()]
                             
-                            extracted_data = json.loads(res_text)
+                            if len(parts) >= 3:
+                                price = float(parts[0])
+                                rsi = float(parts[1])
+                                macd_line = float(parts[2])
+                            else:
+                                raise Exception("Valori non sufficienti estratti dall'immagine")
                             
-                            price = float(extracted_data["price"])
-                            rsi = float(extracted_data["rsi"])
-                            macd_line = float(extracted_data["macd"])
-                            
-                            process_otc_analysis(cid, ast_name, exp_key, price, rsi, macd_line)
+                            # Esegue l'analisi e invia il risultato, eliminando contestualmente la foto dell'utente
+                            process_otc_analysis(cid, ast_name, exp_key, price, rsi, macd_line, user_msg_id=user_msg_id)
                             return "ok", 200
                         else:
                             send_message(cid, "⚠️ Impossibile scaricare la foto da Telegram. Riprova.")
                             return "ok", 200
                     except Exception as e:
                         print("Errore lettura immagine Gemini:", e)
-                        send_message(cid, "⚠️ Non sono riuscito a interpretare chiaramente i valori nell'immagine. Assicurati che lo screenshot mostri bene i numeri in basso degli indicatori oppure inseriscili a mano.")
+                        send_message(cid, "⚠️ Non sono riuscito a estrarre i dati dallo screenshot. Riprova con un'immagine più nitida oppure inserisci i valori a mano.")
                         return "ok", 200
 
             # --- GESTIONE TESTO MANUALE (OTC) ---
@@ -648,7 +651,7 @@ def webhook():
                         process_otc_analysis(cid, ast_name, exp_key, price, rsi, macd_line)
                         
                     except ValueError:
-                        send_message(cid, "⚠️ Valori non validi. Assicurati di inviare una foto oppure numeri separati da virgola.\n*Esempio:* `1.08540, 54.2, 0.0012`")
+                        send_message(cid, "⚠️ Valori non validi. Assicurati di inserire numeri corretti separati da virgola.\n*Esempio:* `1.08540, 54.2, 0.0012`")
                     return "ok", 200
 
                 send_category_menu(cid)
