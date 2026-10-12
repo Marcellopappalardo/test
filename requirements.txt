@@ -5,4 +5,5 @@ numpy
 matplotlib
 mplfinance
 gunicorn
+pillow
 google-genai
