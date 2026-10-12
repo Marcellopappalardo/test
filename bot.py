@@ -16,24 +16,17 @@ import numpy as np
 import PIL.Image
 from google import genai
 from google.genai import types
-from pydantic import BaseModel
 
 app = Flask(__name__)
 
 TG_TOKEN = "8585533636:AAE_J2ospaddCWva9gPHzE26dCp2_WaziLk"
 BASE_URL = "https://api.telegram.org/bot" + TG_TOKEN
 
-# Chiave API prelevata in modo sicuro dalle variabili d'ambiente (es. su Render)
+# Chiave API prelevata in modo sicuro dalle variabili d'ambiente o di fallback
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "AQ.Ab8RN6IDlTHsxy-8n-Uie0x-MQsFt3F22lNlqhIwA-Mg13XDLA")
 
 market_cache = {}
 CACHE_DURATION = 300
-
-# Struttura rigida Pydantic per forzare Gemini a restituire i dati corretti dallo screenshot
-class TradingExtraction(BaseModel):
-    price: float
-    rsi: float
-    macd: float
 
 REAL_ASSETS = [
     "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD", "AUD/CAD", "USD/CHF",
@@ -83,7 +76,7 @@ def send_photo_message(chat_id, photo_buf, caption, markup=None):
     try:
         url = BASE_URL + "/sendPhoto"
         files = {'photo': ('chart.png', photo_buf, 'image/png')}
-        data = {'chat_id': chat_id, 'caption': caption, 'parse_mode': 'Markdown'}
+        data = {'chat_id": chat_id, 'caption': caption, 'parse_mode': 'Markdown'}
         if markup:
             data['reply_markup'] = json.dumps(markup)
         response = requests.post(url, data=data, files=files, timeout=10.0)
@@ -564,12 +557,11 @@ def webhook():
                     api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
                     send_category_menu(cid)
 
-            # --- GESTIONE LETTURA FOTO TRAMITE TELEGRAM API (FILE ORIGINALE ALTA RISOLUZIONE) ---
-            elif "message" in up and "photo" in up["message"]:
+            # --- GESTIONE VISIONE ARTIFICIALE AVANZATA (STILE GOOGLE) ---
+            elif "message" in up and ("photo" in up["message"] or "document" in up["message"]):
                 cid = up["message"]["chat"]["id"]
                 user_msg_id = up["message"]["message_id"]
                 
-                # Cancella immediatamente la foto inviata dall'utente
                 api_call("deleteMessage", {"chat_id": cid, "message_id": user_msg_id})
                 
                 if cid in user_otc_state:
@@ -578,47 +570,54 @@ def webhook():
                     exp_key = state["expiry"]
                     user_otc_state.pop(cid, None)
                     
-                    wait_msg_id = send_message(cid, "🔍 Scaricamento foto originale e analisi in corso...")
+                    wait_msg_id = send_message(cid, "🔬 *Elaborazione visiva avanzata in corso...*")
 
                     try:
-                        # Preleva la foto a risoluzione massima dall'array di Telegram
-                        photo = up["message"]["photo"][-1]
-                        file_id = photo["file_id"]
+                        if "photo" in up["message"]:
+                            file_id = up["message"]["photo"][-1]["file_id"]
+                        else:
+                            file_id = up["message"]["document"]["file_id"]
+                            
                         file_info_res = api_call("getFile", {"file_id": file_id})
                         
                         if file_info_res and file_info_res.get("ok"):
                             file_path = file_info_res["result"]["file_path"]
                             download_url = f"https://api.telegram.org/file/bot{TG_TOKEN}/{file_path}"
                             
-                            img_response = requests.get(download_url, timeout=10.0)
+                            img_response = requests.get(download_url, timeout=15.0)
                             image = PIL.Image.open(io.BytesIO(img_response.content))
                             
-                            # Ulteriore upscaling del 200% per garantire che i numeri siano enormi per Gemini
-                            image = image.resize((image.width * 2, image.height * 2), PIL.Image.Resampling.LANCZOS)
+                            # Trattamento professionale con upscaling LANCZOS 2x per i piccoli numeri
+                            image = image.convert("RGB")
+                            w, h = image.size
+                            image = image.resize((w * 2, h * 2), PIL.Image.Resampling.LANCZOS)
                             
                             client = genai.Client(api_key=GEMINI_API_KEY)
                             
                             prompt = (
-                                "Sei un assistente finanziario ed esperto OCR. "
-                                "Analizza questo screenshot originale ad alta risoluzione proveniente da una piattaforma di trading binario. "
-                                "Trova ed estrai con assoluta precisione: "
-                                "1. 'price': il prezzo corrente dell'asset (solitamente nel riquadro in alto a destra, es. 1.32739). "
-                                "2. 'rsi': il valore dell'indicatore RSI periodo 9. "
-                                "3. 'macd': il valore numerico della linea MACD nel pannello in basso. "
-                                "Restituisci esclusivamente un oggetto JSON valido conforme allo schema richiesto."
+                                "Sei un sistema OCR ed esperto di analisi finanziaria per opzioni binarie. "
+                                "Analizza con la massima attenzione questo screenshot di trading ad alta definizione. "
+                                "Individua ed estrai senza commettere errori: "
+                                "1. 'price': Il valore numerico del prezzo corrente dell'asset (es. 209.540, solitamente nel riquadro in alto a destra). "
+                                "2. 'rsi': Il valore numerico dell'indicatore RSI periodo 9 (nel pannello centrale). "
+                                "3. 'macd': Il valore numerico della linea MACD (nel pannello in basso). "
+                                "Fornisci il risultato esclusivamente sotto forma di oggetto JSON puro, senza testo aggiuntivo, rispettando questa struttura esatta: "
+                                '{"price": 0.0, "rsi": 0.0, "macd": 0.0}'
                             )
                             
                             response = client.models.generate_content(
                                 model='gemini-2.5-flash',
-                                contents=[image, prompt],
-                                config=types.GenerateContentConfig(
-                                    response_mime_type="application/json",
-                                    response_schema=TradingExtraction,
-                                    temperature=0.0
-                                )
+                                contents=[image, prompt]
                             )
                             
-                            extracted_data = json.loads(response.text)
+                            raw_text = response.text.strip()
+                            if raw_text.startswith("```json"):
+                                raw_text = raw_text[7:]
+                            if raw_text.endswith("```"):
+                                raw_text = raw_text[:-3]
+                            raw_text = raw_text.strip()
+                            
+                            extracted_data = json.loads(raw_text)
                             price = float(extracted_data["price"])
                             rsi = float(extracted_data["rsi"])
                             macd_line = float(extracted_data["macd"])
@@ -631,13 +630,13 @@ def webhook():
                         else:
                             if wait_msg_id:
                                 api_call("deleteMessage", {"chat_id": cid, "message_id": wait_msg_id})
-                            send_message(cid, "⚠️ Impossibile scaricare il file originale da Telegram. Riprova.")
+                            send_message(cid, "⚠️ Errore nel download del file.")
                             return "ok", 200
                     except Exception as e:
-                        print("Errore dettagliato lettura immagine:", e)
+                        print("Errore pipeline OCR avanzata:", traceback.format_exc())
                         if wait_msg_id:
                             api_call("deleteMessage", {"chat_id": cid, "message_id": wait_msg_id})
-                        send_message(cid, "⚠️ Non sono riuscito a leggere i dati dallo screenshot. Inseriscili a mano separati da virgola (es: `1.32739, 54.2, 0.0012`).")
+                        send_message(cid, "⚠️ Estrazione non riuscita. Inserisci i valori manualmente (es: `209.540, 54.2, 0.0012`).")
                         return "ok", 200
 
             # --- GESTIONE TESTO MANUALE (OTC) ---
