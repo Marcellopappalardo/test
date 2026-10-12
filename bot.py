@@ -338,19 +338,19 @@ def process_otc_analysis(cid, ast_name, exp_key, price, rsi, macd_line):
     if rsi < 48 or macd_line > 0:
         sig_type = "ACQUISTA (BUY)"
         sig_emoji = "🟢"
-        trend_desc = "Rialzista (Analisi Google) 📈"
+        trend_desc = "Rialzista (Analisi Vision) 📈"
         pattern_name = "Candela di Rimbalzo / Spinta"
     else:
         sig_type = "VENDI (SELL)"
         sig_emoji = "🔴"
-        trend_desc = "Ribassista (Analisi Google) 📉"
+        trend_desc = "Ribassista (Analisi Vision) 📉"
         pattern_name = "Rifiuto / Correzione Livello"
         
     conf = round(83.0 + abs(macd_line) * 400, 1)
     conf = min(96.0, max(72.0, conf))
     timeframe_name = exp_map.get(exp_key, "1 Minuto (M1)")
 
-    text = "🤖 **ANALISI GOOGLE GEMINI (OTC)**\n\n"
+    text = "🤖 **ANALISI GEMINI VISION (OTC)**\n\n"
     text += f"💲💹 Asset: {ast_name}\n"
     text += f"💵 Prezzo: `{price}`\n"
     text += f"📊 Trend Rilevato: {trend_desc}\n"
@@ -556,7 +556,7 @@ def webhook():
                     api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
                     send_category_menu(cid)
 
-            # --- GESTIONE VISIONE TRAMITE FILE API DI GOOGLE CON JSON FORZATO ---
+            # --- GESTIONE VISIONE TRAMITE BASE64 E PIL (MASSIMA COMPATIBILITÀ) ---
             elif "message" in up and ("photo" in up["message"] or "document" in up["message"]):
                 cid = up["message"]["chat"]["id"]
                 user_msg_id = up["message"]["message_id"]
@@ -569,7 +569,7 @@ def webhook():
                     exp_key = state["expiry"]
                     user_otc_state.pop(cid, None)
                     
-                    wait_msg_id = send_message(cid, "🔬 *Google sta analizzando lo screenshot...*")
+                    wait_msg_id = send_message(cid, "🔬 *Analisi visiva avanzata in corso...*")
 
                     try:
                         if "photo" in up["message"]:
@@ -584,38 +584,36 @@ def webhook():
                             download_url = f"https://api.telegram.org/file/bot{TG_TOKEN}/{file_path}"
                             
                             img_response = requests.get(download_url, timeout=15.0)
-                            image_bytes = img_response.content
+                            image = PIL.Image.open(io.BytesIO(img_response.content))
                             
-                            temp_filename = f"temp_{cid}.jpg"
-                            with open(temp_filename, "wb") as f:
-                                f.write(image_bytes)
-                                
+                            image = image.convert("RGB")
+                            buffered = io.BytesIO()
+                            image.save(buffered, format="JPEG", quality=95)
+                            img_bytes = buffered.getvalue()
+                            
                             client = genai.Client(api_key=GEMINI_API_KEY)
                             
-                            gemini_file = client.files.upload(file=temp_filename)
-                            
-                            if os.path.exists(temp_filename):
-                                os.remove(temp_filename)
-                            
                             prompt = (
-                                "Analizza questa schermata di trading di opzioni binarie. "
-                                "Estrai con precisione: "
-                                "1. 'price': Il valore numerico del prezzo corrente (es. 1.32739 o 209.540). "
-                                "2. 'rsi': Il valore numerico dell'indicatore RSI periodo 9. "
-                                "3. 'macd': Il valore numerico della linea MACD nel pannello inferiore. "
-                                "Restituisci i dati usando esattamente questa struttura JSON: "
+                                "Analizza questa schermata di opzioni binarie. Estrai tre valori e restituisci SOLO un JSON valido, senza blocchi di codice markdown o testo aggiuntivo, con questa struttura esatta:\n"
                                 '{"price": 0.0, "rsi": 0.0, "macd": 0.0}'
                             )
                             
                             response = client.models.generate_content(
                                 model='gemini-2.5-flash',
-                                contents=[gemini_file, prompt],
-                                config=types.GenerateContentConfig(
-                                    response_mime_type="application/json"
-                                )
+                                contents=[
+                                    types.Part.from_bytes(data=img_bytes, mime_type='image/jpeg'),
+                                    prompt
+                                ]
                             )
                             
-                            extracted_data = json.loads(response.text.strip())
+                            raw_text = response.text.strip()
+                            if raw_text.startswith("```json"):
+                                raw_text = raw_text[7:]
+                            if raw_text.endswith("```"):
+                                raw_text = raw_text[:-3]
+                            raw_text = raw_text.strip()
+                            
+                            extracted_data = json.loads(raw_text)
                             price = float(extracted_data["price"])
                             rsi = float(extracted_data["rsi"])
                             macd_line = float(extracted_data["macd"])
@@ -631,7 +629,7 @@ def webhook():
                             send_message(cid, "⚠️ Errore nel download del file.")
                             return "ok", 200
                     except Exception as e:
-                        print("Errore dettagliato Google Vision:", traceback.format_exc())
+                        print("Errore dettagliato Vision:", traceback.format_exc())
                         if wait_msg_id:
                             api_call("deleteMessage", {"chat_id": cid, "message_id": wait_msg_id})
                         send_message(cid, "⚠️ Estrazione non riuscita. Inserisci i valori manualmente (es: `1.32739, 54.2, 0.0012`).")
