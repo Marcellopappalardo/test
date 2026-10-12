@@ -331,7 +331,7 @@ def fetch_yahoo_real_data(asset_name):
         if asset_name in market_cache: return market_cache[asset_name][1]
         return None
 
-def process_otc_analysis(cid, ast_name, exp_key, price, rsi, macd_line, user_msg_id=None):
+def process_otc_analysis(cid, ast_name, exp_key, price, rsi, macd_line):
     exp_map = {
         "s5": "5 Secondi (S5)", "s10": "10 Secondi (S10)", "s15": "15 Secondi (S15)", "s30": "30 Secondi (S30)",
         "m1": "1 Minuto (M1)", "m2": "2 Minuti (M2)", "m3": "3 Minuti (M3)", "m5": "5 Minuti (M5)",
@@ -358,7 +358,7 @@ def process_otc_analysis(cid, ast_name, exp_key, price, rsi, macd_line, user_msg
     conf = min(96.0, max(72.0, conf))
     timeframe_name = exp_map.get(exp_key, "1 Minuto (M1)")
 
-    text = "🤖 **ANALISI GEMINI (MERCATO OTC)**\n\n"
+    text = "🤖 **ANALISI GEMINI (TRADING SCREENSHOT)**\n\n"
     text += f"💲💹 Asset: {ast_name}\n"
     text += f"💵 Prezzo: `{price}`\n"
     text += f"📊 Trend Rilevato: {trend_desc}\n"
@@ -380,9 +380,6 @@ def process_otc_analysis(cid, ast_name, exp_key, price, rsi, macd_line, user_msg
         send_photo_message(cid, chart_buf, text, kb)
     else:
         send_message(cid, text, kb)
-        
-    if user_msg_id:
-        api_call("deleteMessage", {"chat_id": cid, "message_id": user_msg_id})
 
 def send_category_menu(chat_id, msg_id=None):
     kb = {
@@ -560,17 +557,20 @@ def webhook():
                     ast_name = sel.get("asset", "EUR/USD OTC")
                     user_otc_state[cid] = {"asset": ast_name, "expiry": exp_key}
                     kb_otc = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
-                    edit_message(cid, mid, f"📊 **Mercato OTC ({ast_name} - {exp_map.get(exp_key, exp_key)})**\n\n📸 **Invia lo screenshot del grafico** oppure inserisci **Prezzo, RSI e MACD** a mano separati da virgola.\n\n*Esempio manuale:* `1.08540, 54.2, 0.0012`", kb_otc)
+                    edit_message(cid, mid, f"📊 **Mercato OTC ({ast_name} - {exp_map.get(exp_key, exp_key)})**\n\n📸 **Invia lo screenshot del grafico (Quotex o Pocket Option)** oppure inserisci **Prezzo, RSI e MACD** a mano separati da virgola.\n\n*Esempio manuale:* `1.08540, 54.2, 0.0012`", kb_otc)
 
                 elif val == "back_assets":
                     user_otc_state.pop(cid, None)
                     api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
                     send_category_menu(cid)
 
-            # --- GESTIONE LETTURA FOTO TRAMITE GEMINI VISION (MODELLO AGGIORNATO) ---
+            # --- GESTIONE LETTURA FOTO TRAMITE GEMINI VISION (UNIVERSALE: QUOTEX / POCKET OPTION) ---
             elif "message" in up and "photo" in up["message"]:
                 cid = up["message"]["chat"]["id"]
                 user_msg_id = up["message"]["message_id"]
+                
+                # Cancella immediatamente la foto dell'utente per ripulire la chat
+                api_call("deleteMessage", {"chat_id": cid, "message_id": user_msg_id})
                 
                 if cid in user_otc_state:
                     state = user_otc_state[cid]
@@ -578,7 +578,7 @@ def webhook():
                     exp_key = state["expiry"]
                     user_otc_state.pop(cid, None)
                     
-                    send_message(cid, "🔍 Ottimizzazione e analisi avanzata dello screenshot...")
+                    wait_msg_id = send_message(cid, "🔍 Analisi dello screenshot (Quotex / Pocket Option)...")
 
                     try:
                         photo = up["message"]["photo"][-1]
@@ -589,25 +589,32 @@ def webhook():
                             file_path = file_info_res["result"]["file_path"]
                             download_url = f"https://api.telegram.org/file/bot{TG_TOKEN}/{file_path}"
                             
-                            img_response = requests.get(download_url)
+                            img_response = requests.get(download_url, timeout=5.0)
                             image = PIL.Image.open(io.BytesIO(img_response.content))
                             
-                            # Upscaling del 200% con resampling LANCZOS per ingrandire i numerini minuscoli
+                            # Ritaglio universale ottimizzato per isolare grafici e indicatori di Quotex e Pocket Option
+                            width, height = image.size
+                            left = int(width * 0.01)
+                            top = int(height * 0.08)
+                            right = int(width * 0.99)
+                            bottom = int(height * 0.92)
+                            image = image.crop((left, top, right, bottom))
+                            
+                            # Upscaling al 200% con resampling LANCZOS per chiarezza massima dei numeri
                             image = image.resize((image.width * 2, image.height * 2), PIL.Image.Resampling.LANCZOS)
                             
                             client = genai.Client(api_key=GEMINI_API_KEY)
                             
                             prompt = (
-                                "Analizza questo screenshot ingrandito di una piattaforma di trading OTC. "
-                                "Estrai con precisione millimetrica: "
-                                "1. Il prezzo corrente dell'asset (visibile in alto a destra nel grafico). "
-                                "2. Il valore dell'indicatore RSI (periodo 9). "
-                                "3. Il valore numerico della linea MACD (nel pannello in basso)."
+                                "Analizza questo screenshot ritagliato di una piattaforma di trading binario (Quotex o Pocket Option). "
+                                "Estrai con assoluta precisione i tre valori richiesti: "
+                                "1. Il prezzo corrente dell'asset (visibile in alto o nel riquadro del grafico) "
+                                "2. Il valore numerico dell'indicatore RSI (periodo 9) "
+                                "3. Il valore numerico della linea MACD (nei pannelli in basso)"
                             )
                             
-                            # Modello aggiornato a gemini-3.8-flash
                             response = client.models.generate_content(
-                                model='gemini-3.8-flash',
+                                model='gemini-2.5-flash',
                                 contents=[image, prompt],
                                 config=types.GenerateContentConfig(
                                     response_mime_type="application/json",
@@ -621,14 +628,21 @@ def webhook():
                             rsi = float(extracted_data["rsi"])
                             macd_line = float(extracted_data["macd"])
                             
-                            process_otc_analysis(cid, ast_name, exp_key, price, rsi, macd_line, user_msg_id=user_msg_id)
+                            if wait_msg_id:
+                                api_call("deleteMessage", {"chat_id": cid, "message_id": wait_msg_id})
+                                
+                            process_otc_analysis(cid, ast_name, exp_key, price, rsi, macd_line)
                             return "ok", 200
                         else:
+                            if wait_msg_id:
+                                api_call("deleteMessage", {"chat_id": cid, "message_id": wait_msg_id})
                             send_message(cid, "⚠️ Impossibile scaricare la foto da Telegram. Riprova.")
                             return "ok", 200
                     except Exception as e:
                         print("Errore dettagliato lettura immagine:", e)
-                        send_message(cid, f"⚠️ Errore di estrazione ({str(e)}). Riprova con un'immagine più nitida oppure inserisci i valori a mano.")
+                        if wait_msg_id:
+                            api_call("deleteMessage", {"chat_id": cid, "message_id": wait_msg_id})
+                        send_message(cid, "⚠️ Non sono riuscito a leggere i dati dallo screenshot. Inseriscili a mano separati da virgola (es: `1.32739, 54.2, 0.0012`).")
                         return "ok", 200
 
             # --- GESTIONE TESTO MANUALE (OTC) ---
