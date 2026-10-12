@@ -567,7 +567,7 @@ def webhook():
                     api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
                     send_category_menu(cid)
 
-            # --- GESTIONE LETTURA FOTO TRAMITE GEMINI VISION CON STRUCTURED OUTPUTS E PYDANTIC ---
+            # --- GESTIONE LETTURA FOTO TRAMITE GEMINI VISION CON UPSCALING PIL E PYDANTIC ---
             elif "message" in up and "photo" in up["message"]:
                 cid = up["message"]["chat"]["id"]
                 user_msg_id = up["message"]["message_id"]
@@ -578,7 +578,7 @@ def webhook():
                     exp_key = state["expiry"]
                     user_otc_state.pop(cid, None)
                     
-                    send_message(cid, "🔍 Analisi avanzata dello screenshot in corso...")
+                    send_message(cid, "🔍 Ottimizzazione e analisi avanzata dello screenshot...")
 
                     try:
                         photo = up["message"]["photo"][-1]
@@ -592,14 +592,17 @@ def webhook():
                             img_response = requests.get(download_url)
                             image = PIL.Image.open(io.BytesIO(img_response.content))
                             
+                            # Upscaling del 200% con resampling LANCZOS per ingrandire i numerini minuscoli
+                            image = image.resize((image.width * 2, image.height * 2), PIL.Image.Resampling.LANCZOS)
+                            
                             client = genai.Client(api_key=GEMINI_API_KEY)
                             
                             prompt = (
-                                "Analizza questo screenshot di trading OTC. "
-                                "Estrai con assoluta precisione: "
-                                "1. Il prezzo attuale dell'asset (es. 1.09568) "
-                                "2. Il valore dell'indicatore RSI (periodo 9) "
-                                "3. Il valore numerico della linea MACD"
+                                "Analizza questo screenshot ingrandito di una piattaforma di trading OTC. "
+                                "Estrai con precisione millimetrica: "
+                                "1. Il prezzo corrente dell'asset (visibile in alto a destra nel grafico). "
+                                "2. Il valore dell'indicatore RSI (periodo 9). "
+                                "3. Il valore numerico della linea MACD (nel pannello in basso)."
                             )
                             
                             response = client.models.generate_content(
@@ -623,8 +626,8 @@ def webhook():
                             send_message(cid, "⚠️ Impossibile scaricare la foto da Telegram. Riprova.")
                             return "ok", 200
                     except Exception as e:
-                        print("Errore lettura immagine Gemini:", e)
-                        send_message(cid, "⚠️ Non sono riuscito a estrarre i dati dallo screenshot. Riprova con un'immagine più nitida oppure inserisci i valori a mano.")
+                        print("Errore dettagliato lettura immagine:", e)
+                        send_message(cid, f"⚠️ Errore di estrazione ({str(e)}). Riprova con un'immagine più nitida oppure inserisci i valori a mano.")
                         return "ok", 200
 
             # --- GESTIONE TESTO MANUALE (OTC) ---
