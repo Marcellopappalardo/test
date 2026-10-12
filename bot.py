@@ -338,19 +338,19 @@ def process_otc_analysis(cid, ast_name, exp_key, price, rsi, macd_line):
     if rsi < 48 or macd_line > 0:
         sig_type = "ACQUISTA (BUY)"
         sig_emoji = "🟢"
-        trend_desc = "Rialzista (Analisi Gemini) 📈"
+        trend_desc = "Rialzista (Analisi Google) 📈"
         pattern_name = "Candela di Rimbalzo / Spinta"
     else:
         sig_type = "VENDI (SELL)"
         sig_emoji = "🔴"
-        trend_desc = "Ribassista (Analisi Gemini) 📉"
+        trend_desc = "Ribassista (Analisi Google) 📉"
         pattern_name = "Rifiuto / Correzione Livello"
         
     conf = round(83.0 + abs(macd_line) * 400, 1)
     conf = min(96.0, max(72.0, conf))
     timeframe_name = exp_map.get(exp_key, "1 Minuto (M1)")
 
-    text = "🤖 **ANALISI GEMINI (TRADING SCREENSHOT)**\n\n"
+    text = "🤖 **ANALISI GOOGLE GEMINI (OTC)**\n\n"
     text += f"💲💹 Asset: {ast_name}\n"
     text += f"💵 Prezzo: `{price}`\n"
     text += f"📊 Trend Rilevato: {trend_desc}\n"
@@ -556,7 +556,7 @@ def webhook():
                     api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
                     send_category_menu(cid)
 
-            # --- GESTIONE VISIONE ARTIFICIALE OTTIMIZZATA ---
+            # --- GESTIONE VISIONE TRAMITE FILE API DI GOOGLE ---
             elif "message" in up and ("photo" in up["message"] or "document" in up["message"]):
                 cid = up["message"]["chat"]["id"]
                 user_msg_id = up["message"]["message_id"]
@@ -569,7 +569,7 @@ def webhook():
                     exp_key = state["expiry"]
                     user_otc_state.pop(cid, None)
                     
-                    wait_msg_id = send_message(cid, "🔬 *Analisi dei dati in corso...*")
+                    wait_msg_id = send_message(cid, "🔬 *Google sta analizzando lo screenshot...*")
 
                     try:
                         if "photo" in up["message"]:
@@ -586,24 +586,30 @@ def webhook():
                             img_response = requests.get(download_url, timeout=15.0)
                             image_bytes = img_response.content
                             
+                            temp_filename = f"temp_{cid}.jpg"
+                            with open(temp_filename, "wb") as f:
+                                f.write(image_bytes)
+                                
                             client = genai.Client(api_key=GEMINI_API_KEY)
                             
+                            gemini_file = client.files.upload(file=temp_filename)
+                            
+                            if os.path.exists(temp_filename):
+                                os.remove(temp_filename)
+                            
                             prompt = (
-                                "Analizza questa schermata di trading. Estrai esattamente tre numeri e restituiscili in formato JSON puro senza markdown, con queste chiavi esatte:\n"
-                                '{"price": 0.0, "rsi": 0.0, "macd": 0.0}\n'
-                                "Esempio:\n"
-                                '{"price": 1.32739, "rsi": 54.2, "macd": 0.0012}'
+                                "Sei un trader esperto e analista OCR. Guarda con attenzione questo screenshot di una piattaforma di opzioni binarie. "
+                                "Estrai con precisione assoluta questi tre dati chiave: "
+                                "1. 'price': Il valore numerico del prezzo corrente dell'asset (es. 1.32739 o 209.540). "
+                                "2. 'rsi': Il valore numerico dell'indicatore RSI periodo 9. "
+                                "3. 'macd': Il valore numerico della linea MACD nel pannello inferiore. "
+                                "Restituisci esclusivamente un oggetto JSON puro senza formattazione markdown, usando questa struttura esatta: "
+                                '{"price": 0.0, "rsi": 0.0, "macd": 0.0}'
                             )
                             
                             response = client.models.generate_content(
                                 model='gemini-2.5-flash',
-                                contents=[
-                                    types.Part.from_bytes(
-                                        data=image_bytes,
-                                        mime_type="image/jpeg",
-                                    ),
-                                    prompt
-                                ]
+                                contents=[gemini_file, prompt]
                             )
                             
                             raw_text = response.text.strip()
@@ -629,10 +635,10 @@ def webhook():
                             send_message(cid, "⚠️ Errore nel download del file.")
                             return "ok", 200
                     except Exception as e:
-                        print("Errore dettagliato OCR:", traceback.format_exc())
+                        print("Errore caricamento file Google:", traceback.format_exc())
                         if wait_msg_id:
                             api_call("deleteMessage", {"chat_id": cid, "message_id": wait_msg_id})
-                        send_message(cid, "⚠️ Estrazione non riuscita. Inserisci i valori manualmente separati da virgola (es: `1.32739, 54.2, 0.0012`).")
+                        send_message(cid, "⚠️ Estrazione non riuscita. Inserisci i valori manualmente (es: `1.32739, 54.2, 0.0012`).")
                         return "ok", 200
 
             # --- GESTIONE TESTO MANUALE (OTC) ---
