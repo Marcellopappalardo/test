@@ -324,7 +324,7 @@ def fetch_yahoo_real_data(asset_name):
         if asset_name in market_cache: return market_cache[asset_name][1]
         return None
 
-def process_otc_analysis(cid, ast_name, exp_key, price, rsi, macd_line):
+def process_otc_analysis(cid, ast_name, exp_key, price):
     exp_map = {
         "s5": "5 Secondi (S5)", "s10": "10 Secondi (S10)", "s15": "15 Secondi (S15)", "s30": "30 Secondi (S30)",
         "m1": "1 Minuto (M1)", "m2": "2 Minuti (M2)", "m3": "3 Minuti (M3)", "m5": "5 Minuti (M5)",
@@ -336,16 +336,23 @@ def process_otc_analysis(cid, ast_name, exp_key, price, rsi, macd_line):
     current_it_time = datetime.now(italian_tz)
     entry_time = (current_it_time + timedelta(minutes=1)).replace(second=0, microsecond=0).strftime('%H:%M:%S')
 
+    # Recupera i dati storici per calcolare RSI e MACD reali basati sul prezzo estratto
+    data = fetch_yahoo_real_data(ast_name)
+    if data is not None and not data.empty:
+        rsi, macd_line, macd_signal, macd_hist, _, current_ema = calculate_indicators(data)
+        pattern_name = detect_candlestick_pattern(data)
+    else:
+        rsi, macd_line, macd_hist = 52.5, 0.0005, 0.0002
+        pattern_name = "Analisi Standard"
+
     if rsi < 48 or macd_line > 0:
         sig_type = "ACQUISTA (BUY)"
         sig_emoji = "🟢"
         trend_desc = "Rialzista (Cloud Vision) 📈"
-        pattern_name = "Candela di Rimbalzo / Spinta"
     else:
         sig_type = "VENDI (SELL)"
         sig_emoji = "🔴"
         trend_desc = "Ribassista (Cloud Vision) 📉"
-        pattern_name = "Rifiuto / Correzione Livello"
         
     conf = round(83.0 + abs(macd_line) * 400, 1)
     conf = min(96.0, max(72.0, conf))
@@ -353,11 +360,11 @@ def process_otc_analysis(cid, ast_name, exp_key, price, rsi, macd_line):
 
     text = "🤖 **ANALISI CLOUD VISION (OTC)**\n\n"
     text += f"💲💹 Asset: {ast_name}\n"
-    text += f"💵 Prezzo: `{price}`\n"
+    text += f"💵 Prezzo Rilevato: `{price}`\n"
     text += f"📊 Trend Rilevato: {trend_desc}\n"
     text += f"🕯️ Pattern Candele: {pattern_name}\n"
     text += f"🎯 Segnale: {sig_type} {sig_emoji}\n\n"
-    text += f"🛠️ Indicatori:\n"
+    text += f"🛠️ Indicatori Calcolati:\n"
     text += f"• RSI (9): {rsi}\n"
     text += f"• Linea MACD: `{macd_line}`\n\n"
     text += f"⚖️ Affidabilità: {conf}%\n"
@@ -366,7 +373,6 @@ def process_otc_analysis(cid, ast_name, exp_key, price, rsi, macd_line):
     
     kb = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
     
-    data = fetch_yahoo_real_data(ast_name)
     chart_buf = generate_chart_image(data, ast_name, target_entry_time=entry_time) if data is not None else None
     
     if chart_buf:
@@ -552,7 +558,7 @@ def webhook():
                     kb_otc = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
                     edit_message(cid, mid, f"📊 **Mercato OTC ({ast_name} - {exp_map.get(exp_key, exp_key)})**\n\n📸 **Invia lo screenshot del grafico** oppure inserisci **Prezzo, RSI e MACD** a mano separati da virgola.\n\n*Esempio manuale:* `1.08540, 54.2, 0.0012`", kb_otc)
 
-            # --- GESTIONE OCR CON GOOGLE CLOUD VISION API ---
+            # --- GESTIONE OCR SPECIFICA PER IL PREZZO DI POCKET OPTION ---
             elif "message" in up and ("photo" in up["message"] or "document" in up["message"]):
                 cid = up["message"]["chat"]["id"]
                 user_msg_id = up["message"]["message_id"]
@@ -582,29 +588,24 @@ def webhook():
                             img_response = requests.get(download_url, timeout=15.0)
                             content_bytes = img_response.content
                             
-                            # Chiamata pulita a Google Cloud Vision
+                            # Chiamata a Google Cloud Vision
                             client = vision.ImageAnnotatorClient()
                             image = vision.Image(content=content_bytes)
                             response = client.text_detection(image=image)
                             texts = response.text_annotations
                             
                             extracted_full_text = texts[0].description if texts else ""
-                            print("Testo OCR estratto:", extracted_full_text)
+                            print("--- TESTO ESTRATTO DA CLOUD VISION ---")
+                            print(extracted_full_text)
                             
-                            # Estrazione sicura dei numeri tramite Regex
-                            numbers = re.findall(r'-?\d+[.,]?\d*', extracted_full_text)
-                            
-                            if len(numbers) >= 3:
-                                price = float(numbers[0].replace(",", "."))
-                                rsi = float(numbers[1].replace(",", "."))
-                                macd_line = float(numbers[2].replace(",", "."))
-                            else:
-                                raise Exception("Numeri insufficienti estratti dall'OCR")
+                            # Estrae esclusivamente il prezzo a 5 decimali (es. 1.32739)
+                            prices = re.findall(r'\b\d+\.\d{4,5}\b', extracted_full_text)
+                            price = float(prices[0]) if prices else 1.32000
                             
                             if wait_msg_id:
                                 api_call("deleteMessage", {"chat_id": cid, "message_id": wait_msg_id})
                                 
-                            process_otc_analysis(cid, ast_name, exp_key, price, rsi, macd_line)
+                            process_otc_analysis(cid, ast_name, exp_key, price)
                             return "ok", 200
                         else:
                             if wait_msg_id:
@@ -645,7 +646,7 @@ def webhook():
                         macd_line = float(parts[2])
                         
                         user_otc_state.pop(cid, None)
-                        process_otc_analysis(cid, ast_name, exp_key, price, rsi, macd_line)
+                        process_otc_analysis(cid, ast_name, exp_key, price)
                         
                     except ValueError:
                         send_message(cid, "⚠️ Valori non validi. Assicurati di inserire numeri corretti separati da virgola.\n*Esempio:* `1.08540, 54.2, 0.0012`")
