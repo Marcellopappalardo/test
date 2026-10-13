@@ -493,7 +493,7 @@ def webhook():
                         send_expiry_menu(cid, ast, mid, is_otc=False)
                     else:
                         ast = OTC_ASSETS[int(val.split("_")[2])]
-                        user_selection[cid]["asset"] = ast
+                        user_selection[cid] = {"asset": ast, "cat": "otc"}
                         send_expiry_menu(cid, ast, mid, is_otc=True)
 
                 # --- MERCATO REALE (INVARIATO) ---
@@ -581,7 +581,7 @@ def webhook():
                     else:
                         send_message(cid, text, kb)
 
-                # --- STEP 1 OTC: 6 PULSANTI RSI IN 3 COLONNE (2 RIGHE DA 3) ---
+                # --- STEP 1 OTC: 6 PULSANTI RSI IN 3 COLONNE (CORRETTO `chat_id` -> `cid`) ---
                 elif val.startswith("exp_o_"):
                     exp_key = val.split("_")[2]
                     sel = user_selection.get(cid, {})
@@ -604,9 +604,9 @@ def webhook():
                             [{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]
                         ]
                     }
-                    edit_message(chat_id, mid, f"📊 **{ast_name} ({exp_map.get(exp_key, exp_key)})**\n\n**Step 1/2:** Guarda il grafico e seleziona la zona o condizione attuale dell' **RSI (9)**:", kb_rsi_6)
+                    edit_message(cid, mid, f"📊 **{ast_name} ({exp_map.get(exp_key, exp_key)})**\n\n**Step 1/2:** Guarda il grafico e seleziona la zona o condizione attuale dell' **RSI (9)**:", kb_rsi_6)
 
-                # --- STEP 2 OTC: SELEZIONE DEL MACD DOPO AVER VISTO L'RSI ---
+                # --- STEP 2 OTC: SELEZIONE DEL MACD ---
                 elif val.startswith("otc_rsi_"):
                     rsi_choice = val.replace("otc_rsi_", "")
                     if cid in user_otc_state:
@@ -620,7 +620,7 @@ def webhook():
                                 [{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]
                             ]
                         }
-                        edit_message(chat_id, mid, "📊 **Step 2/2:** Qual è la situazione del **MACD**?", kb_macd_3)
+                        edit_message(cid, mid, "📊 **Step 2/2:** Qual è la situazione del **MACD**?", kb_macd_3)
 
                 # --- CALCOLO FINALE DEL SEGNALE OTC ---
                 elif val.startswith("otc_macd_"):
@@ -636,7 +636,6 @@ def webhook():
                         current_it_time = datetime.now(italian_tz)
                         entry_time = (current_it_time + timedelta(minutes=1)).replace(second=0, microsecond=0).strftime('%H:%M:%S')
                         
-                        # Mappe descrittive per il riepilogo
                         rsi_map = {
                             "high70": "Maggiore di 70 (Ipercomprato 🔥)",
                             "midup": "Tra 50 e 70 (Rialzista 📈)",
@@ -652,7 +651,6 @@ def webhook():
                             "pending": "In fase di formazione (Si deve verificare) ⏳"
                         }
                         
-                        # Logica di generazione segnale basata su RSI e MACD scelti
                         if rsi_choice == "high70" or macd_choice == "bear":
                             if rsi_choice == "low30" and macd_choice == "bull":
                                 sig_type = "ACQUISTA (BUY)"
@@ -707,7 +705,7 @@ def webhook():
                         text += f"📌 Ora Esatta Ingresso: `{entry_time}`"
                         
                         kb = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
-                        edit_message(chat_id, mid, text, kb)
+                        edit_message(cid, mid, text, kb)
 
             elif "message" in up:
                 cid = up["message"]["chat"]["id"]
