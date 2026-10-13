@@ -328,31 +328,31 @@ def fetch_yahoo_real_data(asset_name):
         if asset_name in market_cache: return market_cache[asset_name][1]
         return None
 
-def extract_data_from_image(image_bytes):
-    """Stima visiva intelligente basata sulla posizione delle linee e della scala dei prezzi."""
+def extract_pocket_option_ocr(image_bytes):
+    """Estrae i dati visivi leggendo direttamente dalla schermata Pocket Option."""
     try:
         image_part = {
             "mime_type": "image/jpeg",
             "data": image_bytes
         }
         prompt = (
-            "Sei un trader professionista. Analizza questa schermata ed effettua una stima visiva geometrica:\n"
-            "1. Prezzo dell'ultima candela (confrontando la sua altezza con la scala verticale a destra).\n"
-            "2. Valore numerico stimato dell'RSI 9 (da 0 a 100 in base alla posizione della linea verde rispetto a 30, 50, 70).\n"
-            "3. Valore numerico stimato della linea MACD nel pannello in basso rispetto allo zero.\n"
-            "Rispondi indicando solo i tre valori numerici separati da virgola (es: 1.32739, 53, 0.0002)."
+            "Sei un trader professionista ed esperto di grafici di Pocket Option.\n"
+            "Guarda questo screenshot:\n"
+            "1. Leggi il prezzo attuale nel box a destra del grafico principale (es. 1.32739).\n"
+            "2. Guarda il pannello 'RSI 9' in basso: stima il valore numerico da 0 a 100 in base alla posizione della linea verde rispetto ai livelli 30, 50, 70.\n"
+            "3. Guarda il pannello 'MACD 12 26 9' in basso: stima il valore numerico della linea MACD rispetto allo zero.\n"
+            "Restituisci esattamente i tre valori numerici separati da virgola (es: 1.32739, 53, 0.0002)."
         )
         response = gemini_model.generate_content([image_part, prompt])
         text_res = response.text.strip()
-        print("Risposta visiva Gemini:", text_res)
+        print("OCR Pocket Option grezzo:", text_res)
         
         numbers = re.findall(r'-?\d+\.\d+|-?\d+', text_res.replace(',', '.'))
         if len(numbers) >= 3:
             return float(numbers[0]), float(numbers[1]), float(numbers[2])
-        return None, None, None
     except Exception as e:
-        print("Errore nell'estrazione visiva:", e)
-        return None, None, None
+        print("Errore nell'OCR Pocket Option:", e)
+    return None, None, None
 
 def send_category_menu(chat_id, msg_id=None):
     kb = {
@@ -530,7 +530,7 @@ def webhook():
                     ast_name = sel.get("asset", "EUR/USD OTC")
                     user_otc_state[cid] = {"asset": ast_name, "expiry": exp_key}
                     kb_otc = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
-                    edit_message(cid, mid, f"📊 **Mercato OTC ({ast_name} - {exp_map.get(exp_key, exp_key)})**\n\n📷 **Invia lo screenshot** oppure **digita i 3 valori** a mano separati da virgola (es: `1.32739, 53, 0.0002`).", kb_otc)
+                    edit_message(cid, mid, f"📊 **Mercato OTC ({ast_name} - {exp_map.get(exp_key, exp_key)})**\n\n📷 **Invia lo screenshot** oppure **digita i 3 valori** a mano (es: `1.32739, 53, 0.0002`).", kb_otc)
 
             elif "message" in up:
                 cid = up["message"]["chat"]["id"]
@@ -548,7 +548,7 @@ def webhook():
                         file_id_to_fetch = doc["file_id"]
                         is_valid_image = True
 
-                # Modalità 1: Stima visiva automatica
+                # Modalità 1: Lettura Screenshot Pocket Option
                 if is_valid_image and file_id_to_fetch:
                     state = user_otc_state[cid]
                     ast_name = state["asset"]
@@ -561,14 +561,14 @@ def webhook():
                         download_url = f"https://api.telegram.org/file/bot{TG_TOKEN}/{file_path}"
                         img_bytes = requests.get(download_url).content
                         
-                        send_message(cid, "🔍 EasyTrack IA sta stimando prezzo e indicatori...")
-                        price, rsi, macd_line = extract_data_from_image(img_bytes)
+                        send_message(cid, "🔍 EasyTrack IA sta leggendo lo screenshot di Pocket Option...")
+                        price, rsi, macd_line = extract_pocket_option_ocr(img_bytes)
                         
                         api_call("deleteMessage", {"chat_id": cid, "message_id": msg_id_user})
                         
-                        if price is None or rsi is None or price == 0:
+                        if price is None or rsi is None:
                             err_kb = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
-                            send_message(cid, "⚠️ Stima automatica non riuscita. **Digita i 3 valori a mano** in chat separati da virgola (es: `1.32739, 53, 0.0002`)!", err_kb)
+                            send_message(cid, "⚠️ Impossibile leggere i valori dall'immagine. **Digitali a mano** in chat (es: `1.32739, 53, 0.0002`)!", err_kb)
                             return "ok", 200
                         
                         user_otc_state.pop(cid, None)
@@ -580,25 +580,25 @@ def webhook():
                         if rsi < 48 or macd_line > 0:
                             sig_type = "ACQUISTA (BUY)"
                             sig_emoji = "🟢"
-                            trend_desc = "Rialzista (EasyTrack IA) 📈"
+                            trend_desc = "Rialzista OTC 📈"
                             pattern_name = "Candela di Rimbalzo / Spinta"
                         else:
                             sig_type = "VENDI (SELL)"
                             sig_emoji = "🔴"
-                            trend_desc = "Ribassista (EasyTrack IA) 📉"
+                            trend_desc = "Ribassista OTC 📉"
                             pattern_name = "Rifiuto / Correzione Livello"
                             
-                        conf = round(83.0 + abs(macd_line) * 400, 1)
-                        conf = min(96.0, max(72.0, conf))
+                        conf = round(83.0 + abs(macd_line) * 300, 1)
+                        conf = min(96.0, max(75.0, conf))
                         timeframe_name = exp_map.get(exp_key, "1 Minuto (M1)")
 
                         text = "🤖 **ANALISI EASYTRACK OTC**\n\n"
                         text += f"💲💹 Asset: {ast_name}\n"
-                        text += f"💵 Prezzo Stimato: `{price}`\n"
-                        text += f"📊 Trend Rilevato: {trend_desc}\n"
+                        text += f"💵 Prezzo Letto: `{price}`\n"
+                        text += f"📊 Trend Grafico: {trend_desc}\n"
                         text += f"🕯️ Pattern Candele: {pattern_name}\n"
                         text += f"🎯 Segnale: {sig_type} {sig_emoji}\n\n"
-                        text += f"🛠️ Indicatori Stimati dall'IA:\n"
+                        text += f"🛠️ Indicatori Estratti:\n"
                         text += f"• RSI (9): {rsi}\n"
                         text += f"• Linea MACD: `{macd_line}`\n\n"
                         text += f"⚖️ Affidabilità: {conf}%\n"
