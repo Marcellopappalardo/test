@@ -27,7 +27,8 @@ BASE_URL = "https://api.telegram.org/bot" + TG_TOKEN
 GEMINI_API_KEY = "AQ.Ab8RN6IDlTHsxy-8n-Uie0x-MQsFt3F22lNlqhIwA-Mg13XDLA"
 genai.configure(api_key=GEMINI_API_KEY)
 
-gemini_model = genai.GenerativeModel('gemini-1.5-flash')
+# Modello aggiornato con suffisso -latest per compatibilità v1beta
+gemini_model = genai.GenerativeModel('gemini-1.5-flash-latest')
 
 market_cache = {}
 CACHE_DURATION = 300
@@ -47,7 +48,7 @@ OTC_ASSETS = [
     "EUR/USD OTC", "GBP/USD OTC", "USD/JPY OTC", "AUD/USD OTC", "USD/CAD OTC", "AUD/CAD OTC", 
     "USD/CHF OTC", "EUR/GBP OTC", "EUR/JPY OTC", "GBP/JPY OTC", "AUD/JPY OTC", "EUR/AUD OTC", 
     "EUR/CAD OTC", "EUR/NZD OTC", "GBP/NZD OTC", "AUD/NZD OTC", "CAD/JPY OTC", "CHF/JPY OTC", 
-    "GBP/CAD OTC", "GBP/AUD OTC", "NZD/USD OTC", "AUD/CHF OTC", "USD/MXN OTC", "USD/PKR OTC", 
+    "GBP/CAD OTC", "GBP/AUD OTC", "USD/USD OTC", "AUD/CHF OTC", "USD/MXN OTC", "USD/PKR OTC", 
     "EUR/RUB OTC", "EUR/TRY OTC", "JOD/CNY OTC", "NGN/USD OTC", "LBP/USD OTC", "TND/USD OTC", 
     "QAR/CNY OTC", "USD/ARS OTC", "UAH/USD OTC", "SAR/CNY OTC", "Bitcoin OTC", "Cardano OTC", 
     "Polkadot OTC", "Toncoin OTC", "Bitcoin ETF OTC", "TRON OTC", "Dogecoin OTC", "Litecoin OTC", 
@@ -560,7 +561,7 @@ def webhook():
                         file_id_to_fetch = doc["file_id"]
                         is_valid_image = True
 
-                # Modalità 1: Analisi Foto IA (Senza messaggi di caricamento superflui)
+                # Modalità 1: Analisi Foto IA
                 if is_valid_image and file_id_to_fetch:
                     state = user_otc_state[cid]
                     ast_name = state["asset"]
