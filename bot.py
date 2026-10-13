@@ -493,7 +493,7 @@ def webhook():
                         send_expiry_menu(cid, ast, mid, is_otc=False)
                     else:
                         ast = OTC_ASSETS[int(val.split("_")[2])]
-                        user_selection[cid] = {"asset": ast, "cat": "otc"}
+                        user_selection[cid]["asset"] = ast
                         send_expiry_menu(cid, ast, mid, is_otc=True)
 
                 # --- MERCATO REALE (INVARIATO) ---
@@ -581,7 +581,7 @@ def webhook():
                     else:
                         send_message(cid, text, kb)
 
-                # --- MERCATO OTC UNICA PAGINA A 6 PULSANTI (CON MACD EVIDENTE) ---
+                # --- STEP 1 OTC: 6 PULSANTI RSI IN 3 COLONNE (2 RIGHE DA 3) ---
                 elif val.startswith("exp_o_"):
                     exp_key = val.split("_")[2]
                     sel = user_selection.get(cid, {})
@@ -589,97 +589,125 @@ def webhook():
                     
                     user_otc_state[cid] = {"asset": ast_name, "expiry": exp_key}
                     
-                    kb_single_page = {
+                    kb_rsi_6 = {
                         "inline_keyboard": [
-                            [{"text": "🔥 RSI > 70 + 🔴 MACD Rib.", "callback_data": "otc_comb_high70_bear"}],
-                            [{"text": "🔥 RSI > 70 + 🟢 MACD Rialz.", "callback_data": "otc_comb_high70_bull"}],
-                            [{"text": "❄️ RSI < 30 + 🟢 MACD Rialz.", "callback_data": "otc_comb_low30_bull"}],
-                            [{"text": "❄️ RSI < 30 + 🔴 MACD Rib.", "callback_data": "otc_comb_low30_bear"}],
-                            [{"text": "⚖️ RSI Neutro + 🟢 MACD Rialz.", "callback_data": "otc_comb_neutral_bull"}],
-                            [{"text": "⚖️ RSI Neutro + 🔴 MACD Rib.", "callback_data": "otc_comb_neutral_bear"}],
+                            [
+                                {"text": "🔥 RSI > 70", "callback_data": "otc_rsi_high70"},
+                                {"text": "📈 RSI 50-70", "callback_data": "otc_rsi_midup"},
+                                {"text": "📉 RSI 30-50", "callback_data": "otc_rsi_middown"}
+                            ],
+                            [
+                                {"text": "❄️ RSI < 30", "callback_data": "otc_rsi_low30"},
+                                {"text": "↔️ RSI Vicino 50", "callback_data": "otc_rsi_near50"},
+                                {"text": "⚡ RSI in Taglio", "callback_data": "otc_rsi_cross"}
+                            ],
                             [{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]
                         ]
                     }
-                    edit_message(cid, mid, f"📊 **{ast_name} ({exp_map.get(exp_key, exp_key)})**\n\nSeleziona la combinazione attuale di **RSI (9)** e **MACD**:", kb_single_page)
+                    edit_message(chat_id, mid, f"📊 **{ast_name} ({exp_map.get(exp_key, exp_key)})**\n\n**Step 1/2:** Guarda il grafico e seleziona la zona o condizione attuale dell' **RSI (9)**:", kb_rsi_6)
 
-                elif val.startswith("otc_comb_"):
-                    comb_type = val.replace("otc_comb_", "")
+                # --- STEP 2 OTC: SELEZIONE DEL MACD DOPO AVER VISTO L'RSI ---
+                elif val.startswith("otc_rsi_"):
+                    rsi_choice = val.replace("otc_rsi_", "")
+                    if cid in user_otc_state:
+                        user_otc_state[cid]["rsi"] = rsi_choice
+                        
+                        kb_macd_3 = {
+                            "inline_keyboard": [
+                                [{"text": "🟢 Incrocio Rialzista", "callback_data": "otc_macd_bull"}],
+                                [{"text": "🔴 Incrocio Ribassista", "callback_data": "otc_macd_bear"}],
+                                [{"text": "⏳ Si deve ancora verificare", "callback_data": "otc_macd_pending"}],
+                                [{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]
+                            ]
+                        }
+                        edit_message(chat_id, mid, "📊 **Step 2/2:** Qual è la situazione del **MACD**?", kb_macd_3)
+
+                # --- CALCOLO FINALE DEL SEGNALE OTC ---
+                elif val.startswith("otc_macd_"):
+                    macd_choice = val.replace("otc_macd_", "")
                     if cid in user_otc_state:
                         state = user_otc_state[cid]
                         ast_name = state["asset"]
                         exp_key = state["expiry"]
+                        rsi_choice = state["rsi"]
                         user_otc_state.pop(cid, None)
                         
                         italian_tz = timezone(timedelta(hours=2))
                         current_it_time = datetime.now(italian_tz)
                         entry_time = (current_it_time + timedelta(minutes=1)).replace(second=0, microsecond=0).strftime('%H:%M:%S')
                         
-                        # Logica di assegnazione segnale con MACD e RSI 70/30
-                        if comb_type == "high70_bear":
-                            sig_type = "VENDI (SELL)"
-                            sig_emoji = "🔴"
-                            trend_desc = "Inversione da Ipercomprato 📉"
-                            pattern_name = "Rifiuto Massimi (RSI > 70 + MACD Ribassista)"
-                            conf = 92.0
-                            rsi_desc = "Maggiore di 70 (Ipercomprato 🔥)"
-                            macd_desc = "Incrocio Ribassista 🔴"
-                        elif comb_type == "high70_bull":
-                            sig_type = "VENDI (SELL)"
-                            sig_emoji = "🔴"
-                            trend_desc = "Esaurimento / Cautela Ribassista 📉"
-                            pattern_name = "Divergenza / Test Resistenza"
-                            conf = 84.0
-                            rsi_desc = "Maggiore di 70 (Ipercomprato 🔥)"
-                            macd_desc = "Incrocio Rialzista 🟢"
-                        elif comb_type == "low30_bull":
-                            sig_type = "ACQUISTA (BUY)"
-                            sig_emoji = "🟢"
-                            trend_desc = "Rimbalzo da Ipervenduto 📈"
-                            pattern_name = "Reazione Minimi (RSI < 30 + MACD Rialzista)"
-                            conf = 92.0
-                            rsi_desc = "Minore di 30 (Ipervenduto ❄️)"
-                            macd_desc = "Incrocio Rialzista 🟢"
-                        elif comb_type == "low30_bear":
-                            sig_type = "ACQUISTA (BUY)"
-                            sig_emoji = "🟢"
-                            trend_desc = "Esaurimento / Cautela Rialzista 📈"
-                            pattern_name = "Divergenza / Test Supporto"
-                            conf = 84.0
-                            rsi_desc = "Minore di 30 (Ipervenduto ❄️)"
-                            macd_desc = "Incrocio Ribassista 🔴"
-                        elif comb_type == "neutral_bull":
-                            sig_type = "ACQUISTA (BUY)"
-                            sig_emoji = "🟢"
-                            trend_desc = "Continuazione Rialzista 📈"
-                            pattern_name = "Spinta Trend (RSI Neutro + MACD Rialzista)"
-                            conf = 86.0
-                            rsi_desc = "Neutro (30 - 70 ⚖️)"
-                            macd_desc = "Incrocio Rialzista 🟢"
-                        else: # neutral_bear
-                            sig_type = "VENDI (SELL)"
-                            sig_emoji = "🔴"
-                            trend_desc = "Continuazione Ribassista 📉"
-                            pattern_name = "Spinta Trend (RSI Neutro + MACD Ribassista)"
-                            conf = 86.0
-                            rsi_desc = "Neutro (30 - 70 ⚖️)"
-                            macd_desc = "Incrocio Ribassista 🔴"
+                        # Mappe descrittive per il riepilogo
+                        rsi_map = {
+                            "high70": "Maggiore di 70 (Ipercomprato 🔥)",
+                            "midup": "Tra 50 e 70 (Rialzista 📈)",
+                            "middown": "Tra 30 e 50 (Ribassista 📉)",
+                            "low30": "Minore di 30 (Ipervenduto ❄️)",
+                            "near50": "Vicino alla linea del 50 (Neutro ⚖️)",
+                            "cross": "In fase di Taglio / Transizione ⚡"
+                        }
+                        
+                        macd_map = {
+                            "bull": "Incrocio Rialzista 🟢",
+                            "bear": "Incrocio Ribassista 🔴",
+                            "pending": "In fase di formazione (Si deve verificare) ⏳"
+                        }
+                        
+                        # Logica di generazione segnale basata su RSI e MACD scelti
+                        if rsi_choice == "high70" or macd_choice == "bear":
+                            if rsi_choice == "low30" and macd_choice == "bull":
+                                sig_type = "ACQUISTA (BUY)"
+                                sig_emoji = "🟢"
+                                trend_desc = "Rimbalzo da Ipervenduto 📈"
+                                pattern_name = "Reazione Minimi"
+                                conf = 91.0
+                            elif rsi_choice == "high70":
+                                sig_type = "VENDI (SELL)"
+                                sig_emoji = "🔴"
+                                trend_desc = "Inversione da Ipercomprato 📉"
+                                pattern_name = "Rifiuto su Livello Chiave"
+                                conf = 90.0
+                            else:
+                                sig_type = "VENDI (SELL)"
+                                sig_emoji = "🔴"
+                                trend_desc = "Spinta Ribassista 📉"
+                                pattern_name = "Continuazione Trend"
+                                conf = 85.0
+                        else:
+                            if rsi_choice == "low30":
+                                sig_type = "ACQUISTA (BUY)"
+                                sig_emoji = "🟢"
+                                trend_desc = "Rimbalzo da Ipervenduto 📈"
+                                pattern_name = "Reazione Minimi"
+                                conf = 90.0
+                            elif macd_choice == "bull":
+                                sig_type = "ACQUISTA (BUY)"
+                                sig_emoji = "🟢"
+                                trend_desc = "Spinta Rialzista 📈"
+                                pattern_name = "Continuazione Trend"
+                                conf = 86.0
+                            else:
+                                sig_type = "VENDI (SELL)"
+                                sig_emoji = "🔴"
+                                trend_desc = "Fase di Transizione ↔️"
+                                pattern_name = "Attesa Conferma"
+                                conf = 75.0
 
                         timeframe_name = exp_map.get(exp_key, "1 Minuto (M1)")
 
-                        text = "🤖 **ANALISI OTC GUIDATA (RAPIDA A 6 PULSANTI)**\n\n"
+                        text = "🤖 **ANALISI OTC GUIDATA (A DOPPIO STEP)**\n\n"
                         text += f"💲💹 Asset: {ast_name}\n"
                         text += f"📊 Trend Rilevato: {trend_desc}\n"
                         text += f"🕯️ Pattern: {pattern_name}\n"
                         text += f"🎯 Segnale: {sig_type} {sig_emoji}\n\n"
                         text += f"🛠️ Parametri Selezionati:\n"
-                        text += f"• RSI (9): {rsi_desc}\n"
-                        text += f"• MACD: {macd_desc}\n\n"
+                        text += f"• RSI (9): {rsi_map.get(rsi_choice, rsi_choice)}\n"
+                        text += f"• MACD: {macd_map.get(macd_choice, macd_choice)}\n\n"
                         text += f"⚖️ Affidabilità: {conf}%\n"
                         text += f"⏱️ Timeframe: {timeframe_name}\n"
                         text += f"📌 Ora Esatta Ingresso: `{entry_time}`"
                         
                         kb = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
-                        edit_message(cid, mid, text, kb)
+                        edit_message(chat_id, mid, text, kb)
 
             elif "message" in up:
                 cid = up["message"]["chat"]["id"]
