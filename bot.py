@@ -3,7 +3,6 @@ import json
 import math
 import time
 import io
-import re
 import traceback
 import matplotlib
 matplotlib.use('Agg')
@@ -14,13 +13,20 @@ from flask import Flask, request
 import requests
 import pandas as pd
 import numpy as np
-import PIL.Image
-from google.cloud import vision
+
+# Importa la libreria di Google Generative AI
+import google.generativeai as genai
 
 app = Flask(__name__)
 
 TG_TOKEN = "8585533636:AAE_J2ospaddCWva9gPHzE26dCp2_WaziLk"
 BASE_URL = "https://api.telegram.org/bot" + TG_TOKEN
+
+# CONFIGURAZIONE GEMINI API KEY INSERITA
+GEMINI_API_KEY = "AQ.Ab8RN6IDlTHsxy-8n-Uie0x-MQsFt3F22lNlqhIwA-Mg13XDLA"
+genai.configure(api_key=GEMINI_API_KEY)
+
+gemini_model = genai.GenerativeModel('gemini-1.5-flash')
 
 market_cache = {}
 CACHE_DURATION = 300
@@ -321,55 +327,39 @@ def fetch_yahoo_real_data(asset_name):
         if asset_name in market_cache: return market_cache[asset_name][1]
         return None
 
-def process_otc_analysis(cid, ast_name, exp_key, price, rsi, macd_line):
-    exp_map = {
-        "s5": "5 Secondi (S5)", "s10": "10 Secondi (S10)", "s15": "15 Secondi (S15)", "s30": "30 Secondi (S30)",
-        "m1": "1 Minuto (M1)", "m2": "2 Minuti (M2)", "m3": "3 Minuti (M3)", "m5": "5 Minuti (M5)",
-        "m10": "10 Minuti (M10)", "m15": "15 Minuti (M15)", "m30": "30 Minuti (M30)",
-        "h1": "1 Ora (H1)", "h4": "4 Ore (H4)", "d1": "1 Giorno (D1)"
-    }
-    
-    italian_tz = timezone(timedelta(hours=2))
-    current_it_time = datetime.now(italian_tz)
-    entry_time = (current_it_time + timedelta(minutes=1)).replace(second=0, microsecond=0).strftime('%H:%M:%S')
-
-    if rsi < 48 or macd_line > 0:
-        sig_type = "ACQUISTA (BUY)"
-        sig_emoji = "🟢"
-        trend_desc = "Rialzista (Analisi OCR) 📈"
-        pattern_name = "Candela di Rimbalzo / Spinta"
-    else:
-        sig_type = "VENDI (SELL)"
-        sig_emoji = "🔴"
-        trend_desc = "Ribassista (Analisi OCR) 📉"
-        pattern_name = "Rifiuto / Correzione Livello"
+def extract_data_from_image(image_bytes):
+    """Estrae prezzo, stima visiva RSI 9 e stima visiva MACD dall'immagine tramite Gemini Vision."""
+    try:
+        image_part = {
+            "mime_type": "image/jpeg",
+            "data": image_bytes
+        }
+        prompt = (
+            "Sei un trader professionista ed esperto di analisi tecnica. Guarda attentamente questa schermata di trading ed esegui questi passaggi:\n"
+            "1. PREZZO: Individua il box a destra del grafico principale delle candele e leggi il valore numerico esatto dell'ultima candela (es. 1.32739).\n"
+            "2. RSI (9): Guarda il pannello 'RSI 9' in basso. Osserva dove si trova la linea verde rispetto ai livelli fissi 30, 50 e 70. Calcola e stima con precisione il valore numerico da 0 a 100.\n"
+            "3. MACD: Guarda il pannello 'MACD 12 26 9' in basso e la scala numerica a destra (es. 0, 0.00177, -0.00155). Calcola la stima della posizione della linea MACD rispetto allo zero.\n"
+            "Restituisci ESCLUSIVAMENTE un oggetto JSON puro nel formato esatto:\n"
+            "{\n"
+            '  "price": 1.32739,\n'
+            '  "rsi": 52.5,\n'
+            '  "macd": 0.0002\n'
+            "}\n"
+            "Non aggiungere blocchi markdown o altro testo, solo il JSON."
+        )
+        response = gemini_model.generate_content([image_part, prompt])
+        text_res = response.text.replace("```json", "").replace("```", "").strip()
         
-    conf = round(83.0 + abs(macd_line) * 400, 1)
-    conf = min(96.0, max(72.0, conf))
-    timeframe_name = exp_map.get(exp_key, "1 Minuto (M1)")
-
-    text = "🤖 **ANALISI CLOUD VISION OCR (OTC)**\n\n"
-    text += f"💲💹 Asset: {ast_name}\n"
-    text += f"💵 Prezzo: `{price}`\n"
-    text += f"📊 Trend Rilevato: {trend_desc}\n"
-    text += f"🕯️ Pattern Candele: {pattern_name}\n"
-    text += f"🎯 Segnale: {sig_type} {sig_emoji}\n\n"
-    text += f"🛠️ Indicatori:\n"
-    text += f"• RSI (9): {rsi}\n"
-    text += f"• Linea MACD: `{macd_line}`\n\n"
-    text += f"⚖️ Affidabilità: {conf}%\n"
-    text += f"⏱️ Timeframe: {timeframe_name}\n"
-    text += f"📌 Ora Esatta Ingresso: `{entry_time}`"
-    
-    kb = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
-    
-    data = fetch_yahoo_real_data(ast_name)
-    chart_buf = generate_chart_image(data, ast_name, target_entry_time=entry_time) if data is not None else None
-    
-    if chart_buf:
-        send_photo_message(cid, chart_buf, text, kb)
-    else:
-        send_message(cid, text, kb)
+        start_idx = text_res.find('{')
+        end_idx = text_res.rfind('}')
+        if start_idx != -1 and end_idx != -1:
+            text_res = text_res[start_idx:end_idx+1]
+            
+        data = json.loads(text_res)
+        return float(data.get("price", 0)), float(data.get("rsi", 50)), float(data.get("macd", 0))
+    except Exception as e:
+        print("Errore nell'estrazione visiva avanzata:", e)
+        return None, None, None
 
 def send_category_menu(chat_id, msg_id=None):
     kb = {
@@ -475,6 +465,7 @@ def webhook():
                         send_expiry_menu(cid, ast, mid, is_otc=True)
 
                 elif val.startswith("exp_r_") or val.startswith("retry_"):
+                    # MERCATO REALE: Intatto al 100%
                     if val.startswith("exp_r_"):
                         exp_key = val.split("_")[2]
                         sel = user_selection.get(cid, {})
@@ -547,124 +538,145 @@ def webhook():
                     ast_name = sel.get("asset", "EUR/USD OTC")
                     user_otc_state[cid] = {"asset": ast_name, "expiry": exp_key}
                     kb_otc = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
-                    edit_message(cid, mid, f"📊 **Mercato OTC ({ast_name} - {exp_map.get(exp_key, exp_key)})**\n\n📸 **Invia lo screenshot del grafico** oppure inserisci **Prezzo, RSI e MACD** a mano separati da virgola.\n\n*Esempio manuale:* `1.08540, 54.2, 0.0012`", kb_otc)
+                    edit_message(cid, mid, f"📊 **Mercato OTC ({ast_name} - {exp_map.get(exp_key, exp_key)})**\n\n📷 **Invia lo screenshot del grafico** oppure digita i valori a mano (es. `1.32739, 53, 0.0002`).", kb_otc)
 
-                elif val == "back_assets":
-                    user_otc_state.pop(cid, None)
-                    api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
-                    send_category_menu(cid)
-
-            # --- GESTIONE VISIONE TRAMITE GOOGLE CLOUD VISION OCR ---
-            elif "message" in up and ("photo" in up["message"] or "document" in up["message"]):
+            elif "message" in up:
                 cid = up["message"]["chat"]["id"]
-                user_msg_id = up["message"]["message_id"]
+                msg_id_user = up["message"]["message_id"]
                 
-                api_call("deleteMessage", {"chat_id": cid, "message_id": user_msg_id})
-                
-                if cid in user_otc_state:
-                    state = user_otc_state[cid]
-                    ast_name = state["asset"]
-                    exp_key = state["expiry"]
-                    user_otc_state.pop(cid, None)
-                    
-                    wait_msg_id = send_message(cid, "🔬 *Lettura OCR Cloud Vision in corso...*")
-
-                    try:
-                        if "photo" in up["message"]:
-                            file_id = up["message"]["photo"][-1]["file_id"]
-                        else:
-                            file_id = up["message"]["document"]["file_id"]
-                            
-                        file_info_res = api_call("getFile", {"file_id": file_id})
-                        
-                        if file_info_res and file_info_res.get("ok"):
-                            file_path = file_info_res["result"]["file_path"]
-                            download_url = f"https://api.telegram.org/file/bot{TG_TOKEN}/{file_path}"
-                            
-                            img_response = requests.get(download_url, timeout=15.0)
-                            image_bytes = img_response.content
-                            
-                            # Inizializzazione client Cloud Vision OCR
-                            client = vision.ImageAnnotatorClient()
-                            image = vision.Image(content=image_bytes)
-                            response = client.text_detection(image=image)
-                            
-                            if response.error.message:
-                                raise Exception(f"Errore Vision API: {response.error.message}")
-                                
-                            texts = response.text_annotations
-                            full_text = texts[0].description if texts else ""
-                            print("OCR Estratto:\n", full_text)
-                            
-                            # Estrazione numerica intelligente tramite Regex dal testo OCR
-                            numbers = re.findall(r'\b\d{1,3}(?:[.,]\d{2,5})+\b|\b\d{1,3}\.\d+\b|\b\d{1,2}\.\d\b', full_text)
-                            
-                            # Fallback ricerca numeri generici se il pattern rigido non basta
-                            if len(numbers) < 3:
-                                numbers = re.findall(r'-?\d+[.,]?\d*', full_text)
-                                
-                            if len(numbers) >= 3:
-                                price = float(numbers[0].replace(",", "."))
-                                rsi = float(numbers[1].replace(",", "."))
-                                macd_line = float(numbers[2].replace(",", "."))
-                            else:
-                                # Valori di sicurezza predefiniti se l'OCR legge parzialmente
-                                price = 1.32739
-                                rsi = 54.2
-                                macd_line = 0.0012
-                                
-                            if wait_msg_id:
-                                api_call("deleteMessage", {"chat_id": cid, "message_id": wait_msg_id})
-                                
-                            process_otc_analysis(cid, ast_name, exp_key, price, rsi, macd_line)
-                            return "ok", 200
-                        else:
-                            if wait_msg_id:
-                                api_call("deleteMessage", {"chat_id": cid, "message_id": wait_msg_id})
-                            send_message(cid, "⚠️ Errore nel download del file.")
-                            return "ok", 200
-                    except Exception as e:
-                        print("Errore dettagliato OCR Cloud Vision:", traceback.format_exc())
-                        if wait_msg_id:
-                            api_call("deleteMessage", {"chat_id": cid, "message_id": wait_msg_id})
-                        send_message(cid, "⚠️ Estrazione non riuscita. Inserisci i valori manualmente (es: `1.32739, 54.2, 0.0012`).")
-                        return "ok", 200
-
-            # --- GESTIONE TESTO MANUALE (OTC) ---
-            elif "message" in up and "text" in up["message"]:
-                cid = up["message"]["chat"]["id"]
-                txt_msg = up["message"]["text"].strip()
-
-                if txt_msg == "/start":
-                    user_otc_state.pop(cid, None)
-                    user_selection.pop(cid, None)
-                    send_category_menu(cid)
-                    return "ok", 200
-
-                if cid in user_otc_state:
+                # MERCATO OTC: Gestione FOTO con analisi visiva avanzata e cancellazione foto DOPO l'analisi
+                if "photo" in up["message"] and cid in user_otc_state:
                     state = user_otc_state[cid]
                     ast_name = state["asset"]
                     exp_key = state["expiry"]
                     
-                    try:
-                        parts = [p.strip().replace(",", ".") for p in txt_msg.replace(" ", ",").split(",") if p.strip()]
-                        if len(parts) < 3:
-                            send_message(cid, "⚠️ Invia una **foto dello screenshot** oppure inserisci **tutti e tre i valori** (Prezzo, RSI, MACD) separati da virgola.\n*Esempio:* `1.08540, 54.2, 0.0012`")
-                            return "ok", 200
+                    photo_file_id = up["message"]["photo"][-1]["file_id"]
+                    file_info = api_call("getFile", {"file_id": photo_file_id})
+                    
+                    if file_info and file_info.get("ok"):
+                        file_path = file_info["result"]["file_path"]
+                        download_url = f"https://api.telegram.org/file/bot{TG_TOKEN}/{file_path}"
+                        img_bytes = requests.get(download_url).content
                         
-                        price = float(parts[0])
-                        rsi = float(parts[1])
-                        macd_line = float(parts[2])
+                        send_message(cid, "🔍 EasyTrack IA sta analizzando prezzo, RSI e MACD dall'immagine...")
+                        
+                        # 1. Estrazione avanzata dei dati visivi tramite Gemini
+                        price, rsi, macd_line = extract_data_from_image(img_bytes)
+                        
+                        # 2. Cancella la foto dell'utente SUBITO DOPO l'analisi
+                        api_call("deleteMessage", {"chat_id": cid, "message_id": msg_id_user})
+                        
+                        if price is None or rsi is None or price == 0:
+                            err_kb = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
+                            send_message(cid, "⚠️ Estrazione automatica non riuscita. Puoi inserire i 3 valori a mano (es. `1.32739, 53, 0.0002`)!", err_kb)
+                            return "ok", 200
                         
                         user_otc_state.pop(cid, None)
-                        process_otc_analysis(cid, ast_name, exp_key, price, rsi, macd_line)
                         
-                    except ValueError:
-                        send_message(cid, "⚠️ Valori non validi. Assicurati di inserire numeri corretti separati da virgola.\n*Esempio:* `1.08540, 54.2, 0.0012`")
-                    return "ok", 200
+                        italian_tz = timezone(timedelta(hours=2))
+                        current_it_time = datetime.now(italian_tz)
+                        entry_time = (current_it_time + timedelta(minutes=1)).replace(second=0, microsecond=0).strftime('%H:%M:%S')
 
-                send_category_menu(cid)
-                return "ok", 200
+                        if rsi < 48 or macd_line > 0:
+                            sig_type = "ACQUISTA (BUY)"
+                            sig_emoji = "🟢"
+                            trend_desc = "Rialzista (EasyTrack IA) 📈"
+                            pattern_name = "Candela di Rimbalzo / Spinta"
+                        else:
+                            sig_type = "VENDI (SELL)"
+                            sig_emoji = "🔴"
+                            trend_desc = "Ribassista (EasyTrack IA) 📉"
+                            pattern_name = "Rifiuto / Correzione Livello"
+                            
+                        conf = round(83.0 + abs(macd_line) * 400, 1)
+                        conf = min(96.0, max(72.0, conf))
+                        timeframe_name = exp_map.get(exp_key, "1 Minuto (M1)")
+
+                        text = "🤖 **ANALISI EASYTRACK OTC**\n\n"
+                        text += f"💲💹 Asset: {ast_name}\n"
+                        text += f"💵 Prezzo Rilevato: `{price}`\n"
+                        text += f"📊 Trend Rilevato: {trend_desc}\n"
+                        text += f"🕯️ Pattern Candele: {pattern_name}\n"
+                        text += f"🎯 Segnale: {sig_type} {sig_emoji}\n\n"
+                        text += f"🛠️ Indicatori Elaborati:\n"
+                        text += f"• RSI (9): {rsi}\n"
+                        text += f"• Linea MACD: `{macd_line}`\n\n"
+                        text += f"⚖️ Affidabilità: {conf}%\n"
+                        text += f"⏱️ Timeframe: {timeframe_name}\n"
+                        text += f"📌 Ora Esatta Ingresso: `{entry_time}`"
+                        
+                        kb = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
+                        send_message(cid, text, kb)
+                        return "ok", 200
+
+                # MERCATO OTC: Gestione TESTO MANUALE (Inserimento dei 3 valori a mano)
+                if "text" in up["message"]:
+                    txt_msg = up["message"]["text"].strip()
+                    if txt_msg == "/start":
+                        user_otc_state.pop(cid, None)
+                        user_selection.pop(cid, None)
+                        send_category_menu(cid)
+                        return "ok", 200
+
+                    if cid in user_otc_state:
+                        state = user_otc_state[cid]
+                        ast_name = state["asset"]
+                        exp_key = state["expiry"]
+                        
+                        try:
+                            parts = [p.strip().replace(",", ".") for p in txt_msg.replace(" ", ",").split(",") if p.strip()]
+                            if len(parts) < 3:
+                                err_kb = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
+                                send_message(cid, "⚠️ Inserisci **tutti e tre i valori** (Prezzo, RSI, MACD) separati da virgola!", err_kb)
+                                return "ok", 200
+                            
+                            price = float(parts[0])
+                            rsi = float(parts[1])
+                            macd_line = float(parts[2])
+                            
+                            user_otc_state.pop(cid, None)
+                            
+                            italian_tz = timezone(timedelta(hours=2))
+                            current_it_time = datetime.now(italian_tz)
+                            entry_time = (current_it_time + timedelta(minutes=1)).replace(second=0, microsecond=0).strftime('%H:%M:%S')
+
+                            if rsi < 48 or macd_line > 0:
+                                sig_type = "ACQUISTA (BUY)"
+                                sig_emoji = "🟢"
+                                trend_desc = "Rialzista (EasyTrack) 📈"
+                                pattern_name = "Candela di Rimbalzo / Spinta"
+                            else:
+                                sig_type = "VENDI (SELL)"
+                                sig_emoji = "🔴"
+                                trend_desc = "Ribassista (EasyTrack) 📉"
+                                pattern_name = "Rifiuto / Correzione Livello"
+                                
+                            conf = round(83.0 + abs(macd_line) * 400, 1)
+                            conf = min(96.0, max(72.0, conf))
+                            timeframe_name = exp_map.get(exp_key, "1 Minuto (M1)")
+
+                            text = "🤖 **ANALISI EASYTRACK OTC**\n\n"
+                            text += f"💲💹 Asset: {ast_name}\n"
+                            text += f"💵 Prezzo Inserito: `{price}`\n"
+                            text += f"📊 Trend Rilevato: {trend_desc}\n"
+                            text += f"🕯️ Pattern Candele: {pattern_name}\n"
+                            text += f"🎯 Segnale: {sig_type} {sig_emoji}\n\n"
+                            text += f"🛠️ Indicatori Inseriti:\n"
+                            text += f"• RSI (9): {rsi}\n"
+                            text += f"• Linea MACD: `{macd_line}`\n\n"
+                            text += f"⚖️ Affidabilità: {conf}%\n"
+                            text += f"⏱️ Timeframe: {timeframe_name}\n"
+                            text += f"📌 Ora Esatta Ingresso: `{entry_time}`"
+                            
+                            kb = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
+                            send_message(cid, text, kb)
+                        except ValueError:
+                            err_kb = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
+                            send_message(cid, "⚠️ Formato non valido. Digita i 3 valori numerici separati da virgola (es. `1.32739, 53, 0.0002`).", err_kb)
+                        return "ok", 200
+
+                    send_category_menu(cid)
+                    return "ok", 200
         except Exception as e:
             print("Errore nel webhook:", e)
     return "ok", 200
