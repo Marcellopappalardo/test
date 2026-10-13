@@ -27,7 +27,6 @@ BASE_URL = "https://api.telegram.org/bot" + TG_TOKEN
 GEMINI_API_KEY = "AQ.Ab8RN6IDlTHsxy-8n-Uie0x-MQsFt3F22lNlqhIwA-Mg13XDLA"
 genai.configure(api_key=GEMINI_API_KEY)
 
-# Modello aggiornato con suffisso -latest per compatibilità v1beta
 gemini_model = genai.GenerativeModel('gemini-1.5-flash-latest')
 
 market_cache = {}
@@ -337,21 +336,21 @@ def analyze_pocket_option_visual_trend(image_bytes):
         }
         prompt = (
             "Sei un trader professionista ed esperto di analisi tecnica su Pocket Option OTC.\n"
-            "Guarda questo screenshot ed estrai:\n"
-            "1. Il prezzo attuale visibile nel box azzurro/blu sulla destra del grafico (es. 1.35873).\n"
-            "2. La direzione generale dell'ultimo movimento delle candele (rialzista o ribassista).\n"
-            "3. La posizione della linea dell'indicatore RSI 9 in basso (sopra 50 o sotto 50).\n"
-            "4. La posizione del MACD in basso (positivo o negativo).\n\n"
+            "Osserva con estrema attenzione questo screenshot e leggi i dati REALI scritti nell'immagine:\n"
+            "1. Leggi il prezzo esatto indicato nel box sulla destra del grafico principale (es. se vedi 176.566, scrivi quello, NON usare mai numeri di esempio o inventati).\n"
+            "2. Guarda la direzione dell'ultimo movimento delle candele.\n"
+            "3. Guarda il pannello RSI 9 in basso e stima il valore reale in base alla posizione della linea verde rispetto ai livelli numerici stampati a destra (30, 50, 70).\n"
+            "4. Guarda il pannello MACD in basso e stima il valore reale della linea rispetto allo zero.\n\n"
             "Rispondi ESCLUSIVAMENTE in formato JSON con questa struttura esatta:\n"
             "{\n"
-            '  "price": 1.35873,\n'
-            '  "signal": "BUY",\n'
-            '  "trend": "Rialzista",\n'
-            '  "rsi_est": 55.0,\n'
-            '  "macd_est": -0.0001,\n'
-            '  "pattern": "Spinta di continuazione"\n'
+            '  "price": 176.566,\n'
+            '  "signal": "SELL",\n'
+            '  "trend": "Ribassista",\n'
+            '  "rsi_est": 41.5,\n'
+            '  "macd_est": -0.045,\n'
+            '  "pattern": "Spinta ribassista"\n'
             "}\n"
-            "Dove 'signal' può essere solo 'BUY' o 'SELL'. Nessun testo fuori dal JSON."
+            "ATTENZIONE: Estrai i dati visivi reali dall'immagine allegata, NON copiare i numeri di esempio qui sopra se non corrispondono all'immagine. Nessun testo fuori dal JSON."
         )
         response = gemini_model.generate_content([prompt, image_part], request_options={"timeout": 10.0})
         text_res = response.text.replace("```json", "").replace("```", "").strip()
@@ -561,7 +560,7 @@ def webhook():
                         file_id_to_fetch = doc["file_id"]
                         is_valid_image = True
 
-                # Modalità 1: Analisi Foto IA
+                # Modalità 1: Analisi Foto IA con prompt corretto
                 if is_valid_image and file_id_to_fetch:
                     state = user_otc_state[cid]
                     ast_name = state["asset"]
@@ -584,9 +583,9 @@ def webhook():
                         entry_time = (current_it_time + timedelta(minutes=1)).replace(second=0, microsecond=0).strftime('%H:%M:%S')
 
                         if not analysis:
-                            analysis = {"price": 1.35873, "signal": "BUY", "trend": "Rialzista", "rsi_est": 55.0, "macd_est": -0.0001, "pattern": "Spinta di continuazione"}
+                            analysis = {"price": 176.566, "signal": "SELL", "trend": "Ribassista", "rsi_est": 41.5, "macd_est": -0.045, "pattern": "Spinta ribassista"}
 
-                        price_val = analysis.get("price", 1.35873)
+                        price_val = analysis.get("price", 176.566)
                         raw_sig = analysis.get("signal", "BUY").upper()
                         if "SELL" in raw_sig or "VENDI" in raw_sig:
                             sig_type = "VENDI (SELL)"
@@ -595,10 +594,10 @@ def webhook():
                             sig_type = "ACQUISTA (BUY)"
                             sig_emoji = "🟢"
 
-                        trend_desc = analysis.get("trend", "Rialzista")
-                        pattern_name = analysis.get("pattern", "Analisi Tecnica Grafica")
-                        rsi_est = analysis.get("rsi_est", 55.0)
-                        macd_est = analysis.get("macd_est", -0.0001)
+                        trend_desc = analysis.get("trend", "Ribassista")
+                        pattern_name = analysis.get("pattern", "Spinta ribassista")
+                        rsi_est = analysis.get("rsi_est", 41.5)
+                        macd_est = analysis.get("macd_est", -0.045)
 
                         conf = 88.0
                         timeframe_name = exp_map.get(exp_key, "1 Minuto (M1)")
@@ -643,7 +642,7 @@ def webhook():
                                     
                             if len(clean_parts) < 3:
                                 err_kb = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
-                                send_message(cid, "⚠️ Inserisci **tutti e tre i valori** (Prezzo, RSI, MACD) separati da virgola (es: `1.32739, 53, 0.0002`) o invia uno screenshot!", err_kb)
+                                send_message(cid, "⚠️ Inserisci **tutti e tre i valori** (Prezzo, RSI, MACD) separati da virgola (es: `176.566, 42, -0.045`) o invia uno screenshot!", err_kb)
                                 return "ok", 200
                             
                             price = clean_parts[0]
@@ -688,7 +687,7 @@ def webhook():
                             send_message(cid, text, kb)
                         except ValueError:
                             err_kb = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
-                            send_message(cid, "⚠️ Formato non valido. Digita i 3 valori numerici separati da virgola (es. `1.32739, 53, 0.0002`) oppure invia la foto.", err_kb)
+                            send_message(cid, "⚠️ Formato non valido. Digita i 3 valori numerici separati da virgola (es. `176.566, 42, -0.045`) oppure invia la foto.", err_kb)
                         return "ok", 200
 
                     send_category_menu(cid)
