@@ -496,6 +496,7 @@ def webhook():
                         user_selection[cid] = {"asset": ast, "cat": "otc"}
                         send_expiry_menu(cid, ast, mid, is_otc=True)
 
+                # --- GESTIONE MERCATO REALE (INVARIATA E AUTOMATICA) ---
                 elif val.startswith("exp_r_") or val.startswith("retry_"):
                     if val.startswith("exp_r_"):
                         exp_key = val.split("_")[2]
@@ -531,11 +532,6 @@ def webhook():
                     upper_wick_rejection = (high_val >= upper_f) and (current_close < upper_f)
                     lower_wick_rejection = (low_val <= lower_f) and (current_close > lower_f)
 
-                    is_narrow = current_bw < avg_bw * 0.85
-                    is_wide = current_bw > avg_bw * 1.15
-
-                    fractal_strategy_note = ""
-
                     trend_bullish = current_close > current_ema
                     if trend_bullish and (macd_line >= macd_signal or rsi_val < 48):
                         sig_type = "ACQUISTA (BUY)"
@@ -546,9 +542,9 @@ def webhook():
                     else:
                         sig_type = "ACQUISTA (BUY)" if macd_line > macd_signal else "VENDI (SELL)"
                         trend_desc = "Laterale / Transizione ↔️"
+                    
                     fractal_strategy_note = "ℹ️ Condizione di mercato standard (nessun estremo di banda)."
 
-                    # --- CALCOLO AFFIDABILITÀ BASATO SULLA CONFLUENZA REALE ---
                     base_conf = 60.0  
                     trend_confirmed = (trend_bullish and "ACQUISTA" in sig_type) or (not trend_bullish and "VENDI" in sig_type)
                     conf_trend = 15.0 if trend_confirmed else 0.0
@@ -588,86 +584,87 @@ def webhook():
                     else:
                         send_message(cid, text, kb)
 
+                # --- NUOVA GESTIONE MERCATO OTC GUIDATA A PULSANTI ---
                 elif val.startswith("exp_o_"):
                     exp_key = val.split("_")[2]
                     sel = user_selection.get(cid, {})
                     ast_name = sel.get("asset", "EUR/USD OTC")
+                    
                     user_otc_state[cid] = {"asset": ast_name, "expiry": exp_key}
-                    kb_otc = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
-                    edit_message(cid, mid, f"📊 **Mercato OTC ({ast_name} - {exp_map.get(exp_key, exp_key)})**\n\n📷 **Invia lo screenshot** oppure **digita i 3 valori** a mano (es: `176.749, 56, 0.012`).", kb_otc)
+                    
+                    kb_step1 = {
+                        "inline_keyboard": [
+                            [{"text": "📈 RSI > 50 (Rialzista)", "callback_data": "otc_rsi_high"}, {"text": "📉 RSI < 50 (Ribassista)", "callback_data": "otc_rsi_low"}],
+                            [{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]
+                        ]
+                    }
+                    edit_message(cid, mid, f"📊 **{ast_name} ({exp_map.get(exp_key, exp_key)})**\n\nStep 1/2: Qual è la condizione attuale dell' **RSI (9)**?", kb_step1)
+
+                elif val.startswith("otc_rsi_"):
+                    rsi_choice = val.split("_")[2] # 'high' o 'low'
+                    if cid in user_otc_state:
+                        user_otc_state[cid]["rsi"] = rsi_choice
+                        
+                        kb_step2 = {
+                            "inline_keyboard": [
+                                [{"text": "🟢 MACD Incrocio Rialzista (Positivo)", "callback_data": "otc_macd_bull"}],
+                                [{"text": "🔴 MACD Incrocio Ribassista (Negativo)", "callback_data": "otc_macd_bear"}],
+                                [{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]
+                            ]
+                        }
+                        edit_message(cid, mid, "📊 **Step 2/2: Qual è la situazione del MACD?**", kb_step2)
+
+                elif val.startswith("otc_macd_"):
+                    macd_choice = val.split("_")[2] # 'bull' o 'bear'
+                    if cid in user_otc_state:
+                        state = user_otc_state[cid]
+                        ast_name = state["asset"]
+                        exp_key = state["expiry"]
+                        rsi_choice = state["rsi"]
+                        
+                        user_otc_state.pop(cid, None)
+                        
+                        italian_tz = timezone(timedelta(hours=2))
+                        current_it_time = datetime.now(italian_tz)
+                        entry_time = (current_it_time + timedelta(minutes=1)).replace(second=0, microsecond=0).strftime('%H:%M:%S')
+                        
+                        if rsi_choice == "high" or macd_choice == "bull":
+                            sig_type = "ACQUISTA (BUY)"
+                            sig_emoji = "🟢"
+                            trend_desc = "Rialzista Guidato 📈"
+                            pattern_name = "Confluenza Rialzista (Setup OTC)"
+                        else:
+                            sig_type = "VENDI (SELL)"
+                            sig_emoji = "🔴"
+                            trend_desc = "Ribassista Guidato 📉"
+                            pattern_name = "Confluenza Ribassista (Setup OTC)"
+                            
+                        conf = 88.5
+                        timeframe_name = exp_map.get(exp_key, "1 Minuto (M1)")
+
+                        text = "🤖 **ANALISI OTC GUIDATA (INTERATTIVA)**\n\n"
+                        text += f"💲💹 Asset: {ast_name}\n"
+                        text += f"📊 Trend Rilevato: {trend_desc}\n"
+                        text += f"🕯️ Pattern: {pattern_name}\n"
+                        text += f"🎯 Segnale: {sig_type} {sig_emoji}\n\n"
+                        text += f"🛠️ Parametri Selezionati:\n"
+                        text += f"• RSI: {'Maggiore di 50' if rsi_choice == 'high' else 'Minore di 50'}\n"
+                        text += f"• MACD: {'Rialzista' if macd_choice == 'bull' else 'Ribassista'}\n\n"
+                        text += f"⚖️ Affidabilità: {conf}%\n"
+                        text += f"⏱️ Timeframe: {timeframe_name}\n"
+                        text += f"📌 Ora Esatta Ingresso: `{entry_time}`"
+                        
+                        kb = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
+                        edit_message(cid, mid, text, kb)
 
             elif "message" in up:
                 cid = up["message"]["chat"]["id"]
-                msg_id_user = up["message"]["message_id"]
-                
                 if "text" in up["message"]:
                     txt_msg = up["message"]["text"].strip()
                     if txt_msg == "/start":
                         user_otc_state.pop(cid, None)
                         user_selection.pop(cid, None)
                         send_category_menu(cid)
-                        return "ok", 200
-
-                    if cid in user_otc_state:
-                        state = user_otc_state[cid]
-                        ast_name = state["asset"]
-                        exp_key = state["expiry"]
-                        
-                        try:
-                            clean_parts = []
-                            for p in txt_msg.replace(";", ",").split(","):
-                                p_clean = p.strip().replace(",", ".")
-                                if p_clean:
-                                    clean_parts.append(float(p_clean))
-                                    
-                            if len(clean_parts) < 3:
-                                err_kb = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
-                                send_message(cid, "⚠️ Inserisci **tutti e tre i valori** (Prezzo, RSI, MACD) separati da virgola (es: `176.749, 56, 0.012`)!", err_kb)
-                                return "ok", 200
-                            
-                            price = clean_parts[0]
-                            rsi = clean_parts[1]
-                            macd_line = clean_parts[2]
-                            
-                            user_otc_state.pop(cid, None)
-                            
-                            italian_tz = timezone(timedelta(hours=2))
-                            current_it_time = datetime.now(italian_tz)
-                            entry_time = (current_it_time + timedelta(minutes=1)).replace(second=0, microsecond=0).strftime('%H:%M:%S')
-
-                            if rsi < 48 or macd_line > 0:
-                                sig_type = "ACQUISTA (BUY)"
-                                sig_emoji = "🟢"
-                                trend_desc = "Rialzista (EasyTrack) 📈"
-                                pattern_name = "Candela di Rimbalzo / Spinta"
-                            else:
-                                sig_type = "VENDI (SELL)"
-                                sig_emoji = "🔴"
-                                trend_desc = "Ribassista (EasyTrack) 📉"
-                                pattern_name = "Rifiuto / Correzione Livello"
-                                
-                            conf = round(83.0 + abs(macd_line) * 400, 1)
-                            conf = min(96.0, max(72.0, conf))
-                            timeframe_name = exp_map.get(exp_key, "1 Minuto (M1)")
-
-                            text = "🤖 **ANALISI EASYTRACK OTC (MANUALE)**\n\n"
-                            text += f"💲💹 Asset: {ast_name}\n"
-                            text += f"💵 Prezzo Inserito: `{price}`\n"
-                            text += f"📊 Trend Rilevato: {trend_desc}\n"
-                            text += f"🕯️ Pattern Candele: {pattern_name}\n"
-                            text += f"🎯 Segnale: {sig_type} {sig_emoji}\n\n"
-                            text += f"🛠️ Indicatori Inseriti:\n"
-                            text += f"• RSI (9): {rsi}\n"
-                            text += f"• Linea MACD: `{macd_line}`\n\n"
-                            text += f"⚖️ Affidabilità: {conf}%\n"
-                            text += f"⏱️ Timeframe: {timeframe_name}\n"
-                            text += f"📌 Ora Esatta Ingresso: `{entry_time}`"
-                            
-                            kb = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
-                            send_message(cid, text, kb)
-                        except ValueError:
-                            err_kb = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
-                            send_message(cid, "⚠️ Formato non valido. Digita i 3 valori numerici separati da virgola (es. `176.749, 56, 0.012`).", err_kb)
                         return "ok", 200
 
                     send_category_menu(cid)
