@@ -27,6 +27,7 @@ BASE_URL = "https://api.telegram.org/bot" + TG_TOKEN
 GEMINI_API_KEY = "AQ.Ab8RN6IDlTHsxy-8n-Uie0x-MQsFt3F22lNlqhIwA-Mg13XDLA"
 genai.configure(api_key=GEMINI_API_KEY)
 
+# Usiamo gemini-1.5-flash corretto
 gemini_model = genai.GenerativeModel('gemini-1.5-flash')
 
 market_cache = {}
@@ -329,21 +330,21 @@ def fetch_yahoo_real_data(asset_name):
         return None
 
 def extract_pocket_option_ocr(image_bytes):
-    """Estrae i dati visivi leggendo direttamente dalla schermata Pocket Option."""
     try:
+        # Conversione corretta dell'immagine per la libreria google-generativeai
         image_part = {
             "mime_type": "image/jpeg",
             "data": image_bytes
         }
         prompt = (
-            "Sei un trader professionista ed esperto di grafici di Pocket Option.\n"
-            "Guarda questo screenshot:\n"
-            "1. Leggi il prezzo attuale nel box a destra del grafico principale (es. 1.32739).\n"
-            "2. Guarda il pannello 'RSI 9' in basso: stima il valore numerico da 0 a 100 in base alla posizione della linea verde rispetto ai livelli 30, 50, 70.\n"
-            "3. Guarda il pannello 'MACD 12 26 9' in basso: stima il valore numerico della linea MACD rispetto allo zero.\n"
-            "Restituisci esattamente i tre valori numerici separati da virgola (es: 1.32739, 53, 0.0002)."
+            "Analizza questo screenshot di Pocket Option.\n"
+            "Estrai tre valori numerici separati da virgola:\n"
+            "1. Prezzo attuale dal box a destra.\n"
+            "2. Valore numerico stimato dell'RSI 9.\n"
+            "3. Valore numerico stimato del MACD.\n"
+            "Scrivi SOLO i tre numeri separati da virgola (es: 1.32739, 53, 0.0002)."
         )
-        response = gemini_model.generate_content([image_part, prompt])
+        response = gemini_model.generate_content([prompt, image_part])
         text_res = response.text.strip()
         print("OCR Pocket Option grezzo:", text_res)
         
@@ -548,7 +549,6 @@ def webhook():
                         file_id_to_fetch = doc["file_id"]
                         is_valid_image = True
 
-                # Modalità 1: Lettura Screenshot Pocket Option
                 if is_valid_image and file_id_to_fetch:
                     state = user_otc_state[cid]
                     ast_name = state["asset"]
@@ -561,7 +561,7 @@ def webhook():
                         download_url = f"https://api.telegram.org/file/bot{TG_TOKEN}/{file_path}"
                         img_bytes = requests.get(download_url).content
                         
-                        send_message(cid, "🔍 EasyTrack IA sta leggendo lo screenshot di Pocket Option...")
+                        send_message(cid, "🔍 EasyTrack IA sta analizzando lo screenshot...")
                         price, rsi, macd_line = extract_pocket_option_ocr(img_bytes)
                         
                         api_call("deleteMessage", {"chat_id": cid, "message_id": msg_id_user})
@@ -609,7 +609,6 @@ def webhook():
                         send_message(cid, text, kb)
                         return "ok", 200
 
-                # Modalità 2: Inserimento Testuale Manuale
                 if "text" in up["message"]:
                     txt_msg = up["message"]["text"].strip()
                     if txt_msg == "/start":
