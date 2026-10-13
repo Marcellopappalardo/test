@@ -3,6 +3,7 @@ import json
 import math
 import time
 import io
+import re
 import traceback
 import matplotlib
 matplotlib.use('Agg')
@@ -328,37 +329,29 @@ def fetch_yahoo_real_data(asset_name):
         return None
 
 def extract_data_from_image(image_bytes):
-    """Calcola e stima visivamente prezzo (ultima candela chiusa), RSI e MACD dall'immagine."""
+    """Stima visiva intelligente basata sulla posizione delle linee e della scala dei prezzi."""
     try:
         image_part = {
             "mime_type": "image/jpeg",
             "data": image_bytes
         }
         prompt = (
-            "Sei un trader professionista ed esperto di analisi tecnica. Guarda questa schermata ed esegui una stima geometrica e visiva:\n"
-            "1. 'price': stima il prezzo esatto dell'ultima candela chiusa o corrente confrontando la sua posizione verticale con la scala numerica dell'asse dei prezzi a destra (es. 1.32739).\n"
-            "2. 'rsi': stima il valore dell'RSI 9 (da 0 a 100) guardando dove si trova la linea verde rispetto alle linee fisse 30, 50, 70.\n"
-            "3. 'macd': stima il valore della linea MACD nel pannello in basso rispetto allo zero.\n"
-            "Restituisci ESCLUSIVAMENTE un oggetto JSON puro in questo formato esatto:\n"
-            "{\n"
-            '  "price": 1.32739,\n'
-            '  "rsi": 50.0,\n'
-            '  "macd": 0.0001\n'
-            "}\n"
-            "Nessun testo aggiuntivo o markdown."
+            "Sei un trader professionista. Analizza questa schermata ed effettua una stima visiva geometrica:\n"
+            "1. Prezzo dell'ultima candela (confrontando la sua altezza con la scala verticale a destra).\n"
+            "2. Valore numerico stimato dell'RSI 9 (da 0 a 100 in base alla posizione della linea verde rispetto a 30, 50, 70).\n"
+            "3. Valore numerico stimato della linea MACD nel pannello in basso rispetto allo zero.\n"
+            "Rispondi indicando solo i tre valori numerici separati da virgola (es: 1.32739, 53, 0.0002)."
         )
         response = gemini_model.generate_content([image_part, prompt])
-        text_res = response.text.replace("```json", "").replace("```", "").strip()
+        text_res = response.text.strip()
+        print("Risposta visiva Gemini:", text_res)
         
-        start_idx = text_res.find('{')
-        end_idx = text_res.rfind('}')
-        if start_idx != -1 and end_idx != -1:
-            text_res = text_res[start_idx:end_idx+1]
-            
-        data = json.loads(text_res)
-        return float(data.get("price", 0)), float(data.get("rsi", 50)), float(data.get("macd", 0))
+        numbers = re.findall(r'-?\d+\.\d+|-?\d+', text_res.replace(',', '.'))
+        if len(numbers) >= 3:
+            return float(numbers[0]), float(numbers[1]), float(numbers[2])
+        return None, None, None
     except Exception as e:
-        print("Errore nell'interpretazione visiva:", e)
+        print("Errore nell'estrazione visiva:", e)
         return None, None, None
 
 def send_category_menu(chat_id, msg_id=None):
@@ -555,7 +548,7 @@ def webhook():
                         file_id_to_fetch = doc["file_id"]
                         is_valid_image = True
 
-                # Modalità 1: Interpretazione visiva IA (Prezzo, RSI, MACD stimati dalla posizione)
+                # Modalità 1: Stima visiva automatica
                 if is_valid_image and file_id_to_fetch:
                     state = user_otc_state[cid]
                     ast_name = state["asset"]
@@ -568,14 +561,14 @@ def webhook():
                         download_url = f"https://api.telegram.org/file/bot{TG_TOKEN}/{file_path}"
                         img_bytes = requests.get(download_url).content
                         
-                        send_message(cid, "🔍 EasyTrack IA sta stimando prezzo e indicatori dalle linee e dalla scala...")
+                        send_message(cid, "🔍 EasyTrack IA sta stimando prezzo e indicatori...")
                         price, rsi, macd_line = extract_data_from_image(img_bytes)
                         
                         api_call("deleteMessage", {"chat_id": cid, "message_id": msg_id_user})
                         
                         if price is None or rsi is None or price == 0:
                             err_kb = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
-                            send_message(cid, "⚠️ Impossibile stimare i dati. **Digita i 3 valori a mano** in chat separati da virgola (es: `1.32739, 53, 0.0002`)!", err_kb)
+                            send_message(cid, "⚠️ Stima automatica non riuscita. **Digita i 3 valori a mano** in chat separati da virgola (es: `1.32739, 53, 0.0002`)!", err_kb)
                             return "ok", 200
                         
                         user_otc_state.pop(cid, None)
