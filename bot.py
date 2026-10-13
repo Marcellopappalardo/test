@@ -328,24 +328,24 @@ def fetch_yahoo_real_data(asset_name):
         return None
 
 def extract_data_from_image(image_bytes):
-    """Estrae prezzo, stima visiva RSI 9 e stima visiva MACD dall'immagine tramite Gemini Vision."""
+    """Calcola e stima visivamente prezzo (ultima candela chiusa), RSI e MACD dall'immagine."""
     try:
         image_part = {
             "mime_type": "image/jpeg",
             "data": image_bytes
         }
         prompt = (
-            "Sei un trader professionista ed esperto di analisi tecnica. Guarda attentamente questa schermata di trading ed esegui questi passaggi:\n"
-            "1. PREZZO: Individua il box a destra del grafico principale delle candele e leggi il valore numerico esatto dell'ultima candela (es. 1.32739).\n"
-            "2. RSI (9): Guarda il pannello 'RSI 9' in basso. Osserva dove si trova la linea verde rispetto ai livelli fissi 30, 50 e 70. Calcola e stima con precisione il valore numerico da 0 a 100.\n"
-            "3. MACD: Guarda il pannello 'MACD 12 26 9' in basso e la scala numerica a destra (es. 0, 0.00177, -0.00155). Calcola la stima della posizione della linea MACD rispetto allo zero.\n"
-            "Restituisci ESCLUSIVAMENTE un oggetto JSON puro nel formato esatto:\n"
+            "Sei un trader professionista ed esperto di analisi tecnica. Guarda questa schermata ed esegui una stima geometrica e visiva:\n"
+            "1. 'price': stima il prezzo esatto dell'ultima candela chiusa o corrente confrontando la sua posizione verticale con la scala numerica dell'asse dei prezzi a destra (es. 1.32739).\n"
+            "2. 'rsi': stima il valore dell'RSI 9 (da 0 a 100) guardando dove si trova la linea verde rispetto alle linee fisse 30, 50, 70.\n"
+            "3. 'macd': stima il valore della linea MACD nel pannello in basso rispetto allo zero.\n"
+            "Restituisci ESCLUSIVAMENTE un oggetto JSON puro in questo formato esatto:\n"
             "{\n"
             '  "price": 1.32739,\n'
-            '  "rsi": 52.5,\n'
-            '  "macd": 0.0002\n'
+            '  "rsi": 50.0,\n'
+            '  "macd": 0.0001\n'
             "}\n"
-            "Non aggiungere blocchi markdown o altro testo, solo il JSON."
+            "Nessun testo aggiuntivo o markdown."
         )
         response = gemini_model.generate_content([image_part, prompt])
         text_res = response.text.replace("```json", "").replace("```", "").strip()
@@ -358,7 +358,7 @@ def extract_data_from_image(image_bytes):
         data = json.loads(text_res)
         return float(data.get("price", 0)), float(data.get("rsi", 50)), float(data.get("macd", 0))
     except Exception as e:
-        print("Errore nell'estrazione visiva avanzata:", e)
+        print("Errore nell'interpretazione visiva:", e)
         return None, None, None
 
 def send_category_menu(chat_id, msg_id=None):
@@ -465,7 +465,6 @@ def webhook():
                         send_expiry_menu(cid, ast, mid, is_otc=True)
 
                 elif val.startswith("exp_r_") or val.startswith("retry_"):
-                    # MERCATO REALE: Intatto al 100%
                     if val.startswith("exp_r_"):
                         exp_key = val.split("_")[2]
                         sel = user_selection.get(cid, {})
@@ -538,37 +537,45 @@ def webhook():
                     ast_name = sel.get("asset", "EUR/USD OTC")
                     user_otc_state[cid] = {"asset": ast_name, "expiry": exp_key}
                     kb_otc = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
-                    edit_message(cid, mid, f"📊 **Mercato OTC ({ast_name} - {exp_map.get(exp_key, exp_key)})**\n\n📷 **Invia lo screenshot del grafico** oppure digita i valori a mano (es. `1.32739, 53, 0.0002`).", kb_otc)
+                    edit_message(cid, mid, f"📊 **Mercato OTC ({ast_name} - {exp_map.get(exp_key, exp_key)})**\n\n📷 **Invia lo screenshot** oppure **digita i 3 valori** a mano separati da virgola (es: `1.32739, 53, 0.0002`).", kb_otc)
 
             elif "message" in up:
                 cid = up["message"]["chat"]["id"]
                 msg_id_user = up["message"]["message_id"]
                 
-                # MERCATO OTC: Gestione FOTO con analisi visiva avanzata e cancellazione foto DOPO l'analisi
+                is_valid_image = False
+                file_id_to_fetch = None
+                
                 if "photo" in up["message"] and cid in user_otc_state:
+                    file_id_to_fetch = up["message"]["photo"][-1]["file_id"]
+                    is_valid_image = True
+                elif "document" in up["message"] and cid in user_otc_state:
+                    doc = up["message"]["document"]
+                    if doc.get("mime_type", "").startswith("image/"):
+                        file_id_to_fetch = doc["file_id"]
+                        is_valid_image = True
+
+                # Modalità 1: Interpretazione visiva IA (Prezzo, RSI, MACD stimati dalla posizione)
+                if is_valid_image and file_id_to_fetch:
                     state = user_otc_state[cid]
                     ast_name = state["asset"]
                     exp_key = state["expiry"]
                     
-                    photo_file_id = up["message"]["photo"][-1]["file_id"]
-                    file_info = api_call("getFile", {"file_id": photo_file_id})
+                    file_info = api_call("getFile", {"file_id": file_id_to_fetch})
                     
                     if file_info and file_info.get("ok"):
                         file_path = file_info["result"]["file_path"]
                         download_url = f"https://api.telegram.org/file/bot{TG_TOKEN}/{file_path}"
                         img_bytes = requests.get(download_url).content
                         
-                        send_message(cid, "🔍 EasyTrack IA sta analizzando prezzo, RSI e MACD dall'immagine...")
-                        
-                        # 1. Estrazione avanzata dei dati visivi tramite Gemini
+                        send_message(cid, "🔍 EasyTrack IA sta stimando prezzo e indicatori dalle linee e dalla scala...")
                         price, rsi, macd_line = extract_data_from_image(img_bytes)
                         
-                        # 2. Cancella la foto dell'utente SUBITO DOPO l'analisi
                         api_call("deleteMessage", {"chat_id": cid, "message_id": msg_id_user})
                         
                         if price is None or rsi is None or price == 0:
                             err_kb = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
-                            send_message(cid, "⚠️ Estrazione automatica non riuscita. Puoi inserire i 3 valori a mano (es. `1.32739, 53, 0.0002`)!", err_kb)
+                            send_message(cid, "⚠️ Impossibile stimare i dati. **Digita i 3 valori a mano** in chat separati da virgola (es: `1.32739, 53, 0.0002`)!", err_kb)
                             return "ok", 200
                         
                         user_otc_state.pop(cid, None)
@@ -594,11 +601,11 @@ def webhook():
 
                         text = "🤖 **ANALISI EASYTRACK OTC**\n\n"
                         text += f"💲💹 Asset: {ast_name}\n"
-                        text += f"💵 Prezzo Rilevato: `{price}`\n"
+                        text += f"💵 Prezzo Stimato: `{price}`\n"
                         text += f"📊 Trend Rilevato: {trend_desc}\n"
                         text += f"🕯️ Pattern Candele: {pattern_name}\n"
                         text += f"🎯 Segnale: {sig_type} {sig_emoji}\n\n"
-                        text += f"🛠️ Indicatori Elaborati:\n"
+                        text += f"🛠️ Indicatori Stimati dall'IA:\n"
                         text += f"• RSI (9): {rsi}\n"
                         text += f"• Linea MACD: `{macd_line}`\n\n"
                         text += f"⚖️ Affidabilità: {conf}%\n"
@@ -609,7 +616,7 @@ def webhook():
                         send_message(cid, text, kb)
                         return "ok", 200
 
-                # MERCATO OTC: Gestione TESTO MANUALE (Inserimento dei 3 valori a mano)
+                # Modalità 2: Inserimento Testuale Manuale
                 if "text" in up["message"]:
                     txt_msg = up["message"]["text"].strip()
                     if txt_msg == "/start":
@@ -624,15 +631,20 @@ def webhook():
                         exp_key = state["expiry"]
                         
                         try:
-                            parts = [p.strip().replace(",", ".") for p in txt_msg.replace(" ", ",").split(",") if p.strip()]
-                            if len(parts) < 3:
+                            clean_parts = []
+                            for p in txt_msg.replace(";", ",").split(","):
+                                p_clean = p.strip().replace(",", ".")
+                                if p_clean:
+                                    clean_parts.append(float(p_clean))
+                                    
+                            if len(clean_parts) < 3:
                                 err_kb = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
-                                send_message(cid, "⚠️ Inserisci **tutti e tre i valori** (Prezzo, RSI, MACD) separati da virgola!", err_kb)
+                                send_message(cid, "⚠️ Inserisci **tutti e tre i valori** (Prezzo, RSI, MACD) separati da virgola (es: `1.32739, 53, 0.0002`)!", err_kb)
                                 return "ok", 200
                             
-                            price = float(parts[0])
-                            rsi = float(parts[1])
-                            macd_line = float(parts[2])
+                            price = clean_parts[0]
+                            rsi = clean_parts[1]
+                            macd_line = clean_parts[2]
                             
                             user_otc_state.pop(cid, None)
                             
