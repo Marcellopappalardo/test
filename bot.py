@@ -17,12 +17,13 @@ import numpy as np
 import PIL.Image
 
 # ==========================================
-# CONFIGURAZIONE GOOGLE GEMINI PRO (SDK NUOVO)
+# CONFIGURAZIONE GOOGLE GEMINI PRO
 # ==========================================
-from google import genai
+import google.generativeai as genai
 
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
+# Chiave API configurata direttamente
+GEMINI_API_KEY = "AQ.Ab8RN6IDlTHsxy-8n-Uie0x-MQsFt3F22lNlqhIwA-Mg13XDLA"
+genai.configure(api_key=GEMINI_API_KEY)
 
 app = Flask(__name__)
 
@@ -439,7 +440,7 @@ def send_expiry_menu(chat_id, asset_name, msg_id, is_otc=False):
 
 @app.route('/')
 def index():
-    return "Bot OTC attivo con Gemini 2.5 Pro!", 200
+    return "Bot OTC attivo con Gemini Pro!", 200
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -559,7 +560,7 @@ def webhook():
                     kb_otc = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
                     edit_message(cid, mid, f"📊 **Mercato OTC ({ast_name} - {exp_map.get(exp_key, exp_key)})**\n\n📸 **Invia lo screenshot del grafico** oppure inserisci i valori a mano.\n\n*Esempio:* `1.32739, 54.2, 0.00045`", kb_otc)
 
-            # --- GESTIONE AUTOMATICA FOTO (OTC) CON GEMINI 2.5 PRO ---
+            # --- GESTIONE AUTOMATICA FOTO (OTC) CON GEMINI PRO ---
             elif "message" in up and ("photo" in up["message"] or "document" in up["message"]):
                 cid = up["message"]["chat"]["id"]
                 user_msg_id = up["message"]["message_id"]
@@ -572,7 +573,7 @@ def webhook():
                     exp_key = state["expiry"]
                     user_otc_state.pop(cid, None)
                     
-                    wait_msg_id = send_message(cid, "🧠 *Gemini 2.5 Pro sta leggendo il grafico e stimando i valori degli indicatori...*")
+                    wait_msg_id = send_message(cid, "🧠 *Gemini Pro sta leggendo il grafico e stimando i valori degli indicatori...*")
 
                     try:
                         if "photo" in up["message"]:
@@ -600,10 +601,8 @@ def webhook():
                             {"price": 1.32739, "rsi": 54.2, "macd_line": 0.00045}
                             """
                             
-                            response = client.models.generate_content(
-                                model='gemini-2.5-pro',
-                                contents=[prompt, img_pil]
-                            )
+                            model = genai.GenerativeModel('gemini-1.5-pro')
+                            response = model.generate_content([prompt, img_pil])
                             text_res = response.text.strip()
                             
                             text_res = re.sub(r'```json\s*', '', text_res)
