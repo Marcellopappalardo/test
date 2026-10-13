@@ -25,7 +25,12 @@ BASE_URL = "https://api.telegram.org/bot" + TG_TOKEN
 # CONFIGURAZIONE GEMINI API KEY INSERITA
 GEMINI_API_KEY = "AQ.Ab8RN6IDlTHsxy-8n-Uie0x-MQsFt3F22lNlqhIwA-Mg13XDLA"
 genai.configure(api_key=GEMINI_API_KEY)
-gemini_model = genai.GenerativeModel('gemini-1.5-flash')
+
+# Configuriamo il modello forzando l'output JSON pulito
+gemini_model = genai.GenerativeModel(
+    'gemini-1.5-flash',
+    generation_config={"response_mime_type": "application/json"}
+)
 
 market_cache = {}
 CACHE_DURATION = 300
@@ -327,23 +332,21 @@ def fetch_yahoo_real_data(asset_name):
         return None
 
 def extract_data_from_image(image_bytes):
-    """Usa Gemini Vision per estrarre il prezzo dell'ultima candela e stimare visivamente RSI e MACD."""
+    """Analisi visiva avanzata: calcola e stima prezzo, RSI e MACD dai grafici dell'immagine."""
     try:
         image_part = {
             "mime_type": "image/jpeg",
             "data": image_bytes
         }
         prompt = (
-            "Analizza accuratamente questa schermata di trading:\n"
-            "1. Estrai il PREZZO dell'ultima candela chiusa o del livello corrente dal riquadro visibile sul grafico (es. 1.32739).\n"
-            "2. Osserva il pannello 'RSI 9' in basso: stima il valore numerico (da 0 a 100) basandoti sulla posizione della linea verde rispetto ai livelli 30, 50, 70.\n"
-            "3. Osserva il pannello 'MACD' in basso: stima se la linea/istogramma è sopra la linea dello zero (valore positivo, es. 0.0005) o sotto (valore negativo, es. -0.0005).\n"
-            "Rispondi ESCLUSIVAMENTE in formato JSON valido come questo: "
-            "{\"price\": 1.32739, \"rsi\": 48.5, \"macd\": -0.0002}. Nessun altro commento o Markdown."
+            "Sei un assistente IA esperto di trading. Analizza accuratamente questa schermata ed estrai i tre dati richiesti:\n"
+            "1. 'price': leggi con esattezza il valore numerico del prezzo dell'ultima candela o livello corrente dal riquadro blu/nero sulla destra del grafico principale.\n"
+            "2. 'rsi': osserva il pannello 'RSI 9' in basso. Calcola e stima matematicamente il valore numerico esatto (da 0 a 100) basandoti sull'altezza della linea verde rispetto alle linee guida 30, 50 e 70.\n"
+            "3. 'macd': osserva il pannello 'MACD 12 26 9' in basso e la scala numerica sulla destra. Calcola e stima matematicamente il valore numerico della linea MACD in base alla sua posizione rispetto allo zero.\n"
+            "Restituisci esclusivamente un oggetto JSON con le chiavi esatte: {\"price\": 0.0, \"rsi\": 50.0, \"macd\": 0.0}"
         )
         response = gemini_model.generate_content([image_part, prompt])
-        clean_text = response.text.replace("```json", "").replace("```", "").strip()
-        data = json.loads(clean_text)
+        data = json.loads(response.text)
         return float(data.get("price", 0)), float(data.get("rsi", 50)), float(data.get("macd", 0))
     except Exception as e:
         print("Errore nell'estrazione visiva EasyTrack:", e)
@@ -526,13 +529,13 @@ def webhook():
                     ast_name = sel.get("asset", "EUR/USD OTC")
                     user_otc_state[cid] = {"asset": ast_name, "expiry": exp_key}
                     kb_otc = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
-                    edit_message(cid, mid, f"📊 **Mercato OTC ({ast_name} - {exp_map.get(exp_key, exp_key)})**\n\n📷 **Invia lo screenshot del grafico** oppure digita i valori a mano.\n\n*(EasyTrack IA interpreterà prezzo, RSI9 e MACD in entrambi i casi)*", kb_otc)
+                    edit_message(cid, mid, f"📊 **Mercato OTC ({ast_name} - {exp_map.get(exp_key, exp_key)})**\n\n📷 **Invia lo screenshot del grafico** oppure digita i valori a mano.\n\n*(EasyTrack IA ricaverà prezzo, RSI9 e MACD direttamente dall'immagine)*", kb_otc)
 
             elif "message" in up:
                 cid = up["message"]["chat"]["id"]
                 msg_id_user = up["message"]["message_id"]
                 
-                # MERCATO OTC: Gestione FOTO con analisi EasyTrack e successiva eliminazione
+                # MERCATO OTC: Gestione FOTO con calcolo visivo/matematico ed eliminazione foto
                 if "photo" in up["message"] and cid in user_otc_state:
                     state = user_otc_state[cid]
                     ast_name = state["asset"]
@@ -546,7 +549,7 @@ def webhook():
                         download_url = f"https://api.telegram.org/file/bot{TG_TOKEN}/{file_path}"
                         img_bytes = requests.get(download_url).content
                         
-                        send_message(cid, "🔍 EasyTrack IA sta analizzando l'immagine...")
+                        send_message(cid, "🔍 EasyTrack IA sta elaborando i dati dall'immagine...")
                         
                         price, rsi, macd_line = extract_data_from_image(img_bytes)
                         api_call("deleteMessage", {"chat_id": cid, "message_id": msg_id_user})
@@ -579,13 +582,13 @@ def webhook():
 
                         text = "🤖 **ANALISI EASYTRACK OTC**\n\n"
                         text += f"💲💹 Asset: {ast_name}\n"
-                        text += f"💵 Prezzo Estratto dal Grafico: `{price}`\n"
+                        text += f"💵 Prezzo Rilevato: `{price}`\n"
                         text += f"📊 Trend Rilevato: {trend_desc}\n"
                         text += f"🕯️ Pattern Candele: {pattern_name}\n"
                         text += f"🎯 Segnale: {sig_type} {sig_emoji}\n\n"
-                        text += f"🛠️ Indicatori Calcolati Visivamente:\n"
-                        text += f"• RSI (9) Stimato: {rsi}\n"
-                        text += f"• Linea MACD Stimata: `{macd_line}`\n\n"
+                        text += f"🛠️ Indicatori Elaborati dall'IA:\n"
+                        text += f"• RSI (9): {rsi}\n"
+                        text += f"• Linea MACD: `{macd_line}`\n\n"
                         text += f"⚖️ Affidabilità: {conf}%\n"
                         text += f"⏱️ Timeframe: {timeframe_name}\n"
                         text += f"📌 Ora Esatta Ingresso: `{entry_time}`"
