@@ -120,6 +120,22 @@ def detect_candlestick_pattern(df):
     except:
         return "Analisi Pattern Standard"
 
+def calculate_fractal_chaos_bands(df, period=2):
+    highs = df['High']
+    lows = df['Low']
+    if isinstance(highs, pd.DataFrame):
+        highs = highs.iloc[:, 0]
+    if isinstance(lows, pd.DataFrame):
+        lows = lows.iloc[:, 0]
+
+    upper_band = highs.rolling(window=(period * 2 + 1), center=True).max()
+    lower_band = lows.rolling(window=(period * 2 + 1), center=True).min()
+    
+    upper_band = upper_band.bfill().ffill()
+    lower_band = lower_band.bfill().ffill()
+    
+    return upper_band, lower_band
+
 def calculate_indicators(df):
     close = df['Close']
     if isinstance(close, pd.DataFrame):
@@ -146,7 +162,17 @@ def calculate_indicators(df):
     ema20 = close.ewm(span=20, adjust=False).mean()
     current_ema = round(float(ema20.iloc[-1]), 5)
     
-    return current_rsi, m_line, m_sig, m_hist, current_close, current_ema
+    upper_f, lower_f = calculate_fractal_chaos_bands(df, period=2)
+    current_upper_f = float(upper_f.iloc[-1])
+    current_lower_f = float(lower_f.iloc[-1])
+
+    # Analisi ampiezza bande (Fractal Chaos Bands Width)
+    band_width = upper_f - lower_f
+    avg_band_width = band_width.rolling(window=20, min_periods=1).mean()
+    current_bw = float(band_width.iloc[-1])
+    avg_bw = float(avg_band_width.iloc[-1])
+
+    return current_rsi, m_line, m_sig, m_hist, current_close, current_ema, current_upper_f, current_lower_f, current_bw, avg_bw
 
 def generate_chart_image(df, asset_name, target_entry_time=None):
     try:
@@ -169,9 +195,13 @@ def generate_chart_image(df, asset_name, target_entry_time=None):
 
         close_series = df_clean['Close'].iloc[:, 0] if isinstance(df_clean['Close'], pd.DataFrame) else df_clean['Close']
         ema20_full = close_series.ewm(span=20, adjust=False).mean()
+        
+        upper_f_full, lower_f_full = calculate_fractal_chaos_bands(df_clean, period=2)
 
         df_plot = df_clean.tail(30).copy()
         ema20_plot = ema20_full.tail(30)
+        upper_f_plot = upper_f_full.tail(30)
+        lower_f_plot = lower_f_full.tail(30)
 
         market_colors = mpf.make_marketcolors(
             up='#00E676', down='#FF5252', 
@@ -183,12 +213,16 @@ def generate_chart_image(df, asset_name, target_entry_time=None):
             facecolor='#1e1e1e', edgecolor='#333333', figcolor='#1e1e1e'
         )
 
-        add_plots = [mpf.make_addplot(ema20_plot, color='#FFC107', width=1.5, linestyle='--')]
+        add_plots = [
+            mpf.make_addplot(ema20_plot, color='#FFC107', width=1.5, linestyle='--'),
+            mpf.make_addplot(upper_f_plot, color='#00BCD4', width=1.2, linestyle='-'), 
+            mpf.make_addplot(lower_f_plot, color='#00BCD4', width=1.2, linestyle='-')  
+        ]
 
         buf = io.BytesIO()
         fig, axes = mpf.plot(
             df_plot, type='candle', style=custom_style, addplot=add_plots,
-            title=f"\nAnalisi Tecnica: {asset_name}", volume=False,
+            title=f"\nAnalisi Tecnica + Fractal Chaos Bands (P2): {asset_name}", volume=False,
             figsize=(8, 4.5), returnfig=True, panel_ratios=(1,)
         )
         fig.savefig(buf, format='png', facecolor='#1e1e1e', edgecolor='none', bbox_inches='tight', dpi=100)
@@ -494,35 +528,85 @@ def webhook():
                     next_entry_dt = current_it_time + timedelta(minutes=1)
                     entry_time = next_entry_dt.replace(second=0, microsecond=0).strftime('%H:%M:%S')
                     
-                    rsi_val, macd_line, macd_signal, macd_hist, current_close, current_ema = calculate_indicators(data)
+                    rsi_val, macd_line, macd_signal, macd_hist, current_close, current_ema, upper_f, lower_f, current_bw, avg_bw = calculate_indicators(data)
                     pattern_name = detect_candlestick_pattern(data)
                     
-                    trend_bullish = current_close > current_ema
-                    if trend_bullish and (macd_line >= macd_signal or rsi_val < 48):
-                        sig_type = "ACQUISTA (BUY)"
-                        trend_desc = "Rialzista Forte 📈"
-                    elif not trend_bullish and (macd_line <= macd_signal or rsi_val > 52):
+                    # Dati ultima candela per calcolo OMBRE (Wick Rejection)
+                    last_candle = data.iloc[-1]
+                    high_val = float(last_candle['High'])
+                    low_val = float(last_candle['Low'])
+                    open_val = float(last_candle['Open'])
+
+                    # 1. Analisi Rifiuto con Ombra (Puntatura delle bande)
+                    upper_wick_rejection = (high_val >= upper_f) and (current_close < upper_f)
+                    lower_wick_rejection = (low_val <= lower_f) and (current_close > lower_f)
+
+                    # 2. Analisi Volatilità delle Bande
+                    is_narrow = current_bw < avg_bw * 0.85
+                    is_wide = current_bw > avg_bw * 1.15
+
+                    fractal_strategy_note = ""
+
+                    # LOGICA DI DECISIONE AVANZATA:
+                    if upper_wick_rejection:
                         sig_type = "VENDI (SELL)"
-                        trend_desc = "Ribassista Forte 📉"
+                        trend_desc = "Rifiuto Frattale con Ombra (Puntatura Superiore 📍)"
+                        fractal_strategy_note = "📌 L'ombra ha punto il massimo frattale ed è rientrata: forte segnale di ritracciamento/inversione ribassista."
+                    elif lower_wick_rejection:
+                        sig_type = "ACQUISTA (BUY)"
+                        trend_desc = "Rimbalzo Frattale con Ombra (Puntatura Inferiore 📍)"
+                        fractal_strategy_note = "📌 L'ombra ha punto il minimo frattale ed è rientrata: forte segnale di rimbalzo/inversione rialzista."
+                    elif is_narrow and current_close >= upper_f * 0.9995:
+                        sig_type = "ACQUISTA (BUY)"
+                        trend_desc = "Rialzista - Bande Strette (Breakout Continuazione 🚀)"
+                        fractal_strategy_note = "✅ Bande strette con breakout superiore: Ottimale per continuazione di trend (1-3m)."
+                    elif is_narrow and current_close <= lower_f * 1.0005:
+                        sig_type = "VENDI (SELL)"
+                        trend_desc = "Ribassista - Bande Strette (Breakout Continuazione 🚀)"
+                        fractal_strategy_note = "✅ Bande strette con breakout inferiore: Ottimale per continuazione di trend (1-3m)."
+                    elif is_wide and (current_close >= upper_f * 0.998 or current_close <= lower_f * 1.002):
+                        if current_close >= upper_f * 0.998:
+                            sig_type = "VENDI (SELL)"
+                            trend_desc = "Esaurimento - Bande Larghe (Ritracciamento Rientro 📉)"
+                            fractal_strategy_note = "⚠️ Bande larghe e test della banda superiore: Possibile esaurimento spinta e rientro nel range."
+                        else:
+                            sig_type = "ACQUISTA (BUY)"
+                            trend_desc = "Esaurimento - Bande Larghe (Ritracciamento Rientro 📈)"
+                            fractal_strategy_note = "⚠️ Bande larghe e test della banda inferiore: Possibile esaurimento spinta e rientro nel range."
                     else:
-                        sig_type = "ACQUISTA (BUY)" if macd_line > macd_signal else "VENDI (SELL)"
-                        trend_desc = "Laterale / Transizione ↔️"
-                        
+                        # Backup Trend Standard
+                        trend_bullish = current_close > current_ema
+                        if trend_bullish and (macd_line >= macd_signal or rsi_val < 48):
+                            sig_type = "ACQUISTA (BUY)"
+                            trend_desc = "Rialzista Forte 📈"
+                        elif not trend_bullish and (macd_line <= macd_signal or rsi_val > 52):
+                            sig_type = "VENDI (SELL)"
+                            trend_desc = "Ribassista Forte 📉"
+                        else:
+                            sig_type = "ACQUISTA (BUY)" if macd_line > macd_signal else "VENDI (SELL)"
+                            trend_desc = "Laterale / Transizione ↔️"
+                        fractal_strategy_note = "ℹ️ Condizione di mercato standard (nessun estremo di banda)."
+
                     conf = round(79.0 + abs(macd_hist) * 800, 1)
+                    if upper_wick_rejection or lower_wick_rejection:
+                        conf += 5.0  # Incremento affidabilità per rilevamento puntatura
                     conf = min(97.0, max(68.0, conf))
+                    
                     sig_emoji = "🟢" if "ACQUISTA" in sig_type else "🔴"
                     timeframe_name = exp_map.get(exp_key, "1 Minuto (M1)")
 
-                    text = "🐂🐻 ANALISI EASY TRACK (REALE)\n\n"
+                    text = "🐂🐻 ANALISI EASY TRACK + FRACTAL ADVANCED (REALE)\n\n"
                     text += f"💲💹 Asset: {ast_name}\n"
                     text += f"💵 Prezzo Reale: `{round(current_close, 5)}`\n"
-                    text += f"📊 Trend di Mercato: {trend_desc}\n"
+                    text += f"📊 Trend / Setup: {trend_desc}\n"
+                    text += f"💡 *Strategia:* {fractal_strategy_note}\n"
                     text += f"🕯️ Pattern Candele: {pattern_name}\n"
                     text += f"🎯 Segnale: {sig_type} {sig_emoji}\n\n"
                     text += "🛠️ Indicatori Tecnici:\n"
                     text += f"• RSI (9): {rsi_val}\n"
                     text += f"• Linea MACD: {macd_line}\n"
-                    text += f"• Istogramma: {macd_hist}\n\n"
+                    text += f"• Frattale Sup (Max): `{round(upper_f, 5)}`\n"
+                    text += f"• Frattale Inf (Min): `{round(lower_f, 5)}`\n\n"
                     text += f"⚖️ Affidabilità: {conf}%\n"
                     text += f"⏱️ Timeframe: {timeframe_name}\n"
                     text += f"📌 Ora Esatta Ingresso: `{entry_time}`"
@@ -560,7 +644,6 @@ def webhook():
                         file_id_to_fetch = doc["file_id"]
                         is_valid_image = True
 
-                # Modalità 1: Analisi Foto IA (Se fallisce, chiede l'inserimento manuale)
                 if is_valid_image and file_id_to_fetch:
                     state = user_otc_state[cid]
                     ast_name = state["asset"]
@@ -575,7 +658,6 @@ def webhook():
                         
                         analysis = analyze_pocket_option_visual_trend(img_bytes)
                         
-                        # Se l'IA non riesce a leggere l'immagine, chiediamo di inserirli a mano
                         if not analysis or not isinstance(analysis, dict) or "price" not in analysis:
                             api_call("deleteMessage", {"chat_id": cid, "message_id": msg_id_user})
                             err_kb = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
@@ -623,7 +705,6 @@ def webhook():
                         send_message(cid, text, kb)
                         return "ok", 200
 
-                # Modalità 2: Inserimento Testuale Manuale
                 if "text" in up["message"]:
                     txt_msg = up["message"]["text"].strip()
                     if txt_msg == "/start":
