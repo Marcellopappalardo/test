@@ -17,14 +17,12 @@ import numpy as np
 import PIL.Image
 
 # ==========================================
-# CONFIGURAZIONE CREDENZIALI GOOGLE CLOUD VISION
+# CONFIGURAZIONE GOOGLE GEMINI PRO (SDK NUOVO)
 # ==========================================
-if os.path.exists("/etc/secrets/credentials.json"):
-    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "/etc/secrets/credentials.json"
-else:
-    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "credentials.json"
+from google import genai
 
-from google.cloud import vision
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 app = Flask(__name__)
 
@@ -55,7 +53,7 @@ OTC_ASSETS = [
     "Polkadot OTC", "Toncoin OTC", "Bitcoin ETF OTC", "TRON OTC", "Dogecoin OTC", "Litecoin OTC", 
     "Chainlink OTC", "Solana OTC", "BNB OTC", "Polygon OTC", "Ethereum OTC", "Avalanche OTC", 
     "APPLE OTC", "MICROSOFT OTC", "TESLA OTC", "AMAZON OTC", "NETFLIX OTC", "GOOGLE OTC", 
-    "META OTC", "COCA COLA OTC", "INTEL OTC", "BOEING COMPANY OTC", "ALIBABA OTC", 
+    "COCA COLA OTC", "INTEL OTC", "BOEING COMPANY OTC", "ALIBABA OTC", 
     "CITIGROUP INC OTC", "EXXONMOBIL OTC"
 ]
 
@@ -361,9 +359,9 @@ def process_otc_analysis(cid, ast_name, exp_key, price, rsi_val=52.5, macd_line=
     conf = min(96.0, max(72.0, conf))
     timeframe_name = exp_map.get(exp_key, "1 Minuto (M1)")
 
-    text = "🤖 **ANALISI GRAFICA AUTOMATICA (OTC)**\n\n"
+    text = "🤖 **ANALISI GRAFICA AUTOMATICA (OTC - GEMINI PRO)**\n\n"
     text += f"💲💹 Asset: {ast_name}\n"
-    text += f"💵 Prezzo Rilevato: `{price}`\n"
+    text += f"💵 Prezzo Ultima Candela: `{price}`\n"
     text += f"📊 Trend Rilevato: {trend_desc}\n"
     text += f"🕯️ Pattern Candele: {pattern_name}\n"
     text += f"🎯 Segnale: {sig_type} {sig_emoji}\n\n"
@@ -441,7 +439,7 @@ def send_expiry_menu(chat_id, asset_name, msg_id, is_otc=False):
 
 @app.route('/')
 def index():
-    return "Bot OTC Foto + Manuale operativo al 100%!", 200
+    return "Bot OTC attivo con Gemini 2.5 Pro!", 200
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -561,7 +559,7 @@ def webhook():
                     kb_otc = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
                     edit_message(cid, mid, f"📊 **Mercato OTC ({ast_name} - {exp_map.get(exp_key, exp_key)})**\n\n📸 **Invia lo screenshot del grafico** oppure inserisci i valori a mano.\n\n*Esempio:* `1.32739, 54.2, 0.00045`", kb_otc)
 
-            # --- GESTIONE AUTOMATICA FOTO (OTC) ---
+            # --- GESTIONE AUTOMATICA FOTO (OTC) CON GEMINI 2.5 PRO ---
             elif "message" in up and ("photo" in up["message"] or "document" in up["message"]):
                 cid = up["message"]["chat"]["id"]
                 user_msg_id = up["message"]["message_id"]
@@ -574,7 +572,7 @@ def webhook():
                     exp_key = state["expiry"]
                     user_otc_state.pop(cid, None)
                     
-                    wait_msg_id = send_message(cid, "🔬 *Analisi geometrica e posizione linee in corso...*")
+                    wait_msg_id = send_message(cid, "🧠 *Gemini 2.5 Pro sta leggendo il grafico e stimando i valori degli indicatori...*")
 
                     try:
                         if "photo" in up["message"]:
@@ -590,56 +588,31 @@ def webhook():
                             
                             img_response = requests.get(download_url, timeout=15.0)
                             content_bytes = img_response.content
-                            
                             img_pil = PIL.Image.open(io.BytesIO(content_bytes)).convert("RGB")
-                            w, h = img_pil.size
-                            arr = np.array(img_pil)
 
-                            client = vision.ImageAnnotatorClient()
-                            image = vision.Image(content=content_bytes)
-                            response = client.text_detection(image=image)
-                            texts = response.text_annotations
+                            prompt = """
+                            Sei un analista finanziario esperto. Analizza con estrema precisione questo screenshot di Pocket Option ed estrai/stima i seguenti 3 dati in formato JSON:
+                            1. "price": leggi o calcola il prezzo esatto dell'ultima candela chiusa visibile sul grafico (o il valore numerico corrente sulla scala verticale a destra).
+                            2. "rsi": poiché il valore esatto non è scritto, guarda visivamente la linea verde nel riquadro 'RSI 9' in basso e stima il valore numerico basandoti sulle linee guida 30, 50, 70 (da 0 a 100).
+                            3. "macd_line": guarda visivamente la linea MACD (impostazioni 12, 26, 9) nel riquadro inferiore e stima il valore numerico della linea rispetto allo zero centrale (es. 0.00025 o -0.00015).
+
+                            Restituisci ESCLUSIVAMENTE un oggetto JSON valido, senza blocchi di codice markdown o testo aggiuntivo:
+                            {"price": 1.32739, "rsi": 54.2, "macd_line": 0.00045}
+                            """
                             
-                            all_numbers = []
-                            if texts:
-                                for text in texts:
-                                    found = re.findall(r'\b\d+[\.,]\d{3,5}\b', text.description)
-                                    for f in found:
-                                        all_numbers.append(float(f.replace(',', '.')))
+                            response = client.models.generate_content(
+                                model='gemini-2.5-pro',
+                                contents=[prompt, img_pil]
+                            )
+                            text_res = response.text.strip()
                             
-                            price = 1.32739
-                            if all_numbers:
-                                valid_prices = [n for n in all_numbers if 0.1 < n < 100000]
-                                if valid_prices:
-                                    price = valid_prices[0]
-
-                            rsi = 52.5
-                            try:
-                                rsi_crop = arr[int(h * 0.62):int(h * 0.78), int(w * 0.05):int(w * 0.90)]
-                                green_mask = (rsi_crop[:, :, 1] > 140) & (rsi_crop[:, :, 0] < 100) & (rsi_crop[:, :, 2] < 100)
-                                y_indices, x_indices = np.where(green_mask)
-                                if len(y_indices) > 5:
-                                    max_x = np.max(x_indices)
-                                    recent_y = y_indices[x_indices > (max_x - 30)]
-                                    avg_y = np.mean(recent_y) if len(recent_y) > 0 else np.mean(y_indices)
-                                    crop_h = rsi_crop.shape[0]
-                                    rsi = round(100.0 - (avg_y / crop_h) * 100.0, 1)
-                                    rsi = max(15.0, min(85.0, rsi))
-                            except Exception:
-                                pass
-
-                            macd_line = 0.00030
-                            try:
-                                macd_crop = arr[int(h * 0.78):int(h * 0.95), int(w * 0.05):int(w * 0.90)]
-                                macd_mask = (macd_crop[:, :, 0] > 150) & (macd_crop[:, :, 1] < 120)
-                                my_indices, _ = np.where(macd_mask)
-                                if len(my_indices) > 5:
-                                    avg_my = np.mean(my_indices)
-                                    center_y = macd_crop.shape[0] / 2.0
-                                    diff = center_y - avg_my
-                                    macd_line = round(diff * 0.00005, 5)
-                            except Exception:
-                                pass
+                            text_res = re.sub(r'```json\s*', '', text_res)
+                            text_res = re.sub(r'```\s*', '', text_res)
+                            
+                            data_parsed = json.loads(text_res)
+                            price = float(data_parsed.get("price", 1.32739))
+                            rsi = float(data_parsed.get("rsi", 52.5))
+                            macd_line = float(data_parsed.get("macd_line", 0.00020))
 
                             if wait_msg_id:
                                 api_call("deleteMessage", {"chat_id": cid, "message_id": wait_msg_id})
@@ -652,10 +625,10 @@ def webhook():
                             send_message(cid, "⚠️ Errore nel download del file.")
                             return "ok", 200
                     except Exception as e:
-                        print("Errore analisi automatica foto:", traceback.format_exc())
+                        print("Errore analisi Gemini Pro foto OTC:", traceback.format_exc())
                         if wait_msg_id:
                             api_call("deleteMessage", {"chat_id": cid, "message_id": wait_msg_id})
-                        send_message(cid, "⚠️ Errore durante l'elaborazione. Inserisci i valori a mano.")
+                        send_message(cid, "⚠️ Errore di lettura con Gemini Pro. Inserisci i valori a mano.")
                         return "ok", 200
 
             # --- GESTIONE TESTO MANUALE (OTC) ---
