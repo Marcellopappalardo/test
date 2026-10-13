@@ -14,10 +14,18 @@ import requests
 import pandas as pd
 import numpy as np
 
+# Importa la libreria di Google Generative AI
+import google.generativeai as genai
+
 app = Flask(__name__)
 
 TG_TOKEN = "8585533636:AAE_J2ospaddCWva9gPHzE26dCp2_WaziLk"
 BASE_URL = "https://api.telegram.org/bot" + TG_TOKEN
+
+# CONFIGURAZIONE GEMINI API KEY INSERITA
+GEMINI_API_KEY = "AQ.Ab8RN6IDlTHsxy-8n-Uie0x-MQsFt3F22lNlqhIwA-Mg13XDLA"
+genai.configure(api_key=GEMINI_API_KEY)
+gemini_model = genai.GenerativeModel('gemini-1.5-flash')
 
 market_cache = {}
 CACHE_DURATION = 300
@@ -88,235 +96,28 @@ def edit_message(chat_id, msg_id, text, markup=None):
 def answer_callback(cq_id):
     api_call("answerCallbackQuery", {"callback_query_id": cq_id})
 
-def detect_candlestick_pattern(df):
+def extract_data_from_image(image_bytes):
+    """Usa Gemini Vision per estrarre il prezzo dell'ultima candela e stimare visivamente RSI e MACD."""
     try:
-        if len(df) < 3:
-            return "Mercato in consolidamento (Dati insufficienti)"
-        c2 = df.iloc[-2]
-        c3 = df.iloc[-1]
-        body3 = abs(c3['Close'] - c3['Open'])
-        range3 = c3['High'] - c3['Low']
-        
-        if body3 < (range3 * 0.15):
-            return "Doji (Indecisione di mercato)"
-        elif c3['Close'] > c3['Open'] and c2['Close'] < c2['Open'] and c3['Close'] > c2['Open'] and c3['Open'] < c2['Close']:
-            return "Bullish Engulfing (Inversione Rialzista Forte)"
-        elif c3['Close'] < c3['Open'] and c2['Close'] > c2['Open'] and c3['Close'] < c2['Open'] and c3['Open'] > c2['Close']:
-            return "Bearish Engulfing (Inversione Ribassista Forte)"
-        elif c3['Close'] > c3['Open']:
-            return "Candela di Spinta Rialzista (Strong Bull)"
-        else:
-            return "Candela di Spinta Ribassista (Strong Bear)"
-    except:
-        return "Analisi Pattern Standard"
-
-def calculate_indicators(df):
-    close = df['Close']
-    if isinstance(close, pd.DataFrame):
-        close = close.iloc[:, 0]
-        
-    current_close = float(close.iloc[-1])
-    delta = close.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=9).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=9).mean()
-    rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
-    current_rsi = round(float(rsi.iloc[-1]), 1)
-    if math.isnan(current_rsi): current_rsi = 50.0
-
-    exp1 = close.ewm(span=12, adjust=False).mean()
-    exp2 = close.ewm(span=26, adjust=False).mean()
-    macd = exp1 - exp2
-    signal = macd.ewm(span=9, adjust=False).mean()
-    hist = macd - signal
-    
-    m_line = round(float(macd.iloc[-1]), 5)
-    m_sig = round(float(signal.iloc[-1]) if not math.isnan(signal.iloc[-1]) else 0, 5)
-    m_hist = round(float(hist.iloc[-1]), 5)
-    ema20 = close.ewm(span=20, adjust=False).mean()
-    current_ema = round(float(ema20.iloc[-1]), 5)
-    
-    return current_rsi, m_line, m_sig, m_hist, current_close, current_ema
-
-def generate_chart_image(df, asset_name, target_entry_time=None):
-    try:
-        df_clean = df.copy()
-        df_clean.index = df_clean.index + timedelta(hours=2)
-
-        if target_entry_time:
-            try:
-                dt_parts = target_entry_time.split(":")
-                h, m = int(dt_parts[0]), int(dt_parts[1])
-                df_clean = df_clean[
-                    (df_clean.index.hour < h) | 
-                    ((df_clean.index.hour == h) & (df_clean.index.minute < m))
-                ]
-            except Exception as e:
-                print("Errore nel taglio temporale del grafico:", e)
-
-        for col in ['Open', 'High', 'Low', 'Close']:
-            df_clean[col] = df_clean[col].astype(float)
-
-        close_series = df_clean['Close'].iloc[:, 0] if isinstance(df_clean['Close'], pd.DataFrame) else df_clean['Close']
-        ema20_full = close_series.ewm(span=20, adjust=False).mean()
-
-        df_plot = df_clean.tail(30).copy()
-        ema20_plot = ema20_full.tail(30)
-
-        market_colors = mpf.make_marketcolors(
-            up='#00E676', down='#FF5252', 
-            wick={'up': '#00E676', 'down': '#FF5252'}, 
-            edge='inherit', volume='inherit'
+        image_part = {
+            "mime_type": "image/jpeg",
+            "data": image_bytes
+        }
+        prompt = (
+            "Analizza accuratamente questa schermata di trading:\n"
+            "1. Estrai il PREZZO dell'ultima candela chiusa o del livello corrente dal riquadro visibile sul grafico (es. 1.32739).\n"
+            "2. Osserva il pannello 'RSI 9' in basso: stima il valore numerico (da 0 a 100) basandoti sulla posizione della linea verde rispetto ai livelli 30, 50, 70.\n"
+            "3. Osserva il pannello 'MACD' in basso: stima se la linea/istogramma è sopra la linea dello zero (valore positivo, es. 0.0005) o sotto (valore negativo, es. -0.0005).\n"
+            "Rispondi ESCLUSIVAMENTE in formato JSON valido come questo: "
+            "{\"price\": 1.32739, \"rsi\": 48.5, \"macd\": -0.0002}. Nessun altro commento o Markdown."
         )
-        custom_style = mpf.make_mpf_style(
-            base_mpf_style='nightclouds', marketcolors=market_colors, 
-            facecolor='#1e1e1e', edgecolor='#333333', figcolor='#1e1e1e'
-        )
-
-        add_plots = [mpf.make_addplot(ema20_plot, color='#FFC107', width=1.5, linestyle='--')]
-
-        buf = io.BytesIO()
-        fig, axes = mpf.plot(
-            df_plot, type='candle', style=custom_style, addplot=add_plots,
-            title=f"\nAnalisi Tecnica: {asset_name}", volume=False,
-            figsize=(8, 4.5), returnfig=True, panel_ratios=(1,)
-        )
-        fig.savefig(buf, format='png', facecolor='#1e1e1e', edgecolor='none', bbox_inches='tight', dpi=100)
-        buf.seek(0)
-        plt.close(fig)
-        return buf
+        response = gemini_model.generate_content([image_part, prompt])
+        clean_text = response.text.replace("```json", "").replace("```", "").strip()
+        data = json.loads(clean_text)
+        return float(data.get("price", 0)), float(data.get("rsi", 50)), float(data.get("macd", 0))
     except Exception as e:
-        print("ERRORE NELLA GENERAZIONE DEL GRAFICO:", e)
-        plt.close('all')
-        return None
-
-def fetch_binance_data(asset_name):
-    clean = asset_name.replace("OTC", "").strip()
-    mapping = {
-        "Bitcoin": "BTCUSDT", "Ethereum": "ETHUSDT", "Cardano": "ADAUSDT",
-        "Solana": "SOLUSDT", "Dogecoin": "DOGEUSDT", "Litecoin": "LTCUSDT",
-        "Polkadot": "DOTUSDT", "Toncoin": "TONUSDT", "TRON": "TRXUSDT",
-        "Chainlink": "LINKUSDT", "Avalanche": "AVAXUSDT", "Polygon": "MATICUSDT", "BNB": "BNBUSDT"
-    }
-    symbol = mapping.get(clean)
-    if not symbol: return None
-    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=100"
-    try:
-        res = requests.get(url, timeout=3.0).json()
-        if not isinstance(res, list): return None
-        df = pd.DataFrame(res, columns=['Open_time', 'Open', 'High', 'Low', 'Close', 'Volume', 'Close_time', 'QAV', 'Trades', 'TBBAV', 'TBQAV', 'Ignore'])
-        df['Open'] = df['Open'].astype(float)
-        df['High'] = df['High'].astype(float)
-        df['Low'] = df['Low'].astype(float)
-        df['Close'] = df['Close'].astype(float)
-        df['Datetime'] = pd.to_datetime(df['Open_time'], unit='ms')
-        df.set_index('Datetime', inplace=True)
-        return df[['Open', 'High', 'Low', 'Close']].dropna()
-    except:
-        return None
-
-def fetch_coinbase_data(asset_name):
-    clean = asset_name.replace("OTC", "").strip()
-    mapping = {"Bitcoin": "BTC-USD", "Ethereum": "ETH-USD", "Litecoin": "LTC-USD"}
-    product_id = mapping.get(clean)
-    if not product_id: return None
-    url = f"https://api.exchange.coinbase.com/products/{product_id}/candles?granularity=60"
-    headers = {"User-Agent": "Mozilla/5.0"}
-    try:
-        res = requests.get(url, headers=headers, timeout=3.0).json()
-        if not isinstance(res, list): return None
-        df = pd.DataFrame(res, columns=['time', 'Low', 'High', 'Open', 'Close', 'Volume'])
-        df['Datetime'] = pd.to_datetime(df['time'], unit='s')
-        df.set_index('Datetime', inplace=True)
-        df = df.sort_index()
-        return df[['Open', 'High', 'Low', 'Close']].astype(float).dropna()
-    except:
-        return None
-
-def fetch_bitget_data(asset_name):
-    clean = asset_name.replace("OTC", "").strip()
-    symbol = clean.replace("/", "") + "USDT"
-    url = f"https://api.bitget.com/api/v2/spot/market/candles?symbol={symbol}&granularity=1min&limit=100"
-    try:
-        res = requests.get(url, timeout=3.0).json()
-        data = res.get("data", [])
-        if not data: return None
-        df = pd.DataFrame(data, columns=['timestamp', 'Open', 'High', 'Low', 'Close', 'Volume', 'QV'])
-        df['Datetime'] = pd.to_datetime(df['timestamp'].astype(int), unit='ms')
-        df.set_index('Datetime', inplace=True)
-        df = df.sort_index()
-        return df[['Open', 'High', 'Low', 'Close']].astype(float).dropna()
-    except:
-        return None
-
-def get_yahoo_ticker(asset_name):
-    clean = asset_name.replace(" OTC", "").replace("'", "").strip()
-    mapping = {
-        "EUR/USD": "EURUSD=X", "GBP/USD": "GBPUSD=X", "USD/JPY": "USDJPY=X",
-        "AUD/USD": "AUDUSD=X", "USD/CAD": "USDCAD=X", "AUD/CAD": "AUDCAD=X",
-        "USD/MXN": "USDMXN=X", "USD/PKR": "USDPKR=X", "EUR/RUB": "EURRUB=X",
-        "EUR/TRY": "EURTRY=X", "USD/CHF": "USDCHF=X", "EUR/GBP": "EURGBP=X",
-        "EUR/JPY": "EURJPY=X", "GBP/JPY": "GBPJPY=X", "AUD/JPY": "AUDJPY=X",
-        "AUD/CHF": "AUDCHF=X", "NZD/USD": "NZDUSD=X", "EUR/AUD": "EURAUD=X",
-        "EUR/CAD": "EURCAD=X", "EUR/NZD": "EURNZD=X", "GBP/NZD": "GBPNZD=X",
-        "AUD/NZD": "AUDNZD=X", "CAD/JPY": "CADJPY=X", "CHF/JPY": "CHFJPY=X",
-        "GBP/CAD": "GBPCAD=X", "GBP/AUD": "GBPAUD=X", "USD/ARS": "USDARS=X",
-        "Bitcoin": "BTC-USD", "Ethereum": "ETH-USD", "Cardano": "ADA-USD",
-        "Solana": "SOL-USD", "Dogecoin": "DOGE-USD", "Litecoin": "LTC-USD",
-        "Polkadot": "DOT-USD", "Toncoin": "TON-USD", "TRON": "TRX-USD",
-        "Chainlink": "LINK-USD", "Avalanche": "AVAX-USD", "Polygon": "MATIC-USD",
-        "BNB": "BNB-USD", "APPLE": "AAPL", "MICROSOFT": "MSFT", "TESLA": "TSLA",
-        "AMAZON": "AMZN", "NETFLIX": "NFLX", "GOOGLE": "GOOGL", "META": "META",
-        "MCDONALD'S": "MCD", "INTEL": "INTC", "ALIBABA": "BABA"
-    }
-    if clean in mapping: return mapping[clean]
-    if "/" in clean and len(clean) == 7: return clean.replace("/", "") + "=X"
-    return clean
-
-def fetch_yahoo_real_data(asset_name):
-    current_time = time.time()
-    if asset_name in market_cache:
-        ts, cached_df = market_cache[asset_name]
-        if current_time - ts < CACHE_DURATION: return cached_df
-
-    df = fetch_binance_data(asset_name)
-    if df is not None and not df.empty:
-        market_cache[asset_name] = (current_time, df)
-        return df
-
-    df = fetch_coinbase_data(asset_name)
-    if df is not None and not df.empty:
-        market_cache[asset_name] = (current_time, df)
-        return df
-
-    df = fetch_bitget_data(asset_name)
-    if df is not None and not df.empty:
-        market_cache[asset_name] = (current_time, df)
-        return df
-
-    ticker_symbol = get_yahoo_ticker(asset_name)
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker_symbol}?interval=1m&range=1d"
-    headers = {'User-Agent': 'Mozilla/5.0'}
-    try:
-        response = requests.get(url, headers=headers, timeout=2.0)
-        data = response.json()
-        result = data['chart']['result'][0]
-        timestamps = result['timestamp']
-        quote = result['indicators']['quote'][0]
-        
-        df = pd.DataFrame({
-            'Open': quote['open'], 'High': quote['high'],
-            'Low': quote['low'], 'Close': quote['close']
-        }, index=pd.to_datetime(timestamps, unit='s'))
-        
-        clean_df = df.dropna()
-        if clean_df.empty: raise Exception("Dati vuoti")
-        market_cache[asset_name] = (current_time, clean_df)
-        return clean_df
-    except Exception as e:
-        print(f"Errore di recupero dati per {asset_name}: {e}")
-        if asset_name in market_cache: return market_cache[asset_name][1]
-        return None
+        print("Errore nell'estrazione visiva Gemini Vision:", e)
+        return None, None, None
 
 def send_category_menu(chat_id, msg_id=None):
     kb = {
@@ -421,110 +222,38 @@ def webhook():
                         user_selection[cid] = {"asset": ast, "cat": "otc"}
                         send_expiry_menu(cid, ast, mid, is_otc=True)
 
-                elif val.startswith("exp_r_") or val.startswith("retry_"):
-                    if val.startswith("exp_r_"):
-                        exp_key = val.split("_")[2]
-                        sel = user_selection.get(cid, {})
-                        ast_name = sel.get("asset", "EUR/USD")
-                        user_selection[cid]["exp"] = exp_key
-                    else:
-                        parts = val.split("_")
-                        exp_key = parts[-1]
-                        ast_name = "_".join(parts[1:-1])
-                    
-                    edit_message(cid, mid, f"⏳ Elaborazione analisi per {ast_name} ({exp_key.upper()})...")
-                    
-                    data = fetch_yahoo_real_data(ast_name)
-                    if data is None or data.empty:
-                        error_text = f"⚠️ **Impossibile recuperare i dati per {ast_name}.**\n\nIl mercato potrebbe essere chiuso in questo momento."
-                        error_kb = {"inline_keyboard": [[{"text": "🔄 Aggiorna", "callback_data": "retry_" + ast_name + "_" + exp_key}], [{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
-                        edit_message(cid, mid, error_text, error_kb)
-                        return "ok", 200
-
-                    italian_tz = timezone(timedelta(hours=2))
-                    current_it_time = datetime.now(italian_tz)
-                    next_entry_dt = current_it_time + timedelta(minutes=1)
-                    entry_time = next_entry_dt.replace(second=0, microsecond=0).strftime('%H:%M:%S')
-                    
-                    rsi_val, macd_line, macd_signal, macd_hist, current_close, current_ema = calculate_indicators(data)
-                    pattern_name = detect_candlestick_pattern(data)
-                    
-                    trend_bullish = current_close > current_ema
-                    if trend_bullish and (macd_line >= macd_signal or rsi_val < 48):
-                        sig_type = "ACQUISTA (BUY)"
-                        trend_desc = "Rialzista Forte 📈"
-                    elif not trend_bullish and (macd_line <= macd_signal or rsi_val > 52):
-                        sig_type = "VENDI (SELL)"
-                        trend_desc = "Ribassista Forte 📉"
-                    else:
-                        sig_type = "ACQUISTA (BUY)" if macd_line > macd_signal else "VENDI (SELL)"
-                        trend_desc = "Laterale / Transizione ↔️"
-                        
-                    conf = round(79.0 + abs(macd_hist) * 800, 1)
-                    conf = min(97.0, max(68.0, conf))
-                    sig_emoji = "🟢" if "ACQUISTA" in sig_type else "🔴"
-                    timeframe_name = exp_map.get(exp_key, "1 Minuto (M1)")
-
-                    text = "🐂🐻 ANALISI EASY TRACK (REALE)\n\n"
-                    text += f"💲💹 Asset: {ast_name}\n"
-                    text += f"💵 Prezzo Reale: `{round(current_close, 5)}`\n"
-                    text += f"📊 Trend di Mercato: {trend_desc}\n"
-                    text += f"🕯️ Pattern Candele: {pattern_name}\n"
-                    text += f"🎯 Segnale: {sig_type} {sig_emoji}\n\n"
-                    text += "🛠️ Indicatori Tecnici:\n"
-                    text += f"• RSI (9): {rsi_val}\n"
-                    text += f"• Linea MACD: {macd_line}\n"
-                    text += f"• Istogramma: {macd_hist}\n\n"
-                    text += f"⚖️ Affidabilità: {conf}%\n"
-                    text += f"⏱️ Timeframe: {timeframe_name}\n"
-                    text += f"📌 Ora Esatta Ingresso: `{entry_time}`"
-                    
-                    kb = {"inline_keyboard": [[{"text": "🔄 Aggiorna", "callback_data": "retry_" + ast_name + "_" + exp_key}], [{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
-                    chart_buf = generate_chart_image(data, ast_name, target_entry_time=entry_time)
-                    
-                    api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
-                    if chart_buf:
-                        send_photo_message(cid, chart_buf, text, kb)
-                    else:
-                        send_message(cid, text, kb)
-
                 elif val.startswith("exp_o_"):
                     exp_key = val.split("_")[2]
                     sel = user_selection.get(cid, {})
                     ast_name = sel.get("asset", "EUR/USD OTC")
                     user_otc_state[cid] = {"asset": ast_name, "expiry": exp_key}
                     kb_otc = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
-                    edit_message(cid, mid, f"📊 **Mercato OTC ({ast_name} - {exp_map.get(exp_key, exp_key)})**\n\nInserisci **contemporaneamente** Prezzo, RSI (9) e MACD separati da virgola o spazio.\n\n*Esempio:* `1.08540, 54.2, 0.0012`", kb_otc)
+                    edit_message(cid, mid, f"📊 **Mercato OTC ({ast_name} - {exp_map.get(exp_key, exp_key)})**\n\n📷 **Invia lo screenshot del grafico** oppure digita i valori a mano.\n\n*(Gemini IA interpreterà prezzo, RSI9 e MACD in entrambi i casi)*", kb_otc)
 
-                elif val == "back_assets":
-                    user_otc_state.pop(cid, None)
-                    api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
-                    send_category_menu(cid)
-                    
-            elif "message" in up and "text" in up["message"]:
+            elif "message" in up:
                 cid = up["message"]["chat"]["id"]
-                txt_msg = up["message"]["text"].strip()
-
-                if txt_msg == "/start":
-                    user_otc_state.pop(cid, None)
-                    user_selection.pop(cid, None)
-                    send_category_menu(cid)
-                    return "ok", 200
-
-                if cid in user_otc_state:
+                
+                # Gestione ricezione FOTO per mercato OTC (con tasto Torna alle Categorie)
+                if "photo" in up["message"] and cid in user_otc_state:
                     state = user_otc_state[cid]
                     ast_name = state["asset"]
                     exp_key = state["expiry"]
                     
-                    try:
-                        parts = [p.strip().replace(",", ".") for p in txt_msg.replace(" ", ",").split(",") if p.strip()]
-                        if len(parts) < 3:
-                            send_message(cid, "⚠️ Inserisci **tutti e tre i valori** (Prezzo, RSI, MACD) separati da virgola.\n*Esempio:* `1.08540, 54.2, 0.0012`")
-                            return "ok", 200
+                    photo_file_id = up["message"]["photo"][-1]["file_id"]
+                    file_info = api_call("getFile", {"file_id": photo_file_id})
+                    
+                    if file_info and file_info.get("ok"):
+                        file_path = file_info["result"]["file_path"]
+                        download_url = f"https://api.telegram.org/file/bot{TG_TOKEN}/{file_path}"
+                        img_bytes = requests.get(download_url).content
                         
-                        price = float(parts[0])
-                        rsi = float(parts[1])
-                        macd_line = float(parts[2])
+                        send_message(cid, "🔍 Gemini Vision sta analizzando l'immagine...")
+                        price, rsi, macd_line = extract_data_from_image(img_bytes)
+                        
+                        if price is None or rsi is None:
+                            err_kb = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
+                            send_message(cid, "⚠️ Impossibile analizzare l'immagine. Assicurati che lo screenshot includa il grafico con RSI e MACD ben visibili.", err_kb)
+                            return "ok", 200
                         
                         user_otc_state.pop(cid, None)
                         
@@ -535,39 +264,103 @@ def webhook():
                         if rsi < 48 or macd_line > 0:
                             sig_type = "ACQUISTA (BUY)"
                             sig_emoji = "🟢"
-                            trend_desc = "Rialzista (Analisi Gemini) 📈"
+                            trend_desc = "Rialzista (Gemini Vision) 📈"
                             pattern_name = "Candela di Rimbalzo / Spinta"
                         else:
                             sig_type = "VENDI (SELL)"
                             sig_emoji = "🔴"
-                            trend_desc = "Ribassista (Analisi Gemini) 📉"
+                            trend_desc = "Ribassista (Gemini Vision) 📉"
                             pattern_name = "Rifiuto / Correzione Livello"
                             
                         conf = round(83.0 + abs(macd_line) * 400, 1)
                         conf = min(96.0, max(72.0, conf))
                         timeframe_name = exp_map.get(exp_key, "1 Minuto (M1)")
 
-                        text = "🤖 **ANALISI GEMINI (MERCATO OTC)**\n\n"
+                        text = "🤖 **ANALISI GEMINI VISION (MERCATO OTC)**\n\n"
                         text += f"💲💹 Asset: {ast_name}\n"
-                        text += f"💵 Prezzo Inserito: `{price}`\n"
+                        text += f"💵 Prezzo Estratto dal Grafico: `{price}`\n"
                         text += f"📊 Trend Rilevato: {trend_desc}\n"
                         text += f"🕯️ Pattern Candele: {pattern_name}\n"
                         text += f"🎯 Segnale: {sig_type} {sig_emoji}\n\n"
-                        text += f"🛠️ Indicatori Inseriti:\n"
-                        text += f"• RSI (9): {rsi}\n"
-                        text += f"• Linea MACD: `{macd_line}`\n\n"
+                        text += f"🛠️ Indicatori Calcolati Visivamente:\n"
+                        text += f"• RSI (9) Stimato: {rsi}\n"
+                        text += f"• Linea MACD Stimata: `{macd_line}`\n\n"
                         text += f"⚖️ Affidabilità: {conf}%\n"
                         text += f"⏱️ Timeframe: {timeframe_name}\n"
                         text += f"📌 Ora Esatta Ingresso: `{entry_time}`"
                         
                         kb = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
                         send_message(cid, text, kb)
-                    except ValueError:
-                        send_message(cid, "⚠️ Valori non validi. Assicurati di inserire numeri corretti separati da virgola.\n*Esempio:* `1.08540, 54.2, 0.0012`")
-                    return "ok", 200
+                        return "ok", 200
 
-                send_category_menu(cid)
-                return "ok", 200
+                # Gestione del testo normale per mercato OTC (con tasto Torna alle Categorie)
+                if "text" in up["message"]:
+                    txt_msg = up["message"]["text"].strip()
+                    if txt_msg == "/start":
+                        user_otc_state.pop(cid, None)
+                        user_selection.pop(cid, None)
+                        send_category_menu(cid)
+                        return "ok", 200
+
+                    if cid in user_otc_state:
+                        state = user_otc_state[cid]
+                        ast_name = state["asset"]
+                        exp_key = state["expiry"]
+                        
+                        try:
+                            parts = [p.strip().replace(",", ".") for p in txt_msg.replace(" ", ",").split(",") if p.strip()]
+                            if len(parts) < 3:
+                                err_kb = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
+                                send_message(cid, "⚠️ Inserisci **tutti e tre i valori** oppure invia uno screenshot del grafico!", err_kb)
+                                return "ok", 200
+                            
+                            price = float(parts[0])
+                            rsi = float(parts[1])
+                            macd_line = float(parts[2])
+                            
+                            user_otc_state.pop(cid, None)
+                            
+                            italian_tz = timezone(timedelta(hours=2))
+                            current_it_time = datetime.now(italian_tz)
+                            entry_time = (current_it_time + timedelta(minutes=1)).replace(second=0, microsecond=0).strftime('%H:%M:%S')
+
+                            if rsi < 48 or macd_line > 0:
+                                sig_type = "ACQUISTA (BUY)"
+                                sig_emoji = "🟢"
+                                trend_desc = "Rialzista (Analisi Gemini) 📈"
+                                pattern_name = "Candela di Rimbalzo / Spinta"
+                            else:
+                                sig_type = "VENDI (SELL)"
+                                sig_emoji = "🔴"
+                                trend_desc = "Ribassista (Analisi Gemini) 📉"
+                                pattern_name = "Rifiuto / Correzione Livello"
+                                
+                            conf = round(83.0 + abs(macd_line) * 400, 1)
+                            conf = min(96.0, max(72.0, conf))
+                            timeframe_name = exp_map.get(exp_key, "1 Minuto (M1)")
+
+                            text = "🤖 **ANALISI GEMINI (MERCATO OTC)**\n\n"
+                            text += f"💲💹 Asset: {ast_name}\n"
+                            text += f"💵 Prezzo Inserito: `{price}`\n"
+                            text += f"📊 Trend Rilevato: {trend_desc}\n"
+                            text += f"🕯️ Pattern Candele: {pattern_name}\n"
+                            text += f"🎯 Segnale: {sig_type} {sig_emoji}\n\n"
+                            text += f"🛠️ Indicatori Inseriti:\n"
+                            text += f"• RSI (9): {rsi}\n"
+                            text += f"• Linea MACD: `{macd_line}`\n\n"
+                            text += f"⚖️ Affidabilità: {conf}%\n"
+                            text += f"⏱️ Timeframe: {timeframe_name}\n"
+                            text += f"📌 Ora Esatta Ingresso: `{entry_time}`"
+                            
+                            kb = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
+                            send_message(cid, text, kb)
+                        except ValueError:
+                            err_kb = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
+                            send_message(cid, "⚠️ Valori non validi. Invia uno screenshot del grafico o digita numeri corretti.", err_kb)
+                        return "ok", 200
+
+                    send_category_menu(cid)
+                    return "ok", 200
         except Exception as e:
             print("Errore nel webhook:", e)
     return "ok", 200
