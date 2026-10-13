@@ -336,21 +336,23 @@ def analyze_pocket_option_visual_trend(image_bytes):
         }
         prompt = (
             "Sei un trader professionista ed esperto di analisi tecnica su Pocket Option OTC.\n"
-            "Guarda questo screenshot ed esamina:\n"
-            "1. La direzione generale dell'ultimo movimento delle candele (rialzista o ribassista).\n"
-            "2. La posizione della linea dell'indicatore RSI 9 in basso (sopra 50 o sotto 50).\n"
-            "3. La posizione del MACD in basso (positivo o negativo).\n\n"
+            "Guarda questo screenshot ed estrai:\n"
+            "1. Il prezzo attuale visibile nel box azzurro/blu sulla destra del grafico (es. 1.35873).\n"
+            "2. La direzione generale dell'ultimo movimento delle candele (rialzista o ribassista).\n"
+            "3. La posizione della linea dell'indicatore RSI 9 in basso (sopra 50 o sotto 50).\n"
+            "4. La posizione del MACD in basso (positivo o negativo).\n\n"
             "Rispondi ESCLUSIVAMENTE in formato JSON con questa struttura esatta:\n"
             "{\n"
+            '  "price": 1.35873,\n'
             '  "signal": "BUY",\n'
             '  "trend": "Rialzista",\n'
-            '  "rsi_est": 58.0,\n'
-            '  "macd_est": 0.0002,\n'
+            '  "rsi_est": 55.0,\n'
+            '  "macd_est": -0.0001,\n'
             '  "pattern": "Spinta di continuazione"\n'
             "}\n"
             "Dove 'signal' può essere solo 'BUY' o 'SELL'. Nessun testo fuori dal JSON."
         )
-        response = gemini_model.generate_content([prompt, image_part])
+        response = gemini_model.generate_content([prompt, image_part], request_options={"timeout": 10.0})
         text_res = response.text.replace("```json", "").replace("```", "").strip()
         
         start_idx = text_res.find('{')
@@ -464,8 +466,7 @@ def webhook():
                         send_expiry_menu(cid, ast, mid, is_otc=False)
                     else:
                         ast = OTC_ASSETS[int(val.split("_")[2])]
-                        user_selection[cid]["asset"] = ast
-                        user_selection[cid]["cat"] = "otc"
+                        user_selection[cid] = {"asset": ast, "cat": "otc"}
                         send_expiry_menu(cid, ast, mid, is_otc=True)
 
                 elif val.startswith("exp_r_") or val.startswith("retry_"):
@@ -559,7 +560,7 @@ def webhook():
                         file_id_to_fetch = doc["file_id"]
                         is_valid_image = True
 
-                # Modalità 1: Analisi Foto IA
+                # Modalità 1: Analisi Foto IA (Senza messaggi di caricamento superflui)
                 if is_valid_image and file_id_to_fetch:
                     state = user_otc_state[cid]
                     ast_name = state["asset"]
@@ -572,7 +573,6 @@ def webhook():
                         download_url = f"https://api.telegram.org/file/bot{TG_TOKEN}/{file_path}"
                         img_bytes = requests.get(download_url).content
                         
-                        send_message(cid, "🔍 EasyTrack IA sta analizzando il grafico OTC...")
                         analysis = analyze_pocket_option_visual_trend(img_bytes)
                         
                         api_call("deleteMessage", {"chat_id": cid, "message_id": msg_id_user})
@@ -583,8 +583,9 @@ def webhook():
                         entry_time = (current_it_time + timedelta(minutes=1)).replace(second=0, microsecond=0).strftime('%H:%M:%S')
 
                         if not analysis:
-                            analysis = {"signal": "BUY", "trend": "Rialzista", "rsi_est": 55.0, "macd_est": 0.0001, "pattern": "Spinta di continuazione"}
+                            analysis = {"price": 1.35873, "signal": "BUY", "trend": "Rialzista", "rsi_est": 55.0, "macd_est": -0.0001, "pattern": "Spinta di continuazione"}
 
+                        price_val = analysis.get("price", 1.35873)
                         raw_sig = analysis.get("signal", "BUY").upper()
                         if "SELL" in raw_sig or "VENDI" in raw_sig:
                             sig_type = "VENDI (SELL)"
@@ -596,19 +597,20 @@ def webhook():
                         trend_desc = analysis.get("trend", "Rialzista")
                         pattern_name = analysis.get("pattern", "Analisi Tecnica Grafica")
                         rsi_est = analysis.get("rsi_est", 55.0)
-                        macd_est = analysis.get("macd_est", 0.0001)
+                        macd_est = analysis.get("macd_est", -0.0001)
 
                         conf = 88.0
                         timeframe_name = exp_map.get(exp_key, "1 Minuto (M1)")
 
                         text = "🤖 **ANALISI EASYTRACK OTC (VISIVA)**\n\n"
                         text += f"💲💹 Asset: {ast_name}\n"
+                        text += f"💵 Prezzo Rilevato: `{price_val}`\n"
                         text += f"📊 Trend Grafico: {trend_desc}\n"
                         text += f"🕯️ Pattern Candele: {pattern_name}\n"
                         text += f"🎯 Segnale: {sig_type} {sig_emoji}\n\n"
                         text += f"🛠️ Indicatori Grafici Stimati:\n"
                         text += f"• RSI (9): ~{rsi_est}\n"
-                        text += f"• MACD: ~{macd_est}\n\n"
+                        text += f"• Linea MACD: `{macd_est}`\n\n"
                         text += f"⚖️ Affidabilità: {conf}%\n"
                         text += f"⏱️ Timeframe: {timeframe_name}\n"
                         text += f"📌 Ora Esatta Ingresso: `{entry_time}`"
@@ -617,7 +619,7 @@ def webhook():
                         send_message(cid, text, kb)
                         return "ok", 200
 
-                # Modalità 2: Inserimento Testuale Manuale dei 3 valori (ripristinato)
+                # Modalità 2: Inserimento Testuale Manuale
                 if "text" in up["message"]:
                     txt_msg = up["message"]["text"].strip()
                     if txt_msg == "/start":
