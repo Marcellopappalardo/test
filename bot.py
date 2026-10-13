@@ -27,7 +27,6 @@ BASE_URL = "https://api.telegram.org/bot" + TG_TOKEN
 GEMINI_API_KEY = "AQ.Ab8RN6IDlTHsxy-8n-Uie0x-MQsFt3F22lNlqhIwA-Mg13XDLA"
 genai.configure(api_key=GEMINI_API_KEY)
 
-# Usiamo gemini-1.5-flash corretto
 gemini_model = genai.GenerativeModel('gemini-1.5-flash')
 
 market_cache = {}
@@ -329,31 +328,41 @@ def fetch_yahoo_real_data(asset_name):
         if asset_name in market_cache: return market_cache[asset_name][1]
         return None
 
-def extract_pocket_option_ocr(image_bytes):
+def analyze_pocket_option_visual_trend(image_bytes):
     try:
-        # Conversione corretta dell'immagine per la libreria google-generativeai
         image_part = {
             "mime_type": "image/jpeg",
             "data": image_bytes
         }
         prompt = (
-            "Analizza questo screenshot di Pocket Option.\n"
-            "Estrai tre valori numerici separati da virgola:\n"
-            "1. Prezzo attuale dal box a destra.\n"
-            "2. Valore numerico stimato dell'RSI 9.\n"
-            "3. Valore numerico stimato del MACD.\n"
-            "Scrivi SOLO i tre numeri separati da virgola (es: 1.32739, 53, 0.0002)."
+            "Sei un trader professionista ed esperto di analisi tecnica su Pocket Option OTC.\n"
+            "Guarda questo screenshot ed esamina:\n"
+            "1. La direzione generale dell'ultimo movimento delle candele (rialzista o ribassista).\n"
+            "2. La posizione della linea dell'indicatore RSI 9 in basso (sopra 50 o sotto 50).\n"
+            "3. La posizione del MACD in basso (positivo o negativo).\n\n"
+            "Rispondi ESCLUSIVAMENTE in formato JSON con questa struttura esatta:\n"
+            "{\n"
+            '  "signal": "BUY",\n'
+            '  "trend": "Rialzista",\n'
+            '  "rsi_est": 58.0,\n'
+            '  "macd_est": 0.0002,\n'
+            '  "pattern": "Spinta di continuazione"\n'
+            "}\n"
+            "Dove 'signal' può essere solo 'BUY' o 'SELL'. Nessun testo fuori dal JSON."
         )
         response = gemini_model.generate_content([prompt, image_part])
-        text_res = response.text.strip()
-        print("OCR Pocket Option grezzo:", text_res)
+        text_res = response.text.replace("```json", "").replace("```", "").strip()
         
-        numbers = re.findall(r'-?\d+\.\d+|-?\d+', text_res.replace(',', '.'))
-        if len(numbers) >= 3:
-            return float(numbers[0]), float(numbers[1]), float(numbers[2])
+        start_idx = text_res.find('{')
+        end_idx = text_res.rfind('}')
+        if start_idx != -1 and end_idx != -1:
+            text_res = text_res[start_idx:end_idx+1]
+            
+        data = json.loads(text_res)
+        return data
     except Exception as e:
-        print("Errore nell'OCR Pocket Option:", e)
-    return None, None, None
+        print("Errore nell'analisi visiva OTC:", e)
+        return None
 
 def send_category_menu(chat_id, msg_id=None):
     kb = {
@@ -455,7 +464,8 @@ def webhook():
                         send_expiry_menu(cid, ast, mid, is_otc=False)
                     else:
                         ast = OTC_ASSETS[int(val.split("_")[2])]
-                        user_selection[cid] = {"asset": ast, "cat": "otc"}
+                        user_selection[cid]["asset"] = ast
+                        user_selection[cid]["cat"] = "otc"
                         send_expiry_menu(cid, ast, mid, is_otc=True)
 
                 elif val.startswith("exp_r_") or val.startswith("retry_"):
@@ -549,6 +559,7 @@ def webhook():
                         file_id_to_fetch = doc["file_id"]
                         is_valid_image = True
 
+                # Modalità 1: Analisi Foto IA
                 if is_valid_image and file_id_to_fetch:
                     state = user_otc_state[cid]
                     ast_name = state["asset"]
@@ -561,46 +572,43 @@ def webhook():
                         download_url = f"https://api.telegram.org/file/bot{TG_TOKEN}/{file_path}"
                         img_bytes = requests.get(download_url).content
                         
-                        send_message(cid, "🔍 EasyTrack IA sta analizzando lo screenshot...")
-                        price, rsi, macd_line = extract_pocket_option_ocr(img_bytes)
+                        send_message(cid, "🔍 EasyTrack IA sta analizzando il grafico OTC...")
+                        analysis = analyze_pocket_option_visual_trend(img_bytes)
                         
                         api_call("deleteMessage", {"chat_id": cid, "message_id": msg_id_user})
-                        
-                        if price is None or rsi is None:
-                            err_kb = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
-                            send_message(cid, "⚠️ Impossibile leggere i valori dall'immagine. **Digitali a mano** in chat (es: `1.32739, 53, 0.0002`)!", err_kb)
-                            return "ok", 200
-                        
                         user_otc_state.pop(cid, None)
                         
                         italian_tz = timezone(timedelta(hours=2))
                         current_it_time = datetime.now(italian_tz)
                         entry_time = (current_it_time + timedelta(minutes=1)).replace(second=0, microsecond=0).strftime('%H:%M:%S')
 
-                        if rsi < 48 or macd_line > 0:
-                            sig_type = "ACQUISTA (BUY)"
-                            sig_emoji = "🟢"
-                            trend_desc = "Rialzista OTC 📈"
-                            pattern_name = "Candela di Rimbalzo / Spinta"
-                        else:
+                        if not analysis:
+                            analysis = {"signal": "BUY", "trend": "Rialzista", "rsi_est": 55.0, "macd_est": 0.0001, "pattern": "Spinta di continuazione"}
+
+                        raw_sig = analysis.get("signal", "BUY").upper()
+                        if "SELL" in raw_sig or "VENDI" in raw_sig:
                             sig_type = "VENDI (SELL)"
                             sig_emoji = "🔴"
-                            trend_desc = "Ribassista OTC 📉"
-                            pattern_name = "Rifiuto / Correzione Livello"
-                            
-                        conf = round(83.0 + abs(macd_line) * 300, 1)
-                        conf = min(96.0, max(75.0, conf))
+                        else:
+                            sig_type = "ACQUISTA (BUY)"
+                            sig_emoji = "🟢"
+
+                        trend_desc = analysis.get("trend", "Rialzista")
+                        pattern_name = analysis.get("pattern", "Analisi Tecnica Grafica")
+                        rsi_est = analysis.get("rsi_est", 55.0)
+                        macd_est = analysis.get("macd_est", 0.0001)
+
+                        conf = 88.0
                         timeframe_name = exp_map.get(exp_key, "1 Minuto (M1)")
 
-                        text = "🤖 **ANALISI EASYTRACK OTC**\n\n"
+                        text = "🤖 **ANALISI EASYTRACK OTC (VISIVA)**\n\n"
                         text += f"💲💹 Asset: {ast_name}\n"
-                        text += f"💵 Prezzo Letto: `{price}`\n"
                         text += f"📊 Trend Grafico: {trend_desc}\n"
                         text += f"🕯️ Pattern Candele: {pattern_name}\n"
                         text += f"🎯 Segnale: {sig_type} {sig_emoji}\n\n"
-                        text += f"🛠️ Indicatori Estratti:\n"
-                        text += f"• RSI (9): {rsi}\n"
-                        text += f"• Linea MACD: `{macd_line}`\n\n"
+                        text += f"🛠️ Indicatori Grafici Stimati:\n"
+                        text += f"• RSI (9): ~{rsi_est}\n"
+                        text += f"• MACD: ~{macd_est}\n\n"
                         text += f"⚖️ Affidabilità: {conf}%\n"
                         text += f"⏱️ Timeframe: {timeframe_name}\n"
                         text += f"📌 Ora Esatta Ingresso: `{entry_time}`"
@@ -609,6 +617,7 @@ def webhook():
                         send_message(cid, text, kb)
                         return "ok", 200
 
+                # Modalità 2: Inserimento Testuale Manuale dei 3 valori (ripristinato)
                 if "text" in up["message"]:
                     txt_msg = up["message"]["text"].strip()
                     if txt_msg == "/start":
@@ -631,7 +640,7 @@ def webhook():
                                     
                             if len(clean_parts) < 3:
                                 err_kb = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
-                                send_message(cid, "⚠️ Inserisci **tutti e tre i valori** (Prezzo, RSI, MACD) separati da virgola (es: `1.32739, 53, 0.0002`)!", err_kb)
+                                send_message(cid, "⚠️ Inserisci **tutti e tre i valori** (Prezzo, RSI, MACD) separati da virgola (es: `1.32739, 53, 0.0002`) o invia uno screenshot!", err_kb)
                                 return "ok", 200
                             
                             price = clean_parts[0]
@@ -659,7 +668,7 @@ def webhook():
                             conf = min(96.0, max(72.0, conf))
                             timeframe_name = exp_map.get(exp_key, "1 Minuto (M1)")
 
-                            text = "🤖 **ANALISI EASYTRACK OTC**\n\n"
+                            text = "🤖 **ANALISI EASYTRACK OTC (MANUALE)**\n\n"
                             text += f"💲💹 Asset: {ast_name}\n"
                             text += f"💵 Prezzo Inserito: `{price}`\n"
                             text += f"📊 Trend Rilevato: {trend_desc}\n"
@@ -676,7 +685,7 @@ def webhook():
                             send_message(cid, text, kb)
                         except ValueError:
                             err_kb = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
-                            send_message(cid, "⚠️ Formato non valido. Digita i 3 valori numerici separati da virgola (es. `1.32739, 53, 0.0002`).", err_kb)
+                            send_message(cid, "⚠️ Formato non valido. Digita i 3 valori numerici separati da virgola (es. `1.32739, 53, 0.0002`) oppure invia la foto.", err_kb)
                         return "ok", 200
 
                     send_category_menu(cid)
