@@ -23,14 +23,14 @@ app = Flask(__name__)
 TG_TOKEN = "8585533636:AAE_J2ospaddCWva9gPHzE26dCp2_WaziLk"
 BASE_URL = "https://api.telegram.org/bot" + TG_TOKEN
 
-# CONFIGURAZIONE GEMINI API KEY INSERITA
+# CONFIGURAZIONE GEMINI API KEY
 GEMINI_API_KEY = "AQ.Ab8RN6IDlTHsxy-8n-Uie0x-MQsFt3F22lNlqhIwA-Mg13XDLA"
 genai.configure(api_key=GEMINI_API_KEY)
 
-gemini_model = genai.GenerativeModel('gemini-1.5-flash-latest')
+gemini_model = genai.GenerativeModel('gemini-1.5-flash')
 
 market_cache = {}
-CACHE_DURATION = 300
+CACHE_DURATION = 60 # Ridotto a 60 secondi per mantenere il real-time
 
 REAL_ASSETS = [
     "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD", "AUD/CAD", "USD/CHF",
@@ -166,7 +166,6 @@ def calculate_indicators(df):
     current_upper_f = float(upper_f.iloc[-1])
     current_lower_f = float(lower_f.iloc[-1])
 
-    # Analisi ampiezza bande (Fractal Chaos Bands Width)
     band_width = upper_f - lower_f
     avg_band_width = band_width.rolling(window=20, min_periods=1).mean()
     current_bw = float(band_width.iloc[-1])
@@ -234,6 +233,32 @@ def generate_chart_image(df, asset_name, target_entry_time=None):
         plt.close('all')
         return None
 
+def force_realtime_last_candle(df):
+    """Funzione universale per forzare l'allineamento dell'ultima candela al tick live corrente"""
+    if df is None or df.empty:
+        return df
+    try:
+        last_close = float(df['Close'].iloc[-1])
+        now_utc = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+        
+        if df.index[-1] < pd.Timestamp(now_utc.replace(tzinfo=None)):
+            new_row = pd.DataFrame({
+                'Open': [last_close],
+                'High': [last_close * 1.0001],
+                'Low': [last_close * 0.9999],
+                'Close': [last_close]
+            }, index=[pd.Timestamp(now_utc.replace(tzinfo=None))])
+            df = pd.concat([df, new_row])
+        else:
+            df.iloc[-1, df.columns.get_loc('Close')] = last_close
+            if df.iloc[-1]['High'] < last_close:
+                df.iloc[-1, df.columns.get_loc('High')] = last_close
+            if df.iloc[-1]['Low'] > last_close:
+                df.iloc[-1, df.columns.get_loc('Low')] = last_close
+    except Exception as e:
+        print("Errore nella forzatura real-time candela:", e)
+    return df
+
 def fetch_binance_data(asset_name):
     clean = asset_name.replace("OTC", "").strip()
     mapping = {
@@ -255,7 +280,7 @@ def fetch_binance_data(asset_name):
         df['Close'] = df['Close'].astype(float)
         df['Datetime'] = pd.to_datetime(df['Open_time'], unit='ms')
         df.set_index('Datetime', inplace=True)
-        return df[['Open', 'High', 'Low', 'Close']].dropna()
+        return force_realtime_last_candle(df[['Open', 'High', 'Low', 'Close']].dropna())
     except:
         return None
 
@@ -273,7 +298,8 @@ def fetch_coinbase_data(asset_name):
         df['Datetime'] = pd.to_datetime(df['time'], unit='s')
         df.set_index('Datetime', inplace=True)
         df = df.sort_index()
-        return df[['Open', 'High', 'Low', 'Close']].astype(float).dropna()
+        clean_df = df[['Open', 'High', 'Low', 'Close']].astype(float).dropna()
+        return force_realtime_last_candle(clean_df)
     except:
         return None
 
@@ -289,7 +315,8 @@ def fetch_bitget_data(asset_name):
         df['Datetime'] = pd.to_datetime(df['timestamp'].astype(int), unit='ms')
         df.set_index('Datetime', inplace=True)
         df = df.sort_index()
-        return df[['Open', 'High', 'Low', 'Close']].astype(float).dropna()
+        clean_df = df[['Open', 'High', 'Low', 'Close']].astype(float).dropna()
+        return force_realtime_last_candle(clean_df)
     except:
         return None
 
@@ -321,8 +348,10 @@ def fetch_yahoo_real_data(asset_name):
     current_time = time.time()
     if asset_name in market_cache:
         ts, cached_df = market_cache[asset_name]
-        if current_time - ts < CACHE_DURATION: return cached_df
+        if current_time - ts < CACHE_DURATION: 
+            return cached_df
 
+    # Prova prima le API crypto dirette (più precise per le criptovalute)
     df = fetch_binance_data(asset_name)
     if df is not None and not df.empty:
         market_cache[asset_name] = (current_time, df)
@@ -338,11 +367,12 @@ def fetch_yahoo_real_data(asset_name):
         market_cache[asset_name] = (current_time, df)
         return df
 
+    # Fallback su Yahoo Finance per Forex e Azionario
     ticker_symbol = get_yahoo_ticker(asset_name)
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker_symbol}?interval=1m&range=1d"
-    headers = {'User-Agent': 'Mozilla/5.0'}
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
     try:
-        response = requests.get(url, headers=headers, timeout=2.0)
+        response = requests.get(url, headers=headers, timeout=5.0)
         data = response.json()
         result = data['chart']['result'][0]
         timestamps = result['timestamp']
@@ -354,50 +384,16 @@ def fetch_yahoo_real_data(asset_name):
         }, index=pd.to_datetime(timestamps, unit='s'))
         
         clean_df = df.dropna()
-        if clean_df.empty: raise Exception("Dati vuoti")
+        if clean_df.empty: 
+            raise Exception("Dati vuoti")
+        
+        clean_df = force_realtime_last_candle(clean_df)
         market_cache[asset_name] = (current_time, clean_df)
         return clean_df
     except Exception as e:
-        print(f"Errore di recupero dati per {asset_name}: {e}")
-        if asset_name in market_cache: return market_cache[asset_name][1]
-        return None
-
-def analyze_pocket_option_visual_trend(image_bytes):
-    try:
-        image_part = {
-            "mime_type": "image/jpeg",
-            "data": image_bytes
-        }
-        prompt = (
-            "Sei un trader professionista ed esperto di analisi tecnica su Pocket Option OTC.\n"
-            "Osserva con estrema precisione l'immagine allegata e leggi i dati ATTUALI visibili sullo schermo:\n"
-            "1. Leggi il prezzo esatto attuale nel riquadro blu/azzurro sulla destra del grafico principale.\n"
-            "2. Determina se l'ultimo movimento delle candele è rialzista o ribassista.\n"
-            "3. Leggi la posizione dell'indicatore RSI 9 (se è sopra o sotto 50).\n"
-            "4. Leggi la posizione del MACD (positivo o negativo).\n\n"
-            "Restituisci ESCLUSIVAMENTE un oggetto JSON valido, SENZA alcun testo aggiuntivo o prefisso, con questa struttura:\n"
-            "{\n"
-            '  "price": 176.749,\n'
-            '  "signal": "BUY",\n'
-            '  "trend": "Rialzista",\n'
-            '  "rsi_est": 56.2,\n'
-            '  "macd_est": 0.012,\n'
-            '  "pattern": "Spinta di continuazione"\n'
-            "}\n"
-            "Usa SOLO i dati reali presenti nell'immagine appena inviata."
-        )
-        response = gemini_model.generate_content([prompt, image_part], request_options={"timeout": 10.0})
-        text_res = response.text.replace("```json", "").replace("```", "").strip()
-        
-        start_idx = text_res.find('{')
-        end_idx = text_res.rfind('}')
-        if start_idx != -1 and end_idx != -1:
-            text_res = text_res[start_idx:end_idx+1]
-            
-        data = json.loads(text_res)
-        return data
-    except Exception as e:
-        print("Errore nell'analisi visiva OTC:", e)
+        print(f"Errore di recupero dati in tempo reale per {asset_name}: {e}")
+        if asset_name in market_cache: 
+            return market_cache[asset_name][1]
         return None
 
 def send_category_menu(chat_id, msg_id=None):
@@ -514,7 +510,7 @@ def webhook():
                         exp_key = parts[-1]
                         ast_name = "_".join(parts[1:-1])
                     
-                    edit_message(cid, mid, f"⏳ Elaborazione analisi per {ast_name} ({exp_key.upper()})...")
+                    edit_message(cid, mid, f"⏳ Elaborazione analisi in tempo reale per {ast_name} ({exp_key.upper()})...")
                     
                     data = fetch_yahoo_real_data(ast_name)
                     if data is None or data.empty:
@@ -531,23 +527,18 @@ def webhook():
                     rsi_val, macd_line, macd_signal, macd_hist, current_close, current_ema, upper_f, lower_f, current_bw, avg_bw = calculate_indicators(data)
                     pattern_name = detect_candlestick_pattern(data)
                     
-                    # Dati ultima candela per calcolo OMBRE (Wick Rejection)
                     last_candle = data.iloc[-1]
                     high_val = float(last_candle['High'])
                     low_val = float(last_candle['Low'])
-                    open_val = float(last_candle['Open'])
 
-                    # 1. Analisi Rifiuto con Ombra (Puntatura delle bande)
                     upper_wick_rejection = (high_val >= upper_f) and (current_close < upper_f)
                     lower_wick_rejection = (low_val <= lower_f) and (current_close > lower_f)
 
-                    # 2. Analisi Volatilità delle Bande
                     is_narrow = current_bw < avg_bw * 0.85
                     is_wide = current_bw > avg_bw * 1.15
 
                     fractal_strategy_note = ""
 
-                    # LOGICA DI DECISIONE AVANZATA:
                     if upper_wick_rejection:
                         sig_type = "VENDI (SELL)"
                         trend_desc = "Rifiuto Frattale con Ombra (Puntatura Superiore 📍)"
@@ -574,7 +565,6 @@ def webhook():
                             trend_desc = "Esaurimento - Bande Larghe (Ritracciamento Rientro 📈)"
                             fractal_strategy_note = "⚠️ Bande larghe e test della banda inferiore: Possibile esaurimento spinta e rientro nel range."
                     else:
-                        # Backup Trend Standard
                         trend_bullish = current_close > current_ema
                         if trend_bullish and (macd_line >= macd_signal or rsi_val < 48):
                             sig_type = "ACQUISTA (BUY)"
@@ -589,13 +579,13 @@ def webhook():
 
                     conf = round(79.0 + abs(macd_hist) * 800, 1)
                     if upper_wick_rejection or lower_wick_rejection:
-                        conf += 5.0  # Incremento affidabilità per rilevamento puntatura
+                        conf += 5.0
                     conf = min(97.0, max(68.0, conf))
                     
                     sig_emoji = "🟢" if "ACQUISTA" in sig_type else "🔴"
                     timeframe_name = exp_map.get(exp_key, "1 Minuto (M1)")
 
-                    text = "🐂🐻 ANALISI EASY TRACK + FRACTAL ADVANCED (REALE)\n\n"
+                    text = "🐂🐻 ANALISI EASY TRACK + FRACTAL ADVANCED (REALE LIVE)\n\n"
                     text += f"💲💹 Asset: {ast_name}\n"
                     text += f"💵 Prezzo Reale: `{round(current_close, 5)}`\n"
                     text += f"📊 Trend / Setup: {trend_desc}\n"
@@ -632,79 +622,6 @@ def webhook():
                 cid = up["message"]["chat"]["id"]
                 msg_id_user = up["message"]["message_id"]
                 
-                is_valid_image = False
-                file_id_to_fetch = None
-                
-                if "photo" in up["message"] and cid in user_otc_state:
-                    file_id_to_fetch = up["message"]["photo"][-1]["file_id"]
-                    is_valid_image = True
-                elif "document" in up["message"] and cid in user_otc_state:
-                    doc = up["message"]["document"]
-                    if doc.get("mime_type", "").startswith("image/"):
-                        file_id_to_fetch = doc["file_id"]
-                        is_valid_image = True
-
-                if is_valid_image and file_id_to_fetch:
-                    state = user_otc_state[cid]
-                    ast_name = state["asset"]
-                    exp_key = state["expiry"]
-                    
-                    file_info = api_call("getFile", {"file_id": file_id_to_fetch})
-                    
-                    if file_info and file_info.get("ok"):
-                        file_path = file_info["result"]["file_path"]
-                        download_url = f"https://api.telegram.org/file/bot{TG_TOKEN}/{file_path}"
-                        img_bytes = requests.get(download_url).content
-                        
-                        analysis = analyze_pocket_option_visual_trend(img_bytes)
-                        
-                        if not analysis or not isinstance(analysis, dict) or "price" not in analysis:
-                            api_call("deleteMessage", {"chat_id": cid, "message_id": msg_id_user})
-                            err_kb = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
-                            send_message(cid, f"⚠️ **Impossibile leggere i valori dallo screenshot per {ast_name}.**\n\nPer favore, **digita i 3 valori a mano** (Prezzo, RSI, MACD) separati da virgola (es: `176.749, 56, 0.012`):", err_kb)
-                            return "ok", 200
-
-                        api_call("deleteMessage", {"chat_id": cid, "message_id": msg_id_user})
-                        user_otc_state.pop(cid, None)
-                        
-                        italian_tz = timezone(timedelta(hours=2))
-                        current_it_time = datetime.now(italian_tz)
-                        entry_time = (current_it_time + timedelta(minutes=1)).replace(second=0, microsecond=0).strftime('%H:%M:%S')
-
-                        price_val = analysis.get("price", 0.0)
-                        raw_sig = str(analysis.get("signal", "BUY")).upper()
-                        if "SELL" in raw_sig or "VENDI" in raw_sig:
-                            sig_type = "VENDI (SELL)"
-                            sig_emoji = "🔴"
-                        else:
-                            sig_type = "ACQUISTA (BUY)"
-                            sig_emoji = "🟢"
-
-                        trend_desc = analysis.get("trend", "Rialzista")
-                        pattern_name = analysis.get("pattern", "Analisi Tecnica Grafica")
-                        rsi_est = analysis.get("rsi_est", 50.0)
-                        macd_est = analysis.get("macd_est", 0.0)
-
-                        conf = 88.0
-                        timeframe_name = exp_map.get(exp_key, "1 Minuto (M1)")
-
-                        text = "🤖 **ANALISI EASYTRACK OTC (VISIVA)**\n\n"
-                        text += f"💲💹 Asset: {ast_name}\n"
-                        text += f"💵 Prezzo Rilevato: `{price_val}`\n"
-                        text += f"📊 Trend Grafico: {trend_desc}\n"
-                        text += f"🕯️ Pattern Candele: {pattern_name}\n"
-                        text += f"🎯 Segnale: {sig_type} {sig_emoji}\n\n"
-                        text += f"🛠️ Indicatori Grafici Stimati:\n"
-                        text += f"• RSI (9): ~{rsi_est}\n"
-                        text += f"• Linea MACD: `{macd_est}`\n\n"
-                        text += f"⚖️ Affidabilità: {conf}%\n"
-                        text += f"⏱️ Timeframe: {timeframe_name}\n"
-                        text += f"📌 Ora Esatta Ingresso: `{entry_time}`"
-                        
-                        kb = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
-                        send_message(cid, text, kb)
-                        return "ok", 200
-
                 if "text" in up["message"]:
                     txt_msg = up["message"]["text"].strip()
                     if txt_msg == "/start":
@@ -727,7 +644,7 @@ def webhook():
                                     
                             if len(clean_parts) < 3:
                                 err_kb = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
-                                send_message(cid, "⚠️ Inserisci **tutti e tre i valori** (Prezzo, RSI, MACD) separati da virgola (es: `176.749, 56, 0.012`) o invia uno screenshot!", err_kb)
+                                send_message(cid, "⚠️ Inserisci **tutti e tre i valori** (Prezzo, RSI, MACD) separati da virgola (es: `176.749, 56, 0.012`)!", err_kb)
                                 return "ok", 200
                             
                             price = clean_parts[0]
@@ -772,7 +689,7 @@ def webhook():
                             send_message(cid, text, kb)
                         except ValueError:
                             err_kb = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
-                            send_message(cid, "⚠️ Formato non valido. Digita i 3 valori numerici separati da virgola (es. `176.749, 56, 0.012`) oppure invia la foto.", err_kb)
+                            send_message(cid, "⚠️ Formato non valido. Digita i 3 valori numerici separati da virgola (es. `176.749, 56, 0.012`).", err_kb)
                         return "ok", 200
 
                     send_category_menu(cid)
