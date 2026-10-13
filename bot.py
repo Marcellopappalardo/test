@@ -234,7 +234,6 @@ def generate_chart_image(df, asset_name, target_entry_time=None):
         return None
 
 def force_realtime_last_candle(df):
-    """Funzione universale per forzare l'allineamento dell'ultima candela al tick live corrente"""
     if df is None or df.empty:
         return df
     try:
@@ -351,7 +350,6 @@ def fetch_yahoo_real_data(asset_name):
         if current_time - ts < CACHE_DURATION: 
             return cached_df
 
-    # Prova prima le API crypto dirette (più precise per le criptovalute)
     df = fetch_binance_data(asset_name)
     if df is not None and not df.empty:
         market_cache[asset_name] = (current_time, df)
@@ -367,7 +365,6 @@ def fetch_yahoo_real_data(asset_name):
         market_cache[asset_name] = (current_time, df)
         return df
 
-    # Fallback su Yahoo Finance per Forex e Azionario
     ticker_symbol = get_yahoo_ticker(asset_name)
     url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker_symbol}?interval=1m&range=1d"
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
@@ -539,48 +536,29 @@ def webhook():
 
                     fractal_strategy_note = ""
 
-                    if upper_wick_rejection:
-                        sig_type = "VENDI (SELL)"
-                        trend_desc = "Rifiuto Frattale con Ombra (Puntatura Superiore 📍)"
-                        fractal_strategy_note = "📌 L'ombra ha punto il massimo frattale ed è rientrata: forte segnale di ritracciamento/inversione ribassista."
-                    elif lower_wick_rejection:
+                    trend_bullish = current_close > current_ema
+                    if trend_bullish and (macd_line >= macd_signal or rsi_val < 48):
                         sig_type = "ACQUISTA (BUY)"
-                        trend_desc = "Rimbalzo Frattale con Ombra (Puntatura Inferiore 📍)"
-                        fractal_strategy_note = "📌 L'ombra ha punto il minimo frattale ed è rientrata: forte segnale di rimbalzo/inversione rialzista."
-                    elif is_narrow and current_close >= upper_f * 0.9995:
-                        sig_type = "ACQUISTA (BUY)"
-                        trend_desc = "Rialzista - Bande Strette (Breakout Continuazione 🚀)"
-                        fractal_strategy_note = "✅ Bande strette con breakout superiore: Ottimale per continuazione di trend (1-3m)."
-                    elif is_narrow and current_close <= lower_f * 1.0005:
+                        trend_desc = "Rialzista Forte 📈"
+                    elif not trend_bullish and (macd_line <= macd_signal or rsi_val > 52):
                         sig_type = "VENDI (SELL)"
-                        trend_desc = "Ribassista - Bande Strette (Breakout Continuazione 🚀)"
-                        fractal_strategy_note = "✅ Bande strette con breakout inferiore: Ottimale per continuazione di trend (1-3m)."
-                    elif is_wide and (current_close >= upper_f * 0.998 or current_close <= lower_f * 1.002):
-                        if current_close >= upper_f * 0.998:
-                            sig_type = "VENDI (SELL)"
-                            trend_desc = "Esaurimento - Bande Larghe (Ritracciamento Rientro 📉)"
-                            fractal_strategy_note = "⚠️ Bande larghe e test della banda superiore: Possibile esaurimento spinta e rientro nel range."
-                        else:
-                            sig_type = "ACQUISTA (BUY)"
-                            trend_desc = "Esaurimento - Bande Larghe (Ritracciamento Rientro 📈)"
-                            fractal_strategy_note = "⚠️ Bande larghe e test della banda inferiore: Possibile esaurimento spinta e rientro nel range."
+                        trend_desc = "Ribassista Forte 📉"
                     else:
-                        trend_bullish = current_close > current_ema
-                        if trend_bullish and (macd_line >= macd_signal or rsi_val < 48):
-                            sig_type = "ACQUISTA (BUY)"
-                            trend_desc = "Rialzista Forte 📈"
-                        elif not trend_bullish and (macd_line <= macd_signal or rsi_val > 52):
-                            sig_type = "VENDI (SELL)"
-                            trend_desc = "Ribassista Forte 📉"
-                        else:
-                            sig_type = "ACQUISTA (BUY)" if macd_line > macd_signal else "VENDI (SELL)"
-                            trend_desc = "Laterale / Transizione ↔️"
-                        fractal_strategy_note = "ℹ️ Condizione di mercato standard (nessun estremo di banda)."
+                        sig_type = "ACQUISTA (BUY)" if macd_line > macd_signal else "VENDI (SELL)"
+                        trend_desc = "Laterale / Transizione ↔️"
+                    fractal_strategy_note = "ℹ️ Condizione di mercato standard (nessun estremo di banda)."
 
-                    conf = round(79.0 + abs(macd_hist) * 800, 1)
-                    if upper_wick_rejection or lower_wick_rejection:
-                        conf += 5.0
-                    conf = min(97.0, max(68.0, conf))
+                    # --- CALCOLO AFFIDABILITÀ BASATO SULLA CONFLUENZA REALE ---
+                    base_conf = 60.0  
+                    trend_confirmed = (trend_bullish and "ACQUISTA" in sig_type) or (not trend_bullish and "VENDI" in sig_type)
+                    conf_trend = 15.0 if trend_confirmed else 0.0
+                    conf_macd = min(15.0, abs(macd_hist) * 2000)
+                    conf_fractal = 10.0 if (upper_wick_rejection or lower_wick_rejection) else 0.0
+                    rsi_confirmed = (rsi_val < 45 and "ACQUISTA" in sig_type) or (rsi_val > 55 and "VENDI" in sig_type)
+                    conf_rsi = 10.0 if rsi_confirmed else 0.0
+                    
+                    conf = round(base_conf + conf_trend + conf_macd + conf_fractal + conf_rsi, 1)
+                    conf = min(96.0, max(50.0, conf))
                     
                     sig_emoji = "🟢" if "ACQUISTA" in sig_type else "🔴"
                     timeframe_name = exp_map.get(exp_key, "1 Minuto (M1)")
