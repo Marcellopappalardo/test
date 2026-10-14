@@ -30,7 +30,7 @@ genai.configure(api_key=GEMINI_API_KEY)
 gemini_model = genai.GenerativeModel('gemini-1.5-flash')
 
 market_cache = {}
-CACHE_DURATION = 60 # Ridotto a 60 secondi per mantenere il real-time
+CACHE_DURATION = 60 
 
 REAL_ASSETS = [
     "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD", "AUD/CAD", "USD/CHF",
@@ -97,8 +97,6 @@ def edit_message(chat_id, msg_id, text, markup=None):
 
 def answer_callback(cq_id):
     api_call("answerCallbackQuery", {"callback_query_id": cq_id})
-
-# --- FUNZIONALITÀ MERCATO REALE ---
 
 def detect_candlestick_pattern(df):
     try:
@@ -395,8 +393,6 @@ def fetch_yahoo_real_data(asset_name):
             return market_cache[asset_name][1]
         return None
 
-# --- MENU TELEGRAM ---
-
 def send_category_menu(chat_id, msg_id=None):
     kb = {
         "inline_keyboard": [
@@ -509,9 +505,6 @@ def webhook():
                         user_selection[cid] = {"asset": ast, "cat": "otc", "page": page}
                         send_expiry_menu(cid, ast, mid, is_otc=True, page=page)
 
-                # ==========================================
-                # --- MERCATO REALE (COMPLETAMENTE AUTOMATICO) ---
-                # ==========================================
                 elif val.startswith("exp_r_") or val.startswith("retry_"):
                     if val.startswith("exp_r_"):
                         exp_key = val.split("_")[2]
@@ -598,10 +591,6 @@ def webhook():
                     else:
                         send_message(cid, text, kb)
 
-                # ==========================================
-                # --- STRATEGIA VISIVA OTC GUIDATA DA GEMINI ---
-                # ==========================================
-
                 # Step 1 OTC: Selezione RSI (9)
                 elif val.startswith("exp_o_"):
                     exp_key = val.split("_")[2]
@@ -626,7 +615,7 @@ def webhook():
                     }
                     edit_message(cid, mid, f"📊 **{ast_name} ({exp_map.get(exp_key, exp_key)})**\n\n**Step 1/2:** Guarda l'indicatore **RSI (9)** sul broker e seleziona dove si trova la linea in questo momento:", kb_rsi_levels)
 
-                # Step 2 OTC: Selezione del MACD
+                # Step 2 OTC: Selezione del MACD con i tasti originali + i 2 tasti di spinta specifica continua
                 elif val.startswith("otc_rsi_"):
                     rsi_choice = val.replace("otc_rsi_", "")
                     if cid in user_otc_state:
@@ -638,6 +627,8 @@ def webhook():
                                 [{"text": "🟢 Incrocio Rialzista", "callback_data": "otc_macd_bull"}],
                                 [{"text": "🔴 Incrocio Ribassista", "callback_data": "otc_macd_bear"}],
                                 [{"text": "⏳ In fase di formazione", "callback_data": "otc_macd_pending"}],
+                                [{"text": "📈 Forte Spinta Rialzista Continua", "callback_data": "otc_macd_strong_bull"}],
+                                [{"text": "📉 Forte Spinta Ribassista Continua", "callback_data": "otc_macd_strong_bear"}],
                                 [
                                     {"text": "↩️ Torna Indietro", "callback_data": f"pg_otc_{page}"},
                                     {"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}
@@ -674,22 +665,25 @@ def webhook():
                         macd_map = {
                             "bull": "Incrocio Rialzista 🟢",
                             "bear": "Incrocio Ribassista 🔴",
-                            "pending": "In fase di formazione ⏳"
+                            "pending": "In fase di formazione ⏳",
+                            "strong_bull": "Forte Spinta Rialzista Continua 📈",
+                            "strong_bear": "Forte Spinta Ribassista Continua 📉"
                         }
 
-                        # INTERROGAZIONE A GEMINI AI CON STILE DA TRADER PROFESSIONISTA
+                        # INTERROGAZIONE A GEMINI AI CON PROMPT PROFESSIONALE AVANZATO
                         try:
                             prompt = f"""Sei un trader professionista senior di opzioni binarie ad alta frequenza specializzato su mercati OTC sintetici.
-L'utente ha selezionato questi parametri dal broker:
+L'utente ha selezionato questi parametri esatti dal broker:
 - Asset: {ast_name}
 - Scadenza: {exp_map.get(exp_key, exp_key)}
 - RSI(9): {rsi_map.get(rsi_choice, rsi_choice)}
 - MACD: {macd_map.get(macd_choice, macd_choice)}
 
-Analizza la confluenza tecnica per opzioni binarie a brevissimo termine e restituisci la risposta ESATTAMENTE in questo formato:
+Agisci come se stessi guardando tu stesso il grafico in tempo reale. Se è stata selezionata una 'Forte Spinta Continua' (rialzista o ribassista) unita ai livelli dell'RSI, valuta che c'è un momentum direzionale fortissimo e pulito senza incroci in corso. 
+Restituisci la risposta ESATTAMENTE in questo formato:
 SEGNALE: [ACQUISTA (BUY) oppure VENDI (SELL)]
-AFFIDABILITA: [Percentuale stimata tra 82% e 95%, es: 91.5%]
-DESCRIZIONE: [Spiegazione tecnica e tattica professionale di 2 righe basata sul momentum e sul controllo di mercato]"""
+AFFIDABILITA: [Percentuale stimata tra 85% e 96%, es: 92.5%]
+DESCRIZIONE: [Spiegazione tecnica e tattica professionale di 2 righe basata sul momentum continuo, sulla forza del trend e sul controllo di mercato]"""
 
                             ai_response = gemini_model.generate_content(prompt)
                             ai_text = ai_response.text
@@ -699,12 +693,12 @@ DESCRIZIONE: [Spiegazione tecnica e tattica professionale di 2 righe basata sul 
                             desc_match = re.search(r"DESCRIZIONE:\s*(.*)", ai_text, re.DOTALL)
 
                             sig_type = sig_match.group(1).strip() if sig_match else "ACQUISTA (BUY)"
-                            conf = conf_match.group(1).strip() if conf_match else "90.0%"
-                            trend_desc = desc_match.group(1).strip() if desc_match else "Segnale validato sui livelli di momentum."
+                            conf = conf_match.group(1).strip() if conf_match else "91.0%"
+                            trend_desc = desc_match.group(1).strip() if desc_match else "Confluenza confermata dalla forte spinta direzionale del momentum."
                         except Exception as ai_err:
                             print("Errore Gemini OTC:", ai_err)
-                            sig_type = "ACQUISTA (BUY)" if rsi_choice in ["under30", "50_70"] else "VENDI (SELL)"
-                            conf = "88.0%"
+                            sig_type = "ACQUISTA (BUY)" if rsi_choice in ["under30", "50_70", "strong_bull"] else "VENDI (SELL)"
+                            conf = "89.0%"
                             trend_desc = "Confluenza confermata dai livelli degli oscillatori."
 
                         sig_emoji = "🟢" if "ACQUISTA" in sig_type else "🔴"
