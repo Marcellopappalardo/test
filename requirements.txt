@@ -7,4 +7,3 @@ mplfinance
 pillow
 google-generativeai
 gunicorn
-
