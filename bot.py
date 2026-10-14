@@ -524,7 +524,6 @@ def webhook():
                         exp_key = parts[-1]
                         ast_name = "_".join(parts[1:-1])
                     
-                    # MODIFICATO: Messaggio con EasyTrack
                     edit_message(cid, mid, f"⏳ **EasyTrack sta analizzando** in tempo reale per {ast_name} ({exp_key.upper()})...")
                     
                     data = fetch_yahoo_real_data(ast_name)
@@ -622,7 +621,6 @@ def webhook():
                     
                     user_otc_state[cid] = {"asset": ast_name, "expiry": exp_key, "page": page}
                     
-                    # PULSANTI AGGIORNATI CON LE REGOLE VISIVE ESATTE DA VERIFICARE
                     kb_ultra_fast = {
                         "inline_keyboard": [
                             [{"text": "📌 Rifiuto | Candela con ombra + RSI sopra 70 / sotto 30", "callback_data": "otc_uf_rejection"}],
@@ -651,7 +649,6 @@ def webhook():
                         page = state.get("page", 0)
                         user_otc_state.pop(cid, None)
                         
-                        # MODIFICATO: Messaggio con EasyTrack in elaborazione
                         edit_message(cid, mid, f"⏳ **EasyTrack sta analizzando** il setup OTC per {ast_name}...")
 
                         italian_tz = timezone(timedelta(hours=2))
