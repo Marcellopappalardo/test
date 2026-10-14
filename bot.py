@@ -615,7 +615,7 @@ def webhook():
                     }
                     edit_message(cid, mid, f"📊 **{ast_name} ({exp_map.get(exp_key, exp_key)})**\n\n**Step 1/2:** Guarda l'indicatore **RSI (9)** sul broker e seleziona dove si trova la linea in questo momento:", kb_rsi_levels)
 
-                # Step 2 OTC: Selezione del MACD con i tasti originali + i 2 tasti di spinta specifica continua
+                # Step 2 OTC: Selezione del MACD (SOLO i primi 3 pulsanti originali)
                 elif val.startswith("otc_rsi_"):
                     rsi_choice = val.replace("otc_rsi_", "")
                     if cid in user_otc_state:
@@ -627,8 +627,6 @@ def webhook():
                                 [{"text": "🟢 Incrocio Rialzista", "callback_data": "otc_macd_bull"}],
                                 [{"text": "🔴 Incrocio Ribassista", "callback_data": "otc_macd_bear"}],
                                 [{"text": "⏳ In fase di formazione", "callback_data": "otc_macd_pending"}],
-                                [{"text": "📈 Forte Spinta Rialzista Continua", "callback_data": "otc_macd_strong_bull"}],
-                                [{"text": "📉 Forte Spinta Ribassista Continua", "callback_data": "otc_macd_strong_bear"}],
                                 [
                                     {"text": "↩️ Torna Indietro", "callback_data": f"pg_otc_{page}"},
                                     {"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}
@@ -665,9 +663,7 @@ def webhook():
                         macd_map = {
                             "bull": "Incrocio Rialzista 🟢",
                             "bear": "Incrocio Ribassista 🔴",
-                            "pending": "In fase di formazione ⏳",
-                            "strong_bull": "Forte Spinta Rialzista Continua 📈",
-                            "strong_bear": "Forte Spinta Ribassista Continua 📉"
+                            "pending": "In fase di formazione ⏳"
                         }
 
                         # INTERROGAZIONE A GEMINI AI CON PROMPT PROFESSIONALE AVANZATO
@@ -679,11 +675,11 @@ L'utente ha selezionato questi parametri esatti dal broker:
 - RSI(9): {rsi_map.get(rsi_choice, rsi_choice)}
 - MACD: {macd_map.get(macd_choice, macd_choice)}
 
-Agisci come se stessi guardando tu stesso il grafico in tempo reale. Se è stata selezionata una 'Forte Spinta Continua' (rialzista o ribassista) unita ai livelli dell'RSI, valuta che c'è un momentum direzionale fortissimo e pulito senza incroci in corso. 
+Agisci come se stessi guardando tu stesso il grafico in tempo reale. Valuta la confluenza tecnica tra l'RSI e lo stato del MACD.
 Restituisci la risposta ESATTAMENTE in questo formato:
 SEGNALE: [ACQUISTA (BUY) oppure VENDI (SELL)]
 AFFIDABILITA: [Percentuale stimata tra 85% e 96%, es: 92.5%]
-DESCRIZIONE: [Spiegazione tecnica e tattica professionale di 2 righe basata sul momentum continuo, sulla forza del trend e sul controllo di mercato]"""
+DESCRIZIONE: [Spiegazione tecnica e tattica professionale di 2 righe basata sul trend e sul controllo di mercato]"""
 
                             ai_response = gemini_model.generate_content(prompt)
                             ai_text = ai_response.text
@@ -694,10 +690,10 @@ DESCRIZIONE: [Spiegazione tecnica e tattica professionale di 2 righe basata sul 
 
                             sig_type = sig_match.group(1).strip() if sig_match else "ACQUISTA (BUY)"
                             conf = conf_match.group(1).strip() if conf_match else "91.0%"
-                            trend_desc = desc_match.group(1).strip() if desc_match else "Confluenza confermata dalla forte spinta direzionale del momentum."
+                            trend_desc = desc_match.group(1).strip() if desc_match else "Confluenza confermata dai livelli degli indicatori tecnici."
                         except Exception as ai_err:
                             print("Errore Gemini OTC:", ai_err)
-                            sig_type = "ACQUISTA (BUY)" if rsi_choice in ["under30", "50_70", "strong_bull"] else "VENDI (SELL)"
+                            sig_type = "ACQUISTA (BUY)" if rsi_choice in ["under30", "50_70"] else "VENDI (SELL)"
                             conf = "89.0%"
                             trend_desc = "Confluenza confermata dai livelli degli oscillatori."
 
