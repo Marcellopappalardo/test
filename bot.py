@@ -15,7 +15,7 @@ import requests
 import pandas as pd
 import numpy as np
 
-# Importa la libreria di Google Generative AI
+# Importa la libreria di Google Generative AI (mantenuta per il mercato reale o compatibilità)
 import google.generativeai as genai
 
 app = Flask(__name__)
@@ -588,7 +588,7 @@ def webhook():
                         send_message(cid, text, kb)
 
                 # ==========================================
-                # --- STRATEGIA VISIVA OTC (70 - 50 - 30) ---
+                # --- STRATEGIA VISIVA OTC (70 - 50 - 30) SENZA AI ---
                 # ==========================================
 
                 # Step 1 OTC: Selezione RSI (9) basata sulle linee 70-50-30 del broker
@@ -627,7 +627,7 @@ def webhook():
                         }
                         edit_message(cid, mid, "📊 **Step 2/2:** Qual è la situazione attuale del **MACD** sul broker?", kb_macd_3)
 
-                # Calcolo finale del segnale OTC
+                # Calcolo finale del segnale OTC (Logica pura basata su regole fisse)
                 elif val.startswith("otc_macd_"):
                     macd_choice = val.replace("otc_macd_", "")
                     if cid in user_otc_state:
@@ -655,55 +655,41 @@ def webhook():
                             "pending": "In fase di formazione ⏳"
                         }
                         
-                        # Logica di confluenza OTC basata sui livelli reali
-                        if rsi_choice == "over70" or macd_choice == "bear":
-                            if rsi_choice == "under30" and macd_choice == "bull":
-                                sig_type = "ACQUISTA (BUY)"
-                                sig_emoji = "🟢"
-                                trend_desc = "Rimbalzo da Ipervenduto 📈"
-                                pattern_name = "Reazione sui Minimi"
-                                conf = 91.0
-                            elif rsi_choice == "over70":
-                                sig_type = "VENDI (SELL)"
-                                sig_emoji = "🔴"
-                                trend_desc = "Inversione da Ipercomprato 📉"
-                                pattern_name = "Rifiuto su Livello 70"
-                                conf = 90.0
-                            else:
-                                sig_type = "VENDI (SELL)"
-                                sig_emoji = "🔴"
-                                trend_desc = "Spinta Ribassista 📉"
-                                pattern_name = "Continuazione Trend Sotto 50"
-                                conf = 85.0
+                        # Logica deterministica fissa per l'OTC senza intelligenza artificiale
+                        if rsi_choice == "under30" or (macd_choice == "bull" and rsi_choice in ["50_70", "cross50"]):
+                            sig_type = "ACQUISTA (BUY)"
+                            sig_emoji = "🟢"
+                            trend_desc = "Rimbalzo da Ipervenduto / Spinta Rialzista 📈"
+                            pattern_name = "Reazione sui Minimi"
+                            conf = 91.5
+                        elif rsi_choice == "over70" or (macd_choice == "bear" and rsi_choice in ["30_50", "cross50"]):
+                            sig_type = "VENDI (SELL)"
+                            sig_emoji = "🔴"
+                            trend_desc = "Inversione da Ipercomprato / Spinta Ribassista 📉"
+                            pattern_name = "Rifiuto su Livello / Resistenza"
+                            conf = 91.5
+                        elif macd_choice == "bull":
+                            sig_type = "ACQUISTA (BUY)"
+                            sig_emoji = "🟢"
+                            trend_desc = "Spinta Rialzista 📈"
+                            pattern_name = "Incrocio Positivo MACD"
+                            conf = 88.0
+                        elif macd_choice == "bear":
+                            sig_type = "VENDI (SELL)"
+                            sig_emoji = "🔴"
+                            trend_desc = "Spinta Ribassista 📉"
+                            pattern_name = "Incrocio Negativo MACD"
+                            conf = 88.0
                         else:
-                            if rsi_choice == "under30":
-                                sig_type = "ACQUISTA (BUY)"
-                                sig_emoji = "🟢"
-                                trend_desc = "Rimbalzo da Ipervenduto 📈"
-                                pattern_name = "Reazione sui Minimi"
-                                conf = 90.0
-                            elif rsi_choice == "50_70" and macd_choice == "bull":
-                                sig_type = "ACQUISTA (BUY)"
-                                sig_emoji = "🟢"
-                                trend_desc = "Spinta Rialzista Forte 📈"
-                                pattern_name = "Continuazione Trend Sopra 50"
-                                conf = 88.0
-                            elif macd_choice == "bull":
-                                sig_type = "ACQUISTA (BUY)"
-                                sig_emoji = "🟢"
-                                trend_desc = "Spinta Rialzista 📈"
-                                pattern_name = "Incrocio Positivo"
-                                conf = 85.0
-                            else:
-                                sig_type = "VENDI (SELL)" if rsi_choice == "30_50" else "ACQUISTA (BUY)"
-                                sig_emoji = "🔴" if "VENDI" in sig_type else "🟢"
-                                trend_desc = "Fase di Transizione / Breakout ↔️"
-                                pattern_name = "Test Dinamico"
-                                conf = 78.0
+                            sig_type = "ACQUISTA (BUY)" if rsi_choice in ["50_70", "cross50"] else "VENDI (SELL)"
+                            sig_emoji = "🟢" if "ACQUISTA" in sig_type else "🔴"
+                            trend_desc = "Fase di Transizione / Breakout ↔️"
+                            pattern_name = "Test Dinamico"
+                            conf = 85.0
 
                         timeframe_name = exp_map.get(exp_key, "1 Minuto (M1)")
 
-                        text = "🤖 **ANALISI OTC GUIDATA (STRATEGIA VISIVA 70-50-30)**\n\n"
+                        text = "📊 **ANALISI OTC GUIDATA (STRATEGIA TECNICA PURA)**\n\n"
                         text += f"💲💹 Asset: {ast_name}\n"
                         text += f"📊 Trend Rilevato: {trend_desc}\n"
                         text += f"🕯️ Pattern: {pattern_name}\n"
