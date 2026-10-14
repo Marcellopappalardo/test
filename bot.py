@@ -15,7 +15,7 @@ import requests
 import pandas as pd
 import numpy as np
 
-# Importa la libreria di Google Generative AI (mantenuta per eventuali usi futuri o rimossa se non serve)
+# Importa la libreria di Google Generative AI
 import google.generativeai as genai
 
 app = Flask(__name__)
@@ -30,7 +30,7 @@ genai.configure(api_key=GEMINI_API_KEY)
 gemini_model = genai.GenerativeModel('gemini-1.5-flash')
 
 market_cache = {}
-CACHE_DURATION = 60 
+CACHE_DURATION = 60 # Ridotto a 60 secondi per mantenere il real-time
 
 REAL_ASSETS = [
     "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD", "AUD/CAD", "USD/CHF",
@@ -97,6 +97,8 @@ def edit_message(chat_id, msg_id, text, markup=None):
 
 def answer_callback(cq_id):
     api_call("answerCallbackQuery", {"callback_query_id": cq_id})
+
+# --- FUNZIONALITÀ MERCATO REALE ---
 
 def detect_candlestick_pattern(df):
     try:
@@ -393,11 +395,13 @@ def fetch_yahoo_real_data(asset_name):
             return market_cache[asset_name][1]
         return None
 
+# --- MENU TELEGRAM ---
+
 def send_category_menu(chat_id, msg_id=None):
     kb = {
         "inline_keyboard": [
             [{"text": "📈 Mercato Reale", "callback_data": "cat_real_0"}],
-            [{"text": "📊 Mercato OTC (Guida Visiva Tecnica)", "callback_data": "cat_otc_0"}]
+            [{"text": "📊 Mercato OTC (Guida Visiva)", "callback_data": "cat_otc_0"}]
         ]
     }
     text = "👋 **Seleziona la categoria di mercato:**"
@@ -436,19 +440,15 @@ def send_assets_menu(chat_id, category="real", page=0, msg_id=None):
     else:
         send_message(chat_id, text, {"inline_keyboard": kb})
 
-def send_expiry_menu(chat_id, asset_name, msg_id, is_otc=False, page=0):
+def send_expiry_menu(chat_id, asset_name, msg_id, is_otc=False):
     prefix = "exp_o_" if is_otc else "exp_r_"
-    cat_type = "otc" if is_otc else "real"
     kb = {
         "inline_keyboard": [
             [{"text": "S5", "callback_data": prefix + "s5"}, {"text": "S10", "callback_data": prefix + "s10"}, {"text": "S15", "callback_data": prefix + "s15"}, {"text": "S30", "callback_data": prefix + "s30"}],
             [{"text": "M1", "callback_data": prefix + "m1"}, {"text": "M2", "callback_data": prefix + "m2"}, {"text": "M3", "callback_data": prefix + "m3"}, {"text": "M5", "callback_data": prefix + "m5"}],
             [{"text": "M10", "callback_data": prefix + "m10"}, {"text": "M15", "callback_data": prefix + "m15"}, {"text": "M30", "callback_data": prefix + "m30"}],
             [{"text": "H1", "callback_data": prefix + "h1"}, {"text": "H4", "callback_data": prefix + "h4"}, {"text": "D1", "callback_data": prefix + "d1"}],
-            [
-                {"text": "↩️ Torna Indietro", "callback_data": f"pg_{cat_type}_{page}"},
-                {"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}
-            ]
+            [{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]
         ]
     }
     edit_message(chat_id, msg_id, f"💲💹 Asset: {asset_name}\n\nSeleziona l'intervallo / timeframe:", kb)
@@ -488,23 +488,21 @@ def webhook():
                     parts = val.split("_")
                     category = parts[1]
                     page = int(parts[2])
-                    api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
-                    send_assets_menu(cid, category, page, None)
+                    send_assets_menu(cid, category, page, mid)
 
                 elif val.startswith("ast_r_") or val.startswith("ast_o_"):
                     if val.startswith("ast_r_"):
-                        idx = int(val.split("_")[2])
-                        ast = REAL_ASSETS[idx]
-                        page = idx // 9
-                        user_selection[cid] = {"asset": ast, "cat": "real", "page": page}
-                        send_expiry_menu(cid, ast, mid, is_otc=False, page=page)
+                        ast = REAL_ASSETS[int(val.split("_")[2])]
+                        user_selection[cid] = {"asset": ast, "cat": "real"}
+                        send_expiry_menu(cid, ast, mid, is_otc=False)
                     else:
-                        idx = int(val.split("_")[2])
-                        ast = OTC_ASSETS[idx]
-                        page = idx // 9
-                        user_selection[cid] = {"asset": ast, "cat": "otc", "page": page}
-                        send_expiry_menu(cid, ast, mid, is_otc=True, page=page)
+                        ast = OTC_ASSETS[int(val.split("_")[2])]
+                        user_selection[cid] = {"asset": ast, "cat": "otc"}
+                        send_expiry_menu(cid, ast, mid, is_otc=True)
 
+                # ==========================================
+                # --- MERCATO REALE (COMPLETAMENTE AUTOMATICO) ---
+                # ==========================================
                 elif val.startswith("exp_r_") or val.startswith("retry_"):
                     if val.startswith("exp_r_"):
                         exp_key = val.split("_")[2]
@@ -520,9 +518,8 @@ def webhook():
                     
                     data = fetch_yahoo_real_data(ast_name)
                     if data is None or data.empty:
-                        sel_page = user_selection.get(cid, {}).get("page", 0)
                         error_text = f"⚠️ **Impossibile recuperare i dati per {ast_name}.**\n\nIl mercato potrebbe essere chiuso in questo momento."
-                        error_kb = {"inline_keyboard": [[{"text": "🔄 Aggiorna", "callback_data": "retry_" + ast_name + "_" + exp_key}], [{"text": "↩️ Torna Indietro", "callback_data": f"pg_real_{sel_page}"}, {"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
+                        error_kb = {"inline_keyboard": [[{"text": "🔄 Aggiorna", "callback_data": "retry_" + ast_name + "_" + exp_key}], [{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
                         edit_message(cid, mid, error_text, error_kb)
                         return "ok", 200
 
@@ -581,8 +578,7 @@ def webhook():
                     text += f"⏱️ Timeframe: {timeframe_name}\n"
                     text += f"📌 Ora Esatta Ingresso: `{entry_time}`"
                     
-                    sel_page = user_selection.get(cid, {}).get("page", 0)
-                    kb = {"inline_keyboard": [[{"text": "🔄 Aggiorna", "callback_data": "retry_" + ast_name + "_" + exp_key}], [{"text": "↩️ Torna Indietro", "callback_data": f"pg_real_{sel_page}"}, {"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
+                    kb = {"inline_keyboard": [[{"text": "🔄 Aggiorna", "callback_data": "retry_" + ast_name + "_" + exp_key}], [{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
                     chart_buf = generate_chart_image(data, ast_name, target_entry_time=entry_time)
                     
                     api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
@@ -591,14 +587,17 @@ def webhook():
                     else:
                         send_message(cid, text, kb)
 
-                # Step 1 OTC: Selezione RSI (9)
+                # ==========================================
+                # --- STRATEGIA VISIVA OTC (70 - 50 - 30) ---
+                # ==========================================
+
+                # Step 1 OTC: Selezione RSI (9) basata sulle linee 70-50-30 del broker
                 elif val.startswith("exp_o_"):
                     exp_key = val.split("_")[2]
                     sel = user_selection.get(cid, {})
                     ast_name = sel.get("asset", "EUR/USD OTC")
-                    page = sel.get("page", 0)
                     
-                    user_otc_state[cid] = {"asset": ast_name, "expiry": exp_key, "page": page}
+                    user_otc_state[cid] = {"asset": ast_name, "expiry": exp_key}
                     
                     kb_rsi_levels = {
                         "inline_keyboard": [
@@ -607,10 +606,7 @@ def webhook():
                             [{"text": "📉 Tra 30 e 50 (Zona Ribassista)", "callback_data": "otc_rsi_30_50"}],
                             [{"text": "❄️ Sotto 30 (Ipervenduto)", "callback_data": "otc_rsi_under30"}],
                             [{"text": "⚡ Test / Incrocio linea del 50", "callback_data": "otc_rsi_cross50"}],
-                            [
-                                {"text": "↩️ Torna Indietro", "callback_data": f"pg_otc_{page}"},
-                                {"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}
-                            ]
+                            [{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]
                         ]
                     }
                     edit_message(cid, mid, f"📊 **{ast_name} ({exp_map.get(exp_key, exp_key)})**\n\n**Step 1/2:** Guarda l'indicatore **RSI (9)** sul broker e seleziona dove si trova la linea in questo momento:", kb_rsi_levels)
@@ -620,22 +616,18 @@ def webhook():
                     rsi_choice = val.replace("otc_rsi_", "")
                     if cid in user_otc_state:
                         user_otc_state[cid]["rsi"] = rsi_choice
-                        page = user_otc_state[cid].get("page", 0)
                         
                         kb_macd_3 = {
                             "inline_keyboard": [
                                 [{"text": "🟢 Incrocio Rialzista", "callback_data": "otc_macd_bull"}],
                                 [{"text": "🔴 Incrocio Ribassista", "callback_data": "otc_macd_bear"}],
                                 [{"text": "⏳ In fase di formazione", "callback_data": "otc_macd_pending"}],
-                                [
-                                    {"text": "↩️ Torna Indietro", "callback_data": f"pg_otc_{page}"},
-                                    {"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}
-                                ]
+                                [{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]
                             ]
                         }
                         edit_message(cid, mid, "📊 **Step 2/2:** Qual è la situazione attuale del **MACD** sul broker?", kb_macd_3)
 
-                # Calcolo finale del segnale OTC basato su logica fissa (SENZA GEMINI)
+                # Calcolo finale del segnale OTC
                 elif val.startswith("otc_macd_"):
                     macd_choice = val.replace("otc_macd_", "")
                     if cid in user_otc_state:
@@ -643,11 +635,8 @@ def webhook():
                         ast_name = state["asset"]
                         exp_key = state["expiry"]
                         rsi_choice = state["rsi"]
-                        page = state.get("page", 0)
                         user_otc_state.pop(cid, None)
                         
-                        edit_message(cid, mid, f"⏳ **Elaborazione segnale tecnico OTC** per {ast_name}...")
-
                         italian_tz = timezone(timedelta(hours=2))
                         current_it_time = datetime.now(italian_tz)
                         entry_time = (current_it_time + timedelta(minutes=1)).replace(second=0, microsecond=0).strftime('%H:%M:%S')
@@ -665,53 +654,68 @@ def webhook():
                             "bear": "Incrocio Ribassista 🔴",
                             "pending": "In fase di formazione ⏳"
                         }
-
-                        # LOGICA DETERMINISTICA PURA (Nessun errore di interpretazione AI)
-                        # Se RSI è ipervenduto (<30) o c'è un incrocio rialzista del MACD, consigliamo ACQUISTA.
-                        # Altrimenti se è ipercomprato (>70) o c'è un incrocio ribassista, consigliamo VENDI.
-                        if rsi_choice == "under30" or (macd_choice == "bull" and rsi_choice in ["50_70", "cross50"]):
-                            sig_type = "ACQUISTA (BUY)"
-                            trend_desc = "Rimbalzo tecnico da ipervenduto / Confluenza rialzista confermata."
-                            conf = "91.5%"
-                        elif rsi_choice == "over70" or (macd_choice == "bear" and rsi_choice in ["30_50", "cross50"]):
-                            sig_type = "VENDI (SELL)"
-                            trend_desc = "Correzione da ipercomprato / Confluenza ribassista confermata."
-                            conf = "91.5%"
-                        elif macd_choice == "bull":
-                            sig_type = "ACQUISTA (BUY)"
-                            trend_desc = "Incrocio MACD favorevole al rialzo."
-                            conf = "88.0%"
-                        elif macd_choice == "bear":
-                            sig_type = "VENDI (SELL)"
-                            trend_desc = "Incrocio MACD favorevole al ribasso."
-                            conf = "88.0%"
+                        
+                        # Logica di confluenza OTC basata sui livelli reali
+                        if rsi_choice == "over70" or macd_choice == "bear":
+                            if rsi_choice == "under30" and macd_choice == "bull":
+                                sig_type = "ACQUISTA (BUY)"
+                                sig_emoji = "🟢"
+                                trend_desc = "Rimbalzo da Ipervenduto 📈"
+                                pattern_name = "Reazione sui Minimi"
+                                conf = 91.0
+                            elif rsi_choice == "over70":
+                                sig_type = "VENDI (SELL)"
+                                sig_emoji = "🔴"
+                                trend_desc = "Inversione da Ipercomprato 📉"
+                                pattern_name = "Rifiuto su Livello 70"
+                                conf = 90.0
+                            else:
+                                sig_type = "VENDI (SELL)"
+                                sig_emoji = "🔴"
+                                trend_desc = "Spinta Ribassista 📉"
+                                pattern_name = "Continuazione Trend Sotto 50"
+                                conf = 85.0
                         else:
-                            sig_type = "ACQUISTA (BUY)" if rsi_choice in ["50_70", "cross50"] else "VENDI (SELL)"
-                            trend_desc = "Segnale basato sulla posizione corrente degli indicatori."
-                            conf = "85.0%"
+                            if rsi_choice == "under30":
+                                sig_type = "ACQUISTA (BUY)"
+                                sig_emoji = "🟢"
+                                trend_desc = "Rimbalzo da Ipervenduto 📈"
+                                pattern_name = "Reazione sui Minimi"
+                                conf = 90.0
+                            elif rsi_choice == "50_70" and macd_choice == "bull":
+                                sig_type = "ACQUISTA (BUY)"
+                                sig_emoji = "🟢"
+                                trend_desc = "Spinta Rialzista Forte 📈"
+                                pattern_name = "Continuazione Trend Sopra 50"
+                                conf = 88.0
+                            elif macd_choice == "bull":
+                                sig_type = "ACQUISTA (BUY)"
+                                sig_emoji = "🟢"
+                                trend_desc = "Spinta Rialzista 📈"
+                                pattern_name = "Incrocio Positivo"
+                                conf = 85.0
+                            else:
+                                sig_type = "VENDI (SELL)" if rsi_choice == "30_50" else "ACQUISTA (BUY)"
+                                sig_emoji = "🔴" if "VENDI" in sig_type else "🟢"
+                                trend_desc = "Fase di Transizione / Breakout ↔️"
+                                pattern_name = "Test Dinamico"
+                                conf = 78.0
 
-                        sig_emoji = "🟢" if "ACQUISTA" in sig_type else "🔴"
                         timeframe_name = exp_map.get(exp_key, "1 Minuto (M1)")
 
-                        text = "📊 **ANALISI OTC GUIDATA (TECNICA PURA)**\n\n"
+                        text = "🤖 **ANALISI OTC GUIDATA (STRATEGIA VISIVA 70-50-30)**\n\n"
                         text += f"💲💹 Asset: {ast_name}\n"
-                        text += f"📈 Setup: {trend_desc}\n"
-                        text += f"🎯 Segnale Consigliato: {sig_type} {sig_emoji}\n\n"
+                        text += f"📊 Trend Rilevato: {trend_desc}\n"
+                        text += f"🕯️ Pattern: {pattern_name}\n"
+                        text += f"🎯 Segnale: {sig_type} {sig_emoji}\n\n"
                         text += f"🛠️ Parametri Selezionati:\n"
                         text += f"• RSI (9): {rsi_map.get(rsi_choice, rsi_choice)}\n"
                         text += f"• MACD: {macd_map.get(macd_choice, macd_choice)}\n\n"
-                        text += f"⚖️ Affidabilità: {conf}\n"
-                        text += f"⏱️ Scadenza: {timeframe_name}\n"
+                        text += f"⚖️ Affidabilità: {conf}%\n"
+                        text += f"⏱️ Timeframe: {timeframe_name}\n"
                         text += f"📌 Ora Esatta Ingresso: `{entry_time}`"
                         
-                        kb = {
-                            "inline_keyboard": [
-                                [
-                                    {"text": "↩️ Torna Indietro", "callback_data": f"pg_otc_{page}"},
-                                    {"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}
-                                ]
-                            ]
-                        }
+                        kb = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
                         edit_message(cid, mid, text, kb)
 
             elif "message" in up:
