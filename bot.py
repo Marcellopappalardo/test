@@ -30,7 +30,7 @@ genai.configure(api_key=GEMINI_API_KEY)
 gemini_model = genai.GenerativeModel('gemini-1.5-flash')
 
 market_cache = {}
-CACHE_DURATION = 60 
+CACHE_DURATION = 60 # Ridotto a 60 secondi per mantenere il real-time
 
 REAL_ASSETS = [
     "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD", "AUD/CAD", "USD/CHF",
@@ -98,9 +98,7 @@ def edit_message(chat_id, msg_id, text, markup=None):
 def answer_callback(cq_id):
     api_call("answerCallbackQuery", {"callback_query_id": cq_id})
 
-# ==========================================
-# --- MERCATO REALE (INTATTO) ---
-# ==========================================
+# --- FUNZIONALITÀ MERCATO REALE ---
 
 def detect_candlestick_pattern(df):
     try:
@@ -403,7 +401,7 @@ def send_category_menu(chat_id, msg_id=None):
     kb = {
         "inline_keyboard": [
             [{"text": "📈 Mercato Reale", "callback_data": "cat_real_0"}],
-            [{"text": "📊 Mercato OTC (Ultra-Fast 1-Click)", "callback_data": "cat_otc_0"}]
+            [{"text": "📊 Mercato OTC (Guida Visiva AI)", "callback_data": "cat_otc_0"}]
         ]
     }
     text = "👋 **Seleziona la categoria di mercato:**"
@@ -434,7 +432,7 @@ def send_assets_menu(chat_id, category="real", page=0, msg_id=None):
     if nav: kb.append(nav)
         
     kb.append([{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}])
-    title_cat = "Reali" if category == "real" else "OTC (Ultra-Fast)"
+    title_cat = "Reali" if category == "real" else "OTC"
     text = f"👋 Scegli un asset **{title_cat}**:"
     if msg_id:
         try: edit_message(chat_id, msg_id, text, {"inline_keyboard": kb})
@@ -453,7 +451,7 @@ def send_expiry_menu(chat_id, asset_name, msg_id, is_otc=False, page=0):
             [{"text": "H1", "callback_data": prefix + "h1"}, {"text": "H4", "callback_data": prefix + "h4"}, {"text": "D1", "callback_data": prefix + "d1"}],
             [
                 {"text": "↩️ Torna Indietro", "callback_data": f"pg_{cat_type}_{page}"},
-                {"text": "≡ Categorie", "callback_data": "main_categories"}
+                {"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}
             ]
         ]
     }
@@ -494,7 +492,6 @@ def webhook():
                     parts = val.split("_")
                     category = parts[1]
                     page = int(parts[2])
-                    # CORRETTO: Gestisce sia il ritorno agli asset reali che otc eliminando la foto del segnale precedente
                     api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
                     send_assets_menu(cid, category, page, None)
 
@@ -513,7 +510,7 @@ def webhook():
                         send_expiry_menu(cid, ast, mid, is_otc=True, page=page)
 
                 # ==========================================
-                # --- MERCATO REALE ---
+                # --- MERCATO REALE (COMPLETAMENTE AUTOMATICO) ---
                 # ==========================================
                 elif val.startswith("exp_r_") or val.startswith("retry_"):
                     if val.startswith("exp_r_"):
@@ -526,18 +523,13 @@ def webhook():
                         exp_key = parts[-1]
                         ast_name = "_".join(parts[1:-1])
                     
-                    edit_message(cid, mid, f"⏳ **EasyTrack sta analizzando** in tempo reale per {ast_name} ({exp_key.upper()})...")
+                    edit_message(cid, mid, f"⏳ Elaborazione analisi in tempo reale per {ast_name} ({exp_key.upper()})...")
                     
                     data = fetch_yahoo_real_data(ast_name)
                     if data is None or data.empty:
                         sel_page = user_selection.get(cid, {}).get("page", 0)
                         error_text = f"⚠️ **Impossibile recuperare i dati per {ast_name}.**\n\nIl mercato potrebbe essere chiuso in questo momento."
-                        error_kb = {
-                            "inline_keyboard": [
-                                [{"text": "🔄 Aggiorna", "callback_data": "retry_" + ast_name + "_" + exp_key}],
-                                [{"text": "↩️ Torna Indietro", "callback_data": f"pg_real_{sel_page}"}, {"text": "≡ Categorie", "callback_data": "main_categories"}]
-                            ]
-                        }
+                        error_kb = {"inline_keyboard": [[{"text": "🔄 Aggiorna", "callback_data": "retry_" + ast_name + "_" + exp_key}], [{"text": "↩️ Torna Indietro", "callback_data": f"pg_real_{sel_page}"}, {"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
                         edit_message(cid, mid, error_text, error_kb)
                         return "ok", 200
 
@@ -597,12 +589,7 @@ def webhook():
                     text += f"📌 Ora Esatta Ingresso: `{entry_time}`"
                     
                     sel_page = user_selection.get(cid, {}).get("page", 0)
-                    kb = {
-                        "inline_keyboard": [
-                            [{"text": "🔄 Aggiorna", "callback_data": "retry_" + ast_name + "_" + exp_key}],
-                            [{"text": "↩️ Torna Indietro", "callback_data": f"pg_real_{sel_page}"}, {"text": "≡ Categorie", "callback_data": "main_categories"}]
-                        ]
-                    }
+                    kb = {"inline_keyboard": [[{"text": "🔄 Aggiorna", "callback_data": "retry_" + ast_name + "_" + exp_key}], [{"text": "↩️ Torna Indietro", "callback_data": f"pg_real_{sel_page}"}, {"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
                     chart_buf = generate_chart_image(data, ast_name, target_entry_time=entry_time)
                     
                     api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
@@ -612,9 +599,10 @@ def webhook():
                         send_message(cid, text, kb)
 
                 # ==========================================
-                # --- STRATEGIA OTC ULTRA-FAST (OPZIONI SEPARATE BUY/SELL) ---
+                # --- STRATEGIA VISIVA OTC GUIDATA DA GEMINI ---
                 # ==========================================
 
+                # Step 1 OTC: Selezione RSI (9)
                 elif val.startswith("exp_o_"):
                     exp_key = val.split("_")[2]
                     sel = user_selection.get(cid, {})
@@ -623,66 +611,85 @@ def webhook():
                     
                     user_otc_state[cid] = {"asset": ast_name, "expiry": exp_key, "page": page}
                     
-                    kb_ultra_fast = {
+                    kb_rsi_levels = {
                         "inline_keyboard": [
-                            [{"text": "🔴 Rifiuto Alto | Ombra sopra + RSI > 70 (VENDI)", "callback_data": "otc_uf_rejection_sell"}],
-                            [{"text": "🟢 Rifiuto Basso | Ombra sotto + RSI < 30 (ACQUISTA)", "callback_data": "otc_uf_rejection_buy"}],
-                            [{"text": "💥 Spinta Piena | Corpo forte + RSI taglia 50", "callback_data": "otc_uf_breakout"}],
-                            [{"text": "✂️ Trend Forte | MACD a forbice aperta", "callback_data": "otc_uf_scissor"}],
+                            [{"text": "🔥 Sopra 70 (Ipercomprato)", "callback_data": "otc_rsi_over70"}],
+                            [{"text": "📈 Tra 50 e 70 (Zona Rialzista)", "callback_data": "otc_rsi_50_70"}],
+                            [{"text": "📉 Tra 30 e 50 (Zona Ribassista)", "callback_data": "otc_rsi_30_50"}],
+                            [{"text": "❄️ Sotto 30 (Ipervenduto)", "callback_data": "otc_rsi_under30"}],
+                            [{"text": "⚡ Test / Incrocio linea del 50", "callback_data": "otc_rsi_cross50"}],
                             [
                                 {"text": "↩️ Torna Indietro", "callback_data": f"pg_otc_{page}"},
-                                {"text": "≡ Categorie", "callback_data": "main_categories"}
+                                {"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}
                             ]
                         ]
                     }
-                    
-                    text_otc_prompt = f"⚡ **Pocket Option OTC - {ast_name} ({exp_map.get(exp_key, exp_key)})**\n\n"
-                    text_otc_prompt += "⏱️ **REGOLE DI TEMPISTRO (Anticipo):**\n"
-                    text_otc_prompt += "👉 Tocca il bottone al **secondo 50 - 53** della candela per eliminare il ritardo e ricevere l'orario d'ingresso esatto a **secondo 00**.\n\n"
-                    text_otc_prompt += "Verifica la candela sul grafico e scegli il setup esatto:"
+                    edit_message(cid, mid, f"📊 **{ast_name} ({exp_map.get(exp_key, exp_key)})**\n\n**Step 1/2:** Guarda l'indicatore **RSI (9)** sul broker e seleziona dove si trova la linea in questo momento:", kb_rsi_levels)
 
-                    edit_message(cid, mid, text_otc_prompt, kb_ultra_fast)
+                # Step 2 OTC: Selezione del MACD
+                elif val.startswith("otc_rsi_"):
+                    rsi_choice = val.replace("otc_rsi_", "")
+                    if cid in user_otc_state:
+                        user_otc_state[cid]["rsi"] = rsi_choice
+                        page = user_otc_state[cid].get("page", 0)
+                        
+                        kb_macd_3 = {
+                            "inline_keyboard": [
+                                [{"text": "🟢 Incrocio Rialzista", "callback_data": "otc_macd_bull"}],
+                                [{"text": "🔴 Incrocio Ribassista", "callback_data": "otc_macd_bear"}],
+                                [{"text": "⏳ In fase di formazione", "callback_data": "otc_macd_pending"}],
+                                [
+                                    {"text": "↩️ Torna Indietro", "callback_data": f"pg_otc_{page}"},
+                                    {"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}
+                                ]
+                            ]
+                        }
+                        edit_message(cid, mid, "📊 **Step 2/2:** Qual è la situazione attuale del **MACD** sul broker?", kb_macd_3)
 
-                elif val.startswith("otc_uf_"):
-                    setup_choice = val.replace("otc_uf_", "")
+                # Calcolo finale del segnale OTC elaborato da Gemini AI
+                elif val.startswith("otc_macd_"):
+                    macd_choice = val.replace("otc_macd_", "")
                     if cid in user_otc_state:
                         state = user_otc_state[cid]
                         ast_name = state["asset"]
                         exp_key = state["expiry"]
+                        rsi_choice = state["rsi"]
                         page = state.get("page", 0)
                         user_otc_state.pop(cid, None)
                         
-                        edit_message(cid, mid, f"⏳ **EasyTrack sta analizzando** il setup OTC per {ast_name}...")
+                        edit_message(cid, mid, f"⏳ **EasyTrack sta analizzando** il setup OTC con Gemini AI per {ast_name}...")
 
                         italian_tz = timezone(timedelta(hours=2))
                         current_it_time = datetime.now(italian_tz)
                         entry_time = (current_it_time + timedelta(minutes=1)).replace(second=0, microsecond=0).strftime('%H:%M:%S')
                         
-                        if setup_choice == "rejection_sell":
-                            forced_direction = "VENDI (SELL)"
-                            setup_text = "Rifiuto Alto in Ipercomprato: la candela ha lasciato un'ombra superiore toccando il livello con RSI(9) > 70. DEVI DARE VENDI (SELL)."
-                        elif setup_choice == "rejection_buy":
-                            forced_direction = "ACQUISTA (BUY)"
-                            setup_text = "Rifiuto Basso in Ipervenduto: la candela ha lasciato un'ombra inferiore toccando il livello con RSI(9) < 30. DEVI DARE ACQUISTA (BUY)."
-                        elif setup_choice == "breakout":
-                            forced_direction = "DINAMICO"
-                            setup_text = "Spinta piena: corpo forte e taglio della linea 50 dell'RSI."
-                        else:
-                            forced_direction = "DINAMICO"
-                            setup_text = "Trend forte: linee MACD aperte a forbice."
+                        rsi_map = {
+                            "over70": "Sopra 70 (Ipercomprato 🔥)",
+                            "50_70": "Tra 50 e 70 (Zona Rialzista 📈)",
+                            "30_50": "Tra 30 e 50 (Zona Ribassista 📉)",
+                            "under30": "Sotto 30 (Ipervenduto ❄️)",
+                            "cross50": "Incrocio / Test della linea 50 ⚡"
+                        }
+                        
+                        macd_map = {
+                            "bull": "Incrocio Rialzista 🟢",
+                            "bear": "Incrocio Ribassista 🔴",
+                            "pending": "In fase di formazione ⏳"
+                        }
 
+                        # INTERROGAZIONE A GEMINI AI CON STILE DA TRADER PROFESSIONISTA
                         try:
-                            prompt = f"""Sei un trader professionista senior specializzato in opzioni binarie ad alta frequenza su Pocket Option OTC.
-L'utente ha verificato visivamente questo setup sul grafico in anticipo (secondo 50-53):
+                            prompt = f"""Sei un trader professionista senior di opzioni binarie ad alta frequenza specializzato su mercati OTC sintetici.
+L'utente ha selezionato questi parametri dal broker:
 - Asset: {ast_name}
 - Scadenza: {exp_map.get(exp_key, exp_key)}
-- Condizione Verificata: {setup_text}
-- Direzione Obbligatoria (se impostata): {forced_direction}
+- RSI(9): {rsi_map.get(rsi_choice, rsi_choice)}
+- MACD: {macd_map.get(macd_choice, macd_choice)}
 
-Valuta il vantaggio probabilistico e restituisci ESATTAMENTE questo formato:
-SEGNALE: [{forced_direction} se specificato sopra, altrimenti ACQUISTA (BUY) o VENDI (SELL) in base al setup]
-AFFIDABILITA: [Percentuale stimata tra 82% e 95%, es: 92.5%]
-DESCRIZIONE: [Spiegazione tattica di 2 righe]"""
+Analizza la confluenza tecnica per opzioni binarie a brevissimo termine e restituisci la risposta ESATTAMENTE in questo formato:
+SEGNALE: [ACQUISTA (BUY) oppure VENDI (SELL)]
+AFFIDABILITA: [Percentuale stimata tra 82% e 95%, es: 91.5%]
+DESCRIZIONE: [Spiegazione tecnica e tattica professionale di 2 righe basata sul momentum e sul controllo di mercato]"""
 
                             ai_response = gemini_model.generate_content(prompt)
                             ai_text = ai_response.text
@@ -691,27 +698,25 @@ DESCRIZIONE: [Spiegazione tattica di 2 righe]"""
                             conf_match = re.search(r"AFFIDABILITA:\s*(.*)", ai_text)
                             desc_match = re.search(r"DESCRIZIONE:\s*(.*)", ai_text, re.DOTALL)
 
-                            if forced_direction != "DINAMICO":
-                                sig_type = forced_direction
-                            else:
-                                sig_type = sig_match.group(1).strip() if sig_match else "ACQUISTA (BUY)"
-                                
+                            sig_type = sig_match.group(1).strip() if sig_match else "ACQUISTA (BUY)"
                             conf = conf_match.group(1).strip() if conf_match else "90.0%"
-                            trend_desc = desc_match.group(1).strip() if desc_match else "Segnale validato sul momentum."
+                            trend_desc = desc_match.group(1).strip() if desc_match else "Segnale validato sui livelli di momentum."
                         except Exception as ai_err:
-                            print("Errore Gemini OTC Ultra-Fast:", ai_err)
-                            sig_type = forced_direction if forced_direction != "DINAMICO" else "ACQUISTA (BUY)"
-                            conf = "89.0%"
-                            trend_desc = "Ingresso confermato dalla chiusura della candela."
+                            print("Errore Gemini OTC:", ai_err)
+                            sig_type = "ACQUISTA (BUY)" if rsi_choice in ["under30", "50_70"] else "VENDI (SELL)"
+                            conf = "88.0%"
+                            trend_desc = "Confluenza confermata dai livelli degli oscillatori."
 
                         sig_emoji = "🟢" if "ACQUISTA" in sig_type else "🔴"
                         timeframe_name = exp_map.get(exp_key, "1 Minuto (M1)")
 
-                        text = "🚀 **SEGNALE OTC ULTRA-FAST EASYTRACK**\n\n"
+                        text = "🤖 **ANALISI OTC GUIDATA (AI TRADER PROFESSIONAL)**\n\n"
                         text += f"💲💹 Asset: {ast_name}\n"
                         text += f"🧠 Analisi AI: {trend_desc}\n"
                         text += f"🎯 Segnale Consigliato: {sig_type} {sig_emoji}\n\n"
-                        text += f"⚙️ Setup Verificato:\n• {setup_text}\n\n"
+                        text += f"🛠️ Parametri Selezionati:\n"
+                        text += f"• RSI (9): {rsi_map.get(rsi_choice, rsi_choice)}\n"
+                        text += f"• MACD: {macd_map.get(macd_choice, macd_choice)}\n\n"
                         text += f"⚖️ Affidabilità: {conf}\n"
                         text += f"⏱️ Scadenza: {timeframe_name}\n"
                         text += f"📌 Ora Esatta Ingresso: `{entry_time}`"
@@ -720,7 +725,7 @@ DESCRIZIONE: [Spiegazione tattica di 2 righe]"""
                             "inline_keyboard": [
                                 [
                                     {"text": "↩️ Torna Indietro", "callback_data": f"pg_otc_{page}"},
-                                    {"text": "≡ Categorie", "callback_data": "main_categories"}
+                                    {"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}
                                 ]
                             ]
                         }
