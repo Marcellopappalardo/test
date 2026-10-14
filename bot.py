@@ -494,7 +494,9 @@ def webhook():
                     parts = val.split("_")
                     category = parts[1]
                     page = int(parts[2])
-                    send_assets_menu(cid, category, page, mid)
+                    # CORRETTO: Gestisce sia il ritorno agli asset reali che otc eliminando la foto del segnale precedente
+                    api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
+                    send_assets_menu(cid, category, page, None)
 
                 elif val.startswith("ast_r_") or val.startswith("ast_o_"):
                     if val.startswith("ast_r_"):
@@ -610,7 +612,7 @@ def webhook():
                         send_message(cid, text, kb)
 
                 # ==========================================
-                # --- STRATEGIA OTC ULTRA-FAST (3 OPZIONI MIRATE) ---
+                # --- STRATEGIA OTC ULTRA-FAST (OPZIONI SEPARATE BUY/SELL) ---
                 # ==========================================
 
                 elif val.startswith("exp_o_"):
@@ -623,9 +625,10 @@ def webhook():
                     
                     kb_ultra_fast = {
                         "inline_keyboard": [
-                            [{"text": "📌 Rifiuto | Candela con ombra + RSI sopra 70 / sotto 30", "callback_data": "otc_uf_rejection"}],
-                            [{"text": "💥 Spinta Piena | Corpo forte + RSI taglia linea 50", "callback_data": "otc_uf_breakout"}],
-                            [{"text": "✂️ Trend Forte | MACD a forbice aperta e parallela", "callback_data": "otc_uf_scissor"}],
+                            [{"text": "🔴 Rifiuto Alto | Ombra sopra + RSI > 70 (VENDI)", "callback_data": "otc_uf_rejection_sell"}],
+                            [{"text": "🟢 Rifiuto Basso | Ombra sotto + RSI < 30 (ACQUISTA)", "callback_data": "otc_uf_rejection_buy"}],
+                            [{"text": "💥 Spinta Piena | Corpo forte + RSI taglia 50", "callback_data": "otc_uf_breakout"}],
+                            [{"text": "✂️ Trend Forte | MACD a forbice aperta", "callback_data": "otc_uf_scissor"}],
                             [
                                 {"text": "↩️ Torna Indietro", "callback_data": f"pg_otc_{page}"},
                                 {"text": "≡ Categorie", "callback_data": "main_categories"}
@@ -636,7 +639,7 @@ def webhook():
                     text_otc_prompt = f"⚡ **Pocket Option OTC - {ast_name} ({exp_map.get(exp_key, exp_key)})**\n\n"
                     text_otc_prompt += "⏱️ **REGOLE DI TEMPISTRO (Anticipo):**\n"
                     text_otc_prompt += "👉 Tocca il bottone al **secondo 50 - 53** della candela per eliminare il ritardo e ricevere l'orario d'ingresso esatto a **secondo 00**.\n\n"
-                    text_otc_prompt += "Verifica la candela sul grafico e scegli l'opzione corretta:"
+                    text_otc_prompt += "Verifica la candela sul grafico e scegli il setup esatto:"
 
                     edit_message(cid, mid, text_otc_prompt, kb_ultra_fast)
 
@@ -655,13 +658,18 @@ def webhook():
                         current_it_time = datetime.now(italian_tz)
                         entry_time = (current_it_time + timedelta(minutes=1)).replace(second=0, microsecond=0).strftime('%H:%M:%S')
                         
-                        setup_descriptions = {
-                            "rejection": "Rifiuto visivo: la candela ha lasciato un'ombra lunga (wick) toccando e respingendo un livello, con RSI(9) sopra 70 (ipercomprato) o sotto 30 (ipervenduto).",
-                            "breakout": "Spinta piena: la candela ha un corpo pieno e forte che rompe il livello, mentre la linea dell'RSI(9) taglia con decisione lo spartiacque del 50.",
-                            "scissor": "Trend forte: le linee del MACD sono ben aperte a forbice e parallele, confermando una spinta continua del momentum."
-                        }
-
-                        setup_text = setup_descriptions.get(setup_choice, "Pattern OTC verificato.")
+                        if setup_choice == "rejection_sell":
+                            forced_direction = "VENDI (SELL)"
+                            setup_text = "Rifiuto Alto in Ipercomprato: la candela ha lasciato un'ombra superiore toccando il livello con RSI(9) > 70. DEVI DARE VENDI (SELL)."
+                        elif setup_choice == "rejection_buy":
+                            forced_direction = "ACQUISTA (BUY)"
+                            setup_text = "Rifiuto Basso in Ipervenduto: la candela ha lasciato un'ombra inferiore toccando il livello con RSI(9) < 30. DEVI DARE ACQUISTA (BUY)."
+                        elif setup_choice == "breakout":
+                            forced_direction = "DINAMICO"
+                            setup_text = "Spinta piena: corpo forte e taglio della linea 50 dell'RSI."
+                        else:
+                            forced_direction = "DINAMICO"
+                            setup_text = "Trend forte: linee MACD aperte a forbice."
 
                         try:
                             prompt = f"""Sei un trader professionista senior specializzato in opzioni binarie ad alta frequenza su Pocket Option OTC.
@@ -669,11 +677,12 @@ L'utente ha verificato visivamente questo setup sul grafico in anticipo (secondo
 - Asset: {ast_name}
 - Scadenza: {exp_map.get(exp_key, exp_key)}
 - Condizione Verificata: {setup_text}
+- Direzione Obbligatoria (se impostata): {forced_direction}
 
-Valuta il vantaggio probabilistico e fornisci la risposta ESATTAMENTE in questo formato:
-SEGNALE: [ACQUISTA (BUY) oppure VENDI (SELL)]
+Valuta il vantaggio probabilistico e restituisci ESATTAMENTE questo formato:
+SEGNALE: [{forced_direction} se specificato sopra, altrimenti ACQUISTA (BUY) o VENDI (SELL) in base al setup]
 AFFIDABILITA: [Percentuale stimata tra 82% e 95%, es: 92.5%]
-DESCRIZIONE: [Spiegazione tattica di 2 righe su come sfruttare la candela successiva con orario di ingresso esatto]"""
+DESCRIZIONE: [Spiegazione tattica di 2 righe]"""
 
                             ai_response = gemini_model.generate_content(prompt)
                             ai_text = ai_response.text
@@ -682,12 +691,16 @@ DESCRIZIONE: [Spiegazione tattica di 2 righe su come sfruttare la candela succes
                             conf_match = re.search(r"AFFIDABILITA:\s*(.*)", ai_text)
                             desc_match = re.search(r"DESCRIZIONE:\s*(.*)", ai_text, re.DOTALL)
 
-                            sig_type = sig_match.group(1).strip() if sig_match else "ACQUISTA (BUY)"
+                            if forced_direction != "DINAMICO":
+                                sig_type = forced_direction
+                            else:
+                                sig_type = sig_match.group(1).strip() if sig_match else "ACQUISTA (BUY)"
+                                
                             conf = conf_match.group(1).strip() if conf_match else "90.0%"
                             trend_desc = desc_match.group(1).strip() if desc_match else "Segnale validato sul momentum."
                         except Exception as ai_err:
                             print("Errore Gemini OTC Ultra-Fast:", ai_err)
-                            sig_type = "ACQUISTA (BUY)" if setup_choice == "breakout" else "VENDI (SELL)"
+                            sig_type = forced_direction if forced_direction != "DINAMICO" else "ACQUISTA (BUY)"
                             conf = "89.0%"
                             trend_desc = "Ingresso confermato dalla chiusura della candela."
 
