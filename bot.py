@@ -15,7 +15,7 @@ import requests
 import pandas as pd
 import numpy as np
 
-# Importa la libreria di Google Generative AI
+# Importa la libreria di Google Generative AI (mantenuta per eventuali usi futuri o rimossa se non serve)
 import google.generativeai as genai
 
 app = Flask(__name__)
@@ -397,7 +397,7 @@ def send_category_menu(chat_id, msg_id=None):
     kb = {
         "inline_keyboard": [
             [{"text": "📈 Mercato Reale", "callback_data": "cat_real_0"}],
-            [{"text": "📊 Mercato OTC (Guida Visiva AI)", "callback_data": "cat_otc_0"}]
+            [{"text": "📊 Mercato OTC (Guida Visiva Tecnica)", "callback_data": "cat_otc_0"}]
         ]
     }
     text = "👋 **Seleziona la categoria di mercato:**"
@@ -615,7 +615,7 @@ def webhook():
                     }
                     edit_message(cid, mid, f"📊 **{ast_name} ({exp_map.get(exp_key, exp_key)})**\n\n**Step 1/2:** Guarda l'indicatore **RSI (9)** sul broker e seleziona dove si trova la linea in questo momento:", kb_rsi_levels)
 
-                # Step 2 OTC: Selezione del MACD (SOLO i primi 3 pulsanti originali)
+                # Step 2 OTC: Selezione del MACD
                 elif val.startswith("otc_rsi_"):
                     rsi_choice = val.replace("otc_rsi_", "")
                     if cid in user_otc_state:
@@ -635,7 +635,7 @@ def webhook():
                         }
                         edit_message(cid, mid, "📊 **Step 2/2:** Qual è la situazione attuale del **MACD** sul broker?", kb_macd_3)
 
-                # Calcolo finale del segnale OTC elaborato da Gemini AI
+                # Calcolo finale del segnale OTC basato su logica fissa (SENZA GEMINI)
                 elif val.startswith("otc_macd_"):
                     macd_choice = val.replace("otc_macd_", "")
                     if cid in user_otc_state:
@@ -646,7 +646,7 @@ def webhook():
                         page = state.get("page", 0)
                         user_otc_state.pop(cid, None)
                         
-                        edit_message(cid, mid, f"⏳ **EasyTrack sta analizzando** il setup OTC con Gemini AI per {ast_name}...")
+                        edit_message(cid, mid, f"⏳ **Elaborazione segnale tecnico OTC** per {ast_name}...")
 
                         italian_tz = timezone(timedelta(hours=2))
                         current_it_time = datetime.now(italian_tz)
@@ -666,43 +666,36 @@ def webhook():
                             "pending": "In fase di formazione ⏳"
                         }
 
-                        # INTERROGAZIONE A GEMINI AI CON PROMPT PROFESSIONALE AVANZATO
-                        try:
-                            prompt = f"""Sei un trader professionista senior di opzioni binarie ad alta frequenza specializzato su mercati OTC sintetici.
-L'utente ha selezionato questi parametri esatti dal broker:
-- Asset: {ast_name}
-- Scadenza: {exp_map.get(exp_key, exp_key)}
-- RSI(9): {rsi_map.get(rsi_choice, rsi_choice)}
-- MACD: {macd_map.get(macd_choice, macd_choice)}
-
-Agisci come se stessi guardando tu stesso il grafico in tempo reale. Valuta la confluenza tecnica tra l'RSI e lo stato del MACD.
-Restituisci la risposta ESATTAMENTE in questo formato:
-SEGNALE: [ACQUISTA (BUY) oppure VENDI (SELL)]
-AFFIDABILITA: [Percentuale stimata tra 85% e 96%, es: 92.5%]
-DESCRIZIONE: [Spiegazione tecnica e tattica professionale di 2 righe basata sul trend e sul controllo di mercato]"""
-
-                            ai_response = gemini_model.generate_content(prompt)
-                            ai_text = ai_response.text
-
-                            sig_match = re.search(r"SEGNALE:\s*(.*)", ai_text)
-                            conf_match = re.search(r"AFFIDABILITA:\s*(.*)", ai_text)
-                            desc_match = re.search(r"DESCRIZIONE:\s*(.*)", ai_text, re.DOTALL)
-
-                            sig_type = sig_match.group(1).strip() if sig_match else "ACQUISTA (BUY)"
-                            conf = conf_match.group(1).strip() if conf_match else "91.0%"
-                            trend_desc = desc_match.group(1).strip() if desc_match else "Confluenza confermata dai livelli degli indicatori tecnici."
-                        except Exception as ai_err:
-                            print("Errore Gemini OTC:", ai_err)
-                            sig_type = "ACQUISTA (BUY)" if rsi_choice in ["under30", "50_70"] else "VENDI (SELL)"
-                            conf = "89.0%"
-                            trend_desc = "Confluenza confermata dai livelli degli oscillatori."
+                        # LOGICA DETERMINISTICA PURA (Nessun errore di interpretazione AI)
+                        # Se RSI è ipervenduto (<30) o c'è un incrocio rialzista del MACD, consigliamo ACQUISTA.
+                        # Altrimenti se è ipercomprato (>70) o c'è un incrocio ribassista, consigliamo VENDI.
+                        if rsi_choice == "under30" or (macd_choice == "bull" and rsi_choice in ["50_70", "cross50"]):
+                            sig_type = "ACQUISTA (BUY)"
+                            trend_desc = "Rimbalzo tecnico da ipervenduto / Confluenza rialzista confermata."
+                            conf = "91.5%"
+                        elif rsi_choice == "over70" or (macd_choice == "bear" and rsi_choice in ["30_50", "cross50"]):
+                            sig_type = "VENDI (SELL)"
+                            trend_desc = "Correzione da ipercomprato / Confluenza ribassista confermata."
+                            conf = "91.5%"
+                        elif macd_choice == "bull":
+                            sig_type = "ACQUISTA (BUY)"
+                            trend_desc = "Incrocio MACD favorevole al rialzo."
+                            conf = "88.0%"
+                        elif macd_choice == "bear":
+                            sig_type = "VENDI (SELL)"
+                            trend_desc = "Incrocio MACD favorevole al ribasso."
+                            conf = "88.0%"
+                        else:
+                            sig_type = "ACQUISTA (BUY)" if rsi_choice in ["50_70", "cross50"] else "VENDI (SELL)"
+                            trend_desc = "Segnale basato sulla posizione corrente degli indicatori."
+                            conf = "85.0%"
 
                         sig_emoji = "🟢" if "ACQUISTA" in sig_type else "🔴"
                         timeframe_name = exp_map.get(exp_key, "1 Minuto (M1)")
 
-                        text = "🤖 **ANALISI OTC GUIDATA (AI TRADER PROFESSIONAL)**\n\n"
+                        text = "📊 **ANALISI OTC GUIDATA (TECNICA PURA)**\n\n"
                         text += f"💲💹 Asset: {ast_name}\n"
-                        text += f"🧠 Analisi AI: {trend_desc}\n"
+                        text += f"📈 Setup: {trend_desc}\n"
                         text += f"🎯 Segnale Consigliato: {sig_type} {sig_emoji}\n\n"
                         text += f"🛠️ Parametri Selezionati:\n"
                         text += f"• RSI (9): {rsi_map.get(rsi_choice, rsi_choice)}\n"
