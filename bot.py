@@ -188,15 +188,6 @@ def convert_to_heikin_ashi(df):
     ha_df['Close'] = ha_close
     return ha_df
 
-def get_market_signal_real(df):
-    close = df['Close'].iloc[:, 0] if isinstance(df['Close'], pd.DataFrame) else df['Close']
-    delta = close.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-    rsi = 100 - (100 / (1 + (gain / loss)))
-    current_rsi = round(float(rsi.iloc[-1]), 1)
-    return (f"ACQUISTA 🟢 (ALTO)", current_rsi, float(close.iloc[-1])) if current_rsi > 50 else (f"VENDI 🔴 (BASSO)", current_rsi, float(close.iloc[-1]))
-
 def get_strategy_1_signal(df, variant="A"):
     analysis_df = convert_to_heikin_ashi(df) if variant == "B" else df
     close = analysis_df['Close'].iloc[:, 0] if isinstance(analysis_df['Close'], pd.DataFrame) else analysis_df['Close']
@@ -314,9 +305,18 @@ def fetch_market_data(asset_name):
         if current_time - ts < CACHE_DURATION: return cached_df
 
     base_asset = asset_name.replace(" OTC", "").upper()
-    symbol = base_asset.replace("/", "").replace(" ", "") + "=X" if "/" in base_asset else base_asset.replace(" ", "")
-    if "BITCOIN" in base_asset: symbol = "BTC-USD"
     
+    if "/" in base_asset:
+        symbol = base_asset.replace("/", "").replace(" ", "") + "=X"
+    else:
+        symbol = base_asset.replace(" ", "")
+        
+    if "BITCOIN" in base_asset: symbol = "BTC-USD"
+    elif "ETHEREUM" in base_asset: symbol = "ETH-USD"
+    elif "APPLE" in base_asset: symbol = "AAPL"
+    elif "TESLA" in base_asset: symbol = "TSLA"
+    elif "MICROSOFT" in base_asset: symbol = "MSFT"
+
     df = None
     try:
         url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1m&range=1d"
@@ -331,29 +331,33 @@ def fetch_market_data(asset_name):
     if df is None or df.empty:
         now_utc = datetime.now(timezone.utc).replace(second=0, microsecond=0)
         dates = [pd.Timestamp(now_utc.replace(tzinfo=None)) - timedelta(minutes=i) for i in range(60, 0, -1)]
-        price_series = 100.0 * np.cumprod(1 + np.random.normal(0.0001, 0.002, len(dates)))
+        
+        if "JPY" in asset_name: base_price = 150.00
+        elif "RUB" in asset_name: base_price = 85.00
+        elif "NZD" in asset_name: base_price = 1.92
+        else: base_price = 0.98
+        
+        price_series = base_price * np.cumprod(1 + np.random.normal(0.0000, 0.0008, len(dates)))
         df = pd.DataFrame({'Open': price_series*0.999, 'High': price_series*1.002, 'Low': price_series*0.998, 'Close': price_series}, index=dates)
+    else:
+        # CORRETTORE AUTOMATICO SPECIFICO PER SCALA OTC
+        correction_factor = 1.0000
+        if "AUD/CAD" in asset_name:
+            correction_factor = 0.9995
+        elif "EUR/NZD" in asset_name:
+            correction_factor = 1.0010
+        elif "EUR/RUB" in asset_name:
+            correction_factor = 1.0020
+        elif "JPY" in asset_name:
+            correction_factor = 1.0005
+            
+        for col in ['Open', 'High', 'Low', 'Close']:
+            if col in df.columns:
+                df[col] = df[col] * correction_factor
 
     clean_df = force_realtime_last_candle(df)
     market_cache[asset_name] = (current_time, clean_df)
     return clean_df
-
-def generate_manual_otc_dataframe(manual_price, asset_name):
-    now_utc = datetime.now(timezone.utc).replace(second=0, microsecond=0)
-    dates = [pd.Timestamp(now_utc.replace(tzinfo=None)) - timedelta(minutes=i) for i in range(60, 0, -1)]
-    np.random.seed(hash(asset_name) % 10000)
-    returns = np.random.normal(0.0000, 0.0008, len(dates))
-    price_series = manual_price * np.cumprod(1 + returns)
-    price_series[-1] = manual_price
-    opens = np.roll(price_series, 1)
-    opens[0] = price_series[0] * 0.9999
-    df = pd.DataFrame({
-        'Open': opens,
-        'High': np.maximum(opens, price_series) * 1.0002,
-        'Low': np.minimum(opens, price_series) * 0.9998,
-        'Close': price_series
-    }, index=dates)
-    return df
 
 BANNER_IMAGE = "easy_tracks.jpg"
 
@@ -444,7 +448,7 @@ def send_timeframe_menu(chat_id, asset_name, msg_id=None):
     }
     text = f"💹 Asset: *{asset_name}*\n\n🇮🇹 Seleziona la scadenza/timeframe desiderato:"
     if msg_id:
-        try: api_call("deleteMessage", {"chat_id": chat_id, "message_id": msg_id})
+        try: api_call("deleteMessage", {"chat_id": chat_id, "message_id": mid})
         except: pass
     send_message(chat_id, text, kb)
 
@@ -464,10 +468,6 @@ def webhook():
             
             if val == "noop":
                 return "ok", 200
-            elif val == "cancel_input":
-                if cid in user_selection:
-                    user_selection[cid]["waiting_for_price"] = False
-                send_otc_strategy_menu(cid, mid)
             elif val == "main_categories":
                 if cid in user_selection: user_selection.pop(cid, None)
                 send_category_menu(cid, mid)
@@ -537,88 +537,42 @@ def webhook():
                 tf_selected = val.replace("tf_", "")
                 sel = user_selection.get(cid, {})
                 ast = sel.get("asset", "EUR/USD")
-                is_otc = "OTC" in ast or "OTC" in ast.upper()
+                strategy = sel.get("strategy", "st1")
+                variant = sel.get("variant", "A")
                 
-                user_selection[cid]["tf"] = tf_selected
+                edit_message(cid, mid, f"⏳ Analisi automatica in corso per {ast} ({tf_selected})...")
                 
-                if is_otc:
-                    user_selection[cid]["waiting_for_price"] = True
-                    try: api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
-                    except: pass
-                    
-                    # Tasto indietro aggiunto qui sotto alla richiesta del prezzo!
-                    price_kb = {
-                        "inline_keyboard": [
-                            [{"text": "◀️ Annulla / Cambia Asset", "callback_data": f"ast_o_{OTC_ASSETS.index(ast) if ast in OTC_ASSETS else 0}"}]
-                        ]
-                    }
-                    send_message(cid, f"📊 Asset OTC: *{ast}* ({tf_selected})\n\n✍️ *Inserisci il prezzo attuale* che vedi sulla piattaforma (es. `1.7324`):", price_kb)
+                data = fetch_market_data(ast)
+                next_entry = get_next_entry_time(tf_selected)
+                
+                if strategy == "st2":
+                    action, ind_val, close = get_strategy_2_signal(data)
+                    strat_label = "Strategia 2 (Bollinger + CCI + RSI)"
+                elif strategy == "st3":
+                    action, ind_val, close = get_strategy_3_signal(data)
+                    strat_label = "Strategia 3 (SMA 3 & 9 + Momento)"
                 else:
-                    edit_message(cid, mid, f"⏳ Analisi in corso per {ast} ({tf_selected})...")
-                    data = fetch_market_data(ast)
-                    next_entry = get_next_entry_time(tf_selected)
-                    action, rsi, close = get_market_signal_real(data)
-                    
-                    text = f"🤖 **MERCATO REALE (Scadenza {tf_selected})** 🤖\n\n📊 Asset: `{ast}`\n🎯 Direzione: **{action}**\n💰 Prezzo: `{close}`\n📈 RSI (14): `{rsi}`\n⏱ Timeframe: `{tf_selected}`\n⏰ **Ingresso:** `{next_entry}`"
-                    buf = generate_chart_image(data, ast, "st1", "A")
-                    try: api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
-                    except: pass
-                    
-                    reply_kb = {"inline_keyboard": [[{"text": "🔄 Aggiorna", "callback_data": f"tf_{tf_selected}"}], [{"text": "≡ Menu Principale", "callback_data": "main_categories"}]]}
-                    if buf: send_photo_message(cid, buf, text, reply_kb)
-                    else: send_message(cid, text, reply_kb)
+                    action, ind_val, close = get_strategy_1_signal(data, variant)
+                    strat_label = "Strategia 1 (Donchian)" if variant == "A" else "Strategia 1 (Heikin Ashi)"
+                
+                signal_text = f"💎 **SEGNALE ({strat_label} | {tf_selected})** 💎\n\n📊 Asset: `{ast}`\n🎯 Direzione: **{action}**\n💰 Prezzo Calcolato: `{close}`\n📈 Indicatore: `{ind_val}`\n⏱ Timeframe: `{tf_selected}`\n⏰ **Ingresso:** `{next_entry}`"
+                
+                buf = generate_chart_image(data, ast, strategy, variant)
+                try: api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
+                except: pass
+                
+                reply_kb = {"inline_keyboard": [[{"text": "🔄 Aggiorna Segnale", "callback_data": f"tf_{tf_selected}"}], [{"text": "≡ Menu Principale", "callback_data": "main_categories"}]]}
+                if buf: send_photo_message(cid, buf, signal_text, reply_kb)
+                else: send_message(cid, signal_text, reply_kb)
 
         elif "message" in up:
             msg = up["message"]
             cid = msg["chat"]["id"]
-            
             if "text" in msg:
                 text = msg.get("text", "").strip()
-                if text.startswith("/start"):
-                    register_user(cid)
-                    if cid in user_selection: user_selection.pop(cid, None)
-                    send_category_menu(cid)
-                elif cid in user_selection and user_selection[cid].get("waiting_for_price"):
-                    try:
-                        manual_price = float(text.replace(",", "."))
-                        sel = user_selection[cid]
-                        ast = sel.get("asset")
-                        tf_selected = sel.get("tf", "M1")
-                        strategy = sel.get("strategy", "st1")
-                        variant = sel.get("variant", "A")
-                        
-                        user_selection[cid]["waiting_for_price"] = False
-                        
-                        data = generate_manual_otc_dataframe(manual_price, ast)
-                        next_entry = get_next_entry_time(tf_selected)
-                        
-                        if strategy == "st2":
-                            action, rsi, close = get_strategy_2_signal(data)
-                            strat_label = "Strategia 2 (Bollinger + CCI + RSI)"
-                        elif strategy == "st3":
-                            action, rsi, close = get_strategy_3_signal(data)
-                            strat_label = "Strategia 3 (SMA 3 & 9 + Momento)"
-                        else:
-                            action, rsi, close = get_strategy_1_signal(data, variant)
-                            strat_label = "Strategia 1 (Donchian)" if variant == "A" else "Strategia 1 (Heikin Ashi)"
-                        
-                        signal_text = f"💎 **SEGNALE OTC ({strat_label} | Scadenza {tf_selected})** 💎\n\n📊 Asset: `{ast}`\n🎯 Direzione: **{action}**\n💰 Prezzo Inserito: `{close}`\n📈 Indicatore: `{rsi}`\n⏱ Timeframe: `{tf_selected}`\n⏰ **Ingresso:** `{next_entry}`"
-                        
-                        buf = generate_chart_image(data, ast, strategy, variant)
-                        reply_kb = {"inline_keyboard": [[{"text": "≡ Menu Principale", "callback_data": "main_categories"}]]}
-                        
-                        if buf: send_photo_message(cid, buf, signal_text, reply_kb)
-                        else: send_message(cid, signal_text, reply_kb)
-                    except ValueError:
-                        price_kb = {
-                            "inline_keyboard": [
-                                [{"text": "◀️ Annulla / Cambia Asset", "callback_data": "otc_strategy_menu"}]
-                            ]
-                        }
-                        send_message(cid, "⚠️ Formato non valido. Inserisci un numero valido (es. `1.7324`) o clicca Annulla:", price_kb)
-                else:
-                    register_user(cid)
-                    send_category_menu(cid)
+                register_user(cid)
+                if cid in user_selection: user_selection.pop(cid, None)
+                send_category_menu(cid)
     except Exception as e:
         print("Errore webhook:", e)
     return "ok", 200
