@@ -340,7 +340,6 @@ def fetch_market_data(asset_name):
         price_series = base_price * np.cumprod(1 + np.random.normal(0.0000, 0.0008, len(dates)))
         df = pd.DataFrame({'Open': price_series*0.999, 'High': price_series*1.002, 'Low': price_series*0.998, 'Close': price_series}, index=dates)
     else:
-        # CORRETTORE AUTOMATICO SPECIFICO PER SCALA OTC
         correction_factor = 1.0000
         if "AUD/CAD" in asset_name:
             correction_factor = 0.9995
@@ -561,7 +560,19 @@ def webhook():
                 try: api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
                 except: pass
                 
-                reply_kb = {"inline_keyboard": [[{"text": "🔄 Aggiorna Segnale", "callback_data": f"tf_{tf_selected}"}], [{"text": "≡ Menu Principale", "callback_data": "main_categories"}]]}
+                # --- MODIFICA TASTI SOTTO IL SEGNALE ---
+                is_otc_asset = "OTC" in ast
+                back_callback = "pg_otc_0" if is_otc_asset else "cat_real_0"
+                back_text = "◀️ Torna agli Asset OTC" if is_otc_asset else "◀️ Torna agli Asset Reali"
+                
+                reply_kb = {
+                    "inline_keyboard": [
+                        [{"text": "🔄 Aggiorna Segnale", "callback_data": f"tf_{tf_selected}"}],
+                        [{"text": back_text, "callback_data": back_callback}, {"text": "🎯 Cambia Strategia", "callback_data": "otc_strategy_menu" if is_otc_asset else "main_categories"}],
+                        [{"text": "≡ Menu Principale", "callback_data": "main_categories"}]
+                    ]
+                }
+                
                 if buf: send_photo_message(cid, buf, signal_text, reply_kb)
                 else: send_message(cid, signal_text, reply_kb)
 
