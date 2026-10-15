@@ -161,14 +161,13 @@ def is_market_open(asset_name, now):
     return True
 
 def get_next_entry_time(tf_str):
-    """Calcola l'orario della candela successiva garantendo un margine di sicurezza per prepararsi"""
     now = datetime.now(pytz.timezone("Europe/Rome"))
     if tf_str.startswith('S'):
         sec = int(tf_str[1:])
         current_sec = now.second + now.microsecond / 1e6
         remaining = sec - (current_sec % sec)
         next_time = now + timedelta(seconds=remaining)
-        if remaining < 5: # Se manca troppo poco, passa alla candela dopo
+        if remaining < 5:
             next_time += timedelta(seconds=sec)
     elif tf_str.startswith('M'):
         mins = int(tf_str[1:])
@@ -177,11 +176,8 @@ def get_next_entry_time(tf_str):
         next_time = now.replace(second=0, microsecond=0) + timedelta(minutes=remaining_mins)
         if next_time <= now:
             next_time += timedelta(minutes=mins)
-        
-        # Margine di sicurezza: se mancano meno di 25 secondi all'inizio, slitta alla candela successiva
         if (next_time - now).total_seconds() < 25:
             next_time += timedelta(minutes=mins)
-            
     elif tf_str.startswith('H'):
         hours = int(tf_str[1:])
         next_time = (now + timedelta(hours=hours)).replace(minute=0, second=0, microsecond=0)
@@ -198,6 +194,9 @@ def calculate_fractal_chaos_bands(df, period=2):
 
 def calculate_indicators(df):
     close = df['Close'].iloc[:, 0] if isinstance(df['Close'], pd.DataFrame) else df['Close']
+    high = df['High'].iloc[:, 0] if isinstance(df['High'], pd.DataFrame) else df['High']
+    low = df['Low'].iloc[:, 0] if isinstance(df['Low'], pd.DataFrame) else df['Low']
+    
     delta = close.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=9).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=9).mean()
@@ -215,7 +214,16 @@ def calculate_indicators(df):
     upper_f, lower_f = calculate_fractal_chaos_bands(df, period=2)
     band_width = upper_f - lower_f
 
-    return current_rsi, round(float(macd.iloc[-1]), 5), round(float(signal_line.iloc[-1]), 5), round(float(hist.iloc[-1]), 5), float(close.iloc[-1]), round(float(ema20.iloc[-1]), 5), float(upper_f.iloc[-1]), float(lower_f.iloc[-1]), float(band_width.iloc[-1]), float(band_width.rolling(20, min_periods=1).mean().iloc[-1])
+    # --- FILTRO TENDENZA FORTE (ATR / Volatilità) ---
+    high_low = high - low
+    high_close = np.abs(high - close.shift())
+    low_close = np.abs(low - close.shift())
+    ranges = pd.concat([high_low, high_close, low_close], axis=1)
+    true_range = ranges.max(axis=1)
+    atr = true_range.rolling(14).mean().iloc[-1]
+    if math.isnan(atr): atr = 0.001
+
+    return current_rsi, round(float(macd.iloc[-1]), 5), round(float(signal_line.iloc[-1]), 5), round(float(hist.iloc[-1]), 5), float(close.iloc[-1]), round(float(ema20.iloc[-1]), 5), float(upper_f.iloc[-1]), float(lower_f.iloc[-1]), float(band_width.iloc[-1]), float(band_width.rolling(20, min_periods=1).mean().iloc[-1]), float(atr)
 
 def apply_otc_synthetic_processing(df):
     if df is None or df.empty: return df
@@ -237,16 +245,20 @@ def apply_otc_synthetic_processing(df):
     return df
 
 def get_market_signal(df):
-    rsi, _, _, hist, close, ema, _, _, _, _ = calculate_indicators(df)
+    rsi, _, _, hist, close, ema, _, _, _, _, atr = calculate_indicators(df)
+    
+    # Valutazione della forza del trend tramite filtro di volatilità (ATR)
     score = 0
     if close > ema: score += 1
     if rsi > 50: score += 1
     if hist > 0: score += 1
     
+    trend_strength = "Forte 🚀" if atr > 0.0002 else "Laterale/Debole ⚠️"
+    
     if score >= 2:
-        return "ACQUISTA 🟢 (ALTO)", rsi, close
+        return f"ACQUISTA 🟢 (ALTO) [{trend_strength}]", rsi, close
     else:
-        return "VENDI 🔴 (BASSO)", rsi, close
+        return f"VENDI 🔴 (BASSO) [{trend_strength}]", rsi, close
 
 def generate_chart_image(df, asset_name):
     try:
@@ -457,16 +469,16 @@ def webhook():
                     edit_message(cid, mid, f"⚠️ Impossibile generare l'analisi: il mercato per `{ast}` è attualmente **Chiuso**.")
                     return "ok", 200
 
-                edit_message(cid, mid, f"⏳ Elaborazione segnale per {ast} ({tf_selected})...")
+                edit_message(cid, mid, f"⏳ Elaborazione segnale e filtro trend per {ast} ({tf_selected})...")
                 data = fetch_market_data(ast)
                 
                 next_entry_time = get_next_entry_time(tf_selected)
                 action, rsi, close = get_market_signal(data)
                 
                 if "OTC" in ast:
-                    text = f"💎 **SEGNALE EASY TRACKS OTC** 💎\n\n📊 Asset: `{ast}`\n🎯 Direzione: **{action}**\n💰 Prezzo Attuale: `{close}`\n📈 RSI (9): `{rsi}`\n⏱ Timeframe: `{tf_selected}`\n⏰ **Ora Ingresso Candela Successiva:** `{next_entry_time}`\n\n⚡ *Hai tempo per aprire la piattaforma e prepararti all'ingresso!*"
+                    text = f"💎 **SEGNALE EASY TRACKS OTC** 💎\n\n📊 Asset: `{ast}`\n🎯 Direzione: **{action}**\n💰 Prezzo Attuale: `{close}`\n📈 RSI (9): `{rsi}`\n⏱ Timeframe: `{tf_selected}`\n⏰ **Ora Ingresso Candela Successiva:** `{next_entry_time}`\n\n⚡ *Filtro trend attivo: pronto per l'operazione!*"
                 else:
-                    text = f"🤖 **ANALISI TECNICA MERCATO REALE** 🤖\n\n📊 Asset: `{ast}`\n🎯 Direzione: **{action}**\n💰 Prezzo Attuale: `{close}`\n📈 RSI (9): `{rsi}`\n⏱ Timeframe: `{tf_selected}`\n⏰ **Ora Ingresso Candela Successiva:** `{next_entry_time}`\n\n🚀 *Hai tempo per aprire la piattaforma e prepararti all'ingresso!*"
+                    text = f"🤖 **ANALISI TECNICA MERCATO REALE** 🤖\n\n📊 Asset: `{ast}`\n🎯 Direzione: **{action}**\n💰 Prezzo Attuale: `{close}`\n📈 RSI (9): `{rsi}`\n⏱ Timeframe: `{tf_selected}`\n⏰ **Ora Ingresso Candela Successiva:** `{next_entry_time}`\n\n🚀 *Filtro trend attivo: pronto per l'operazione!*"
                 
                 buf = generate_chart_image(data, ast)
                 try: api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
@@ -503,12 +515,11 @@ def check_market_conditions():
             if not is_market_open(asset, now): continue
             data = fetch_market_data(asset)
             if data is not None and not data.empty:
-                rsi, _, _, hist, close, ema, _, _, _, _ = calculate_indicators(data)
-                if rsi > 65 or rsi < 35 or abs(hist) > 0.0005:
+                rsi, _, _, hist, close, ema, _, _, _, _, atr = calculate_indicators(data)
+                if (rsi > 65 or rsi < 35 or abs(hist) > 0.0005) and atr > 0.0001:
                     text = (
                         f"🚨 **ALERT OPERATIVO – {asset}**\n\n"
-                        f"• `{asset}` si trova in una zona di breakout imminente. "
-                        f"Movimento atteso nelle prossime candele.\n\n"
+                        f"• `{asset}` mostra forte volatilità e breakout imminente (ATR confermato).\n\n"
                         f"Genera il segnale ora –\n"
                         f"📊 Analizza il grafico e preparati ad agire."
                     )
