@@ -41,28 +41,16 @@ REAL_ASSETS = [
 ]
 
 OTC_ASSETS = [
-    # Valute OTC
-    "EUR/RUB OTC", "EUR/TRY OTC", "NZD/JPY OTC",
-    "TND/USD OTC", "USD/CHF OTC", "USD/JPY OTC",
-    "USD/MYR OTC", "AUD/CAD OTC", "AUD/CHF OTC",
-    "AUD/NZD OTC", "AUD/USD OTC", "CAD/JPY OTC",
-    "EUR/CHF OTC", "EUR/JPY OTC", "EUR/NZD OTC",
-    "AED/CNY OTC", "AUD/JPY OTC", "EUR/GBP OTC",
-    "NZD/USD OTC", "OMR/CNY OTC", "USD/CAD OTC",
-    "USD/BDT OTC", "CHF/NOK OTC", "EUR/USD OTC",
-    "JOD/CNY OTC", "BHD/CNY OTC", "GBP/USD OTC",
-    "USD/RUB OTC", "EUR/HUF OTC", "GBP/JPY OTC",
-    "LBP/USD OTC", "SAR/CNY OTC", "USD/BRL OTC",
-    "USD/PHP OTC", "USD/ARS OTC", "MAD/USD OTC",
-    "USD/CLP OTC", "GBP/AUD OTC", "QAR/CNY OTC",
-    "USD/COP OTC", "CAD/CHF OTC",
-    
-    # Azioni OTC
-    "American Express OTC", "Johnson & Johnson OTC", "McDonald's OTC",
-    "Microsoft OTC", "Tesla OTC", "Amazon OTC",
-    "Citigroup Inc OTC", "FedEx OTC", "Netflix OTC",
-    "VISA OTC", "Apple OTC", "Boeing Company OTC",
-    "Intel OTC", "Cisco OTC", "Alibaba OTC",
+    "EUR/RUB OTC", "EUR/TRY OTC", "NZD/JPY OTC", "TND/USD OTC", "USD/CHF OTC", "USD/JPY OTC",
+    "USD/MYR OTC", "AUD/CAD OTC", "AUD/CHF OTC", "AUD/NZD OTC", "AUD/USD OTC", "CAD/JPY OTC",
+    "EUR/CHF OTC", "EUR/JPY OTC", "EUR/NZD OTC", "AED/CNY OTC", "EUR/GBP OTC", "NZD/USD OTC",
+    "OMR/CNY OTC", "USD/CAD OTC", "USD/BDT OTC", "CHF/NOK OTC", "EUR/USD OTC", "JOD/CNY OTC",
+    "BHD/CNY OTC", "GBP/USD OTC", "USD/RUB OTC", "EUR/HUF OTC", "GBP/JPY OTC", "LBP/USD OTC",
+    "SAR/CNY OTC", "USD/BRL OTC", "USD/PHP OTC", "USD/ARS OTC", "MAD/USD OTC", "USD/CLP OTC",
+    "GBP/AUD OTC", "QAR/CNY OTC", "USD/COP OTC", "CAD/CHF OTC",
+    "American Express OTC", "Johnson & Johnson OTC", "McDonald's OTC", "Microsoft OTC",
+    "Tesla OTC", "Amazon OTC", "Citigroup Inc OTC", "FedEx OTC", "Netflix OTC", "VISA OTC",
+    "Apple OTC", "Boeing Company OTC", "Intel OTC", "Cisco OTC", "Alibaba OTC",
     "ADVANCED MICRO OTC", "Coinbase Global OTC"
 ]
 
@@ -89,8 +77,7 @@ def send_photo_message(chat_id, photo_buf, caption, markup=None):
         url = BASE_URL + "/sendPhoto"
         files = {'photo': ('grafico.png', photo_buf, 'image/png')}
         data = {'chat_id': chat_id, 'caption': caption, 'parse_mode': 'Markdown'}
-        if markup:
-            data['reply_markup'] = json.dumps(markup)
+        if markup: data['reply_markup'] = json.dumps(markup)
         response = requests.post(url, data=data, files=files, timeout=10.0)
         res_json = response.json()
         return res_json.get("result", {}).get("message_id") if res_json.get("ok") else None
@@ -103,14 +90,12 @@ def send_banner_photo(chat_id, image_path_or_url, caption, markup=None):
         if os.path.exists(image_path_or_url):
             url = BASE_URL + "/sendPhoto"
             data = {'chat_id': chat_id, 'caption': caption, 'parse_mode': 'Markdown'}
-            if markup:
-                data['reply_markup'] = json.dumps(markup)
+            if markup: data['reply_markup'] = json.dumps(markup)
             with open(image_path_or_url, 'rb') as f:
                 files = {'photo': f}
                 response = requests.post(url, data=data, files=files, timeout=10.0)
             res_json = response.json()
-            if res_json.get("ok"):
-                return res_json.get("result", {}).get("message_id")
+            if res_json.get("ok"): return res_json.get("result", {}).get("message_id")
     except Exception as e:
         print("Errore invio banner con foto:", e)
     return send_message(chat_id, caption, markup)
@@ -130,8 +115,7 @@ def register_user(chat_id):
             with open("users.txt", "r") as f:
                 users = set(line.strip() for line in f if line.strip())
         if str(chat_id) not in users:
-            with open("users.txt", "a") as f:
-                f.write(str(chat_id) + "\n")
+            with open("users.txt", "a") as f: f.write(str(chat_id) + "\n")
     except Exception as e:
         print("Errore registrazione utente:", e)
 
@@ -143,99 +127,166 @@ def get_next_entry_time(tf_str="M1"):
         remaining = sec - (current_sec % sec)
         next_time = now + timedelta(seconds=remaining)
     elif tf_str.startswith('M'):
-        mins = int(tf_str[1:])
+        mins = int(tf_str.split(' ')[0][1:]) if ' ' in tf_str else int(tf_str[1:])
         current_min = now.minute
         remaining_mins = mins - (current_min % mins)
         next_time = now.replace(second=0, microsecond=0) + timedelta(minutes=remaining_mins)
-        if next_time <= now:
-            next_time += timedelta(minutes=mins)
+        if next_time <= now: next_time += timedelta(minutes=mins)
     else:
         next_time = (now + timedelta(minutes=1)).replace(second=0, microsecond=0)
     return next_time.strftime("%H:%M:%S")
 
-def calculate_fractal_chaos_bands(df, period=2):
+# --- INDICATORI UTILITIES ---
+def calculate_donchian_channels(df, period=22):
     highs = df['High'].iloc[:, 0] if isinstance(df['High'], pd.DataFrame) else df['High']
     lows = df['Low'].iloc[:, 0] if isinstance(df['Low'], pd.DataFrame) else df['Low']
-    upper = highs.rolling(window=(period * 2 + 1), center=True).max().bfill().ffill()
-    lower = lows.rolling(window=(period * 2 + 1), center=True).min().bfill().ffill()
-    return upper, lower
+    upper = highs.rolling(window=period).max().bfill().ffill()
+    lower = lows.rolling(window=period).min().bfill().ffill()
+    middle = (upper + lower) / 2
+    return upper, middle, lower
 
-def calculate_indicators(df):
+def calculate_bollinger_bands(df, period=10, std_dev=1.5):
+    close = df['Close'].iloc[:, 0] if isinstance(df['Close'], pd.DataFrame) else df['Close']
+    middle = close.rolling(window=period).mean()
+    std = close.rolling(window=period).std()
+    upper = middle + (std * std_dev)
+    lower = middle - (std * std_dev)
+    return upper.bfill().ffill(), middle.bfill().ffill(), lower.bfill().ffill()
+
+def calculate_cci(df, period=14):
     close = df['Close'].iloc[:, 0] if isinstance(df['Close'], pd.DataFrame) else df['Close']
     high = df['High'].iloc[:, 0] if isinstance(df['High'], pd.DataFrame) else df['High']
     low = df['Low'].iloc[:, 0] if isinstance(df['Low'], pd.DataFrame) else df['Low']
-    
+    tp = (high + low + close) / 3
+    sma_tp = tp.rolling(window=period).mean()
+    mad = tp.rolling(window=period).apply(lambda x: np.fabs(x - x.mean()).mean(), raw=True)
+    cci = (tp - sma_tp) / (0.015 * mad)
+    return cci.bfill().ffill()
+
+def calculate_sma_indicators(df):
+    close = df['Close'].iloc[:, 0] if isinstance(df['Close'], pd.DataFrame) else df['Close']
+    sma3 = close.rolling(window=3).mean().bfill().ffill()
+    sma9 = close.rolling(window=9).mean().bfill().ffill()
+    mom = close.diff(10).bfill().ffill()
+    return sma3, sma9, mom
+
+def convert_to_heikin_ashi(df):
+    ha_df = df.copy()
+    close_s = df['Close'].iloc[:, 0] if isinstance(df['Close'], pd.DataFrame) else df['Close']
+    open_s = df['Open'].iloc[:, 0] if isinstance(df['Open'], pd.DataFrame) else df['Open']
+    high_s = df['High'].iloc[:, 0] if isinstance(df['High'], pd.DataFrame) else df['High']
+    low_s = df['Low'].iloc[:, 0] if isinstance(df['Low'], pd.DataFrame) else df['Low']
+    ha_close = (open_s + high_s + low_s + close_s) / 4
+    ha_open = open_s.copy()
+    for i in range(1, len(df)):
+        ha_open.iloc[i] = (ha_open.iloc[i-1] + ha_close.iloc[i-1]) / 2
+    ha_high = pd.concat([high_s, ha_open, ha_close], axis=1).max(axis=1)
+    ha_low = pd.concat([low_s, ha_open, ha_close], axis=1).min(axis=1)
+    ha_df['Open'] = ha_open
+    ha_df['High'] = ha_high
+    ha_df['Low'] = ha_low
+    ha_df['Close'] = ha_close
+    return ha_df
+
+def get_market_signal_real(df):
+    close = df['Close'].iloc[:, 0] if isinstance(df['Close'], pd.DataFrame) else df['Close']
     delta = close.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=9).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=9).mean()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
     rsi = 100 - (100 / (1 + (gain / loss)))
     current_rsi = round(float(rsi.iloc[-1]), 1)
-    if math.isnan(current_rsi): current_rsi = 50.0
+    return (f"ACQUISTA 🟢 (ALTO)", current_rsi, float(close.iloc[-1])) if current_rsi > 50 else (f"VENDI 🔴 (BASSO)", current_rsi, float(close.iloc[-1]))
 
-    exp1 = close.ewm(span=12, adjust=False).mean()
-    exp2 = close.ewm(span=26, adjust=False).mean()
-    macd = exp1 - exp2
-    signal_line = macd.ewm(span=9, adjust=False).mean()
-    hist = macd - signal_line
-    
-    ema20 = close.ewm(span=20, adjust=False).mean()
-    upper_f, lower_f = calculate_fractal_chaos_bands(df, period=2)
-    band_width = upper_f - lower_f
+def get_strategy_1_signal(df, variant="A"):
+    analysis_df = convert_to_heikin_ashi(df) if variant == "B" else df
+    close = analysis_df['Close'].iloc[:, 0] if isinstance(analysis_df['Close'], pd.DataFrame) else analysis_df['Close']
+    delta = close.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=20).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=20).mean()
+    rsi = 100 - (100 / (1 + (gain / loss)))
+    current_rsi = round(float(rsi.iloc[-1]), 1)
+    upper_d, middle_d, lower_d = calculate_donchian_channels(analysis_df, period=22)
+    curr_close = float(close.iloc[-1])
+    prev_close = float(close.iloc[-2])
+    is_bullish = curr_close > prev_close
+    var_name = "St1 Opzione B (Heikin Ashi)" if variant == "B" else "St1 Opzione A (Standard)"
 
-    high_low = high - low
-    high_close = np.abs(high - close.shift())
-    low_close = np.abs(low - close.shift())
-    ranges = pd.concat([high_low, high_close, low_close], axis=1)
-    true_range = ranges.max(axis=1)
-    atr = true_range.rolling(14).mean().iloc[-1]
-    if math.isnan(atr): atr = 0.001
-
-    return current_rsi, round(float(macd.iloc[-1]), 5), round(float(signal_line.iloc[-1]), 5), round(float(hist.iloc[-1]), 5), round(float(close.iloc[-1]), 5), round(float(ema20.iloc[-1]), 5), float(upper_f.iloc[-1]), float(lower_f.iloc[-1]), float(band_width.iloc[-1]), float(band_width.rolling(20, min_periods=1).mean().iloc[-1]), float(atr)
-
-def get_market_signal(df):
-    rsi, _, _, hist, close, ema, _, _, _, _, atr = calculate_indicators(df)
-    close_series = df['Close'].iloc[:, 0] if isinstance(df['Close'], pd.DataFrame) else df['Close']
-    recent_trend = close_series.iloc[-1] - close_series.iloc[-4] if len(close_series) >= 4 else 0
-    
-    score = 0
-    if close > ema: score += 1
-    else: score -= 1
-    if rsi > 50: score += 1
-    else: score -= 1
-    if hist > 0: score += 1
-    else: score -= 1
-    if recent_trend > 0: score += 1.5
-    else: score -= 1.5
-    
-    forza_trend = "Forte con Momentum 🚀" if atr > 0.0002 else "Laterale/Prudente ⚠️"
-    if score > 0:
-        return f"ACQUISTA 🟢 (ALTO) [{forza_trend}]", rsi, close
+    if (curr_close <= float(lower_d.iloc[-1]) * 1.0008 or curr_close < float(middle_d.iloc[-1])) and is_bullish:
+        return f"ACQUISTA 🟢 (ALTO) [{var_name}: Rimbalzo Donchian]", current_rsi, curr_close
+    elif (curr_close >= float(upper_d.iloc[-1]) * 0.9992 or curr_close > float(middle_d.iloc[-1])) and not is_bullish:
+        return f"VENDI 🔴 (BASSO) [{var_name}: Rimbalzo Donchian]", current_rsi, curr_close
     else:
-        return f"VENDI 🔴 (BASSO) [{forza_trend}]", rsi, close
+        return (f"ACQUISTA 🟢 (ALTO) [{var_name}: Trend]", current_rsi, curr_close) if current_rsi > 50 else (f"VENDI 🔴 (BASSO) [{var_name}: Trend]", current_rsi, curr_close)
 
-def generate_chart_image(df, asset_name):
+def get_strategy_2_signal(df):
+    close = df['Close'].iloc[:, 0] if isinstance(df['Close'], pd.DataFrame) else df['Close']
+    upper_b, middle_b, lower_b = calculate_bollinger_bands(df, period=10, std_dev=1.5)
+    cci = calculate_cci(df, period=14)
+    delta = close.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=10).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=10).mean()
+    rsi = 100 - (100 / (1 + (gain / loss)))
+    curr_close = float(close.iloc[-1])
+    curr_cci = float(cci.iloc[-1])
+    curr_rsi = round(float(rsi.iloc[-1]), 1)
+    
+    if curr_close <= float(lower_b.iloc[-1]) * 1.001 or (curr_cci < -100 or curr_rsi < 35):
+        return f"ACQUISTA 🟢 (ALTO) [Strategia 2: Bollinger/CCI/RSI Oversold]", curr_rsi, curr_close
+    elif curr_close >= float(upper_b.iloc[-1]) * 0.999 or (curr_cci > 100 or curr_rsi > 65):
+        return f"VENDI 🔴 (BASSO) [Strategia 2: Bollinger/CCI/RSI Overbought]", curr_rsi, curr_close
+    else:
+        return (f"ACQUISTA 🟢 (ALTO) [Strategia 2 CCI/RSI]", curr_rsi, curr_close) if curr_rsi > 50 else (f"VENDI 🔴 (BASSO) [Strategia 2 CCI/RSI]", curr_rsi, curr_close)
+
+def get_strategy_3_signal(df):
+    close = df['Close'].iloc[:, 0] if isinstance(df['Close'], pd.DataFrame) else df['Close']
+    sma3, sma9, mom = calculate_sma_indicators(df)
+    curr_close = float(close.iloc[-1])
+    curr_mom = float(mom.iloc[-1])
+    
+    if float(sma3.iloc[-1]) > float(sma9.iloc[-1]) and curr_mom > 0:
+        return f"ACQUISTA 🟢 (ALTO) [Strategia 3: SMA 3/9 Cross & Momento Positivo]", curr_mom, curr_close
+    elif float(sma3.iloc[-1]) < float(sma9.iloc[-1]) and curr_mom < 0:
+        return f"VENDI 🔴 (BASSO) [Strategia 3: SMA 3/9 Cross & Momento Negativo]", curr_mom, curr_close
+    else:
+        return (f"ACQUISTA 🟢 (ALTO) [Strategia 3 SMA Trend]", curr_mom, curr_close) if curr_mom > 0 else (f"VENDI 🔴 (BASSO) [Strategia 3 SMA Trend]", curr_mom, curr_close)
+
+def generate_chart_image(df, asset_name, strategy="st1", variant="A"):
     try:
-        df_clean = df.copy()
-        df_clean.index = df_clean.index + timedelta(hours=2)
+        plot_df = df.copy()
+        plot_df.index = plot_df.index + timedelta(hours=2)
         for col in ['Open', 'High', 'Low', 'Close']:
-            df_clean[col] = df_clean[col].astype(float)
+            plot_df[col] = plot_df[col].astype(float)
 
-        close_series = df_clean['Close'].iloc[:, 0] if isinstance(df_clean['Close'], pd.DataFrame) else df_clean['Close']
-        ema20_full = close_series.ewm(span=20, adjust=False).mean()
-        upper_f_full, lower_f_full = calculate_fractal_chaos_bands(df_clean, period=2)
-
-        df_plot = df_clean.tail(30).copy()
+        df_plot = plot_df.tail(30).copy()
         market_colors = mpf.make_marketcolors(up='#00E676', down='#FF5252', wick={'up': '#00E676', 'down': '#FF5252'}, edge='inherit', volume='inherit')
         custom_style = mpf.make_mpf_style(base_mpf_style='nightclouds', marketcolors=market_colors, facecolor='#1e1e1e', edgecolor='#333333', figcolor='#1e1e1e')
 
-        add_plots = [
-            mpf.make_addplot(ema20_full.tail(30), color='#FFC107', width=1.5, linestyle='--'),
-            mpf.make_addplot(upper_f_full.tail(30), color='#00BCD4', width=1.2), 
-            mpf.make_addplot(lower_f_full.tail(30), color='#00BCD4', width=1.2)  
-        ]
+        if strategy == "st1":
+            upper_d, middle_d, lower_d = calculate_donchian_channels(plot_df, period=22)
+            add_plots = [
+                mpf.make_addplot(upper_d.tail(30), color='#00BCD4', width=1.2),
+                mpf.make_addplot(middle_d.tail(30), color='#FFFFFF', width=1.5, linestyle='--'),
+                mpf.make_addplot(lower_d.tail(30), color='#00BCD4', width=1.2)
+            ]
+            title_str = f"\nAnalisi St.1 (Donchian): {asset_name}"
+        elif strategy == "st2":
+            upper_b, middle_b, lower_b = calculate_bollinger_bands(plot_df, period=10, std_dev=1.5)
+            add_plots = [
+                mpf.make_addplot(upper_b.tail(30), color='#FF9800', width=1.2),
+                mpf.make_addplot(middle_b.tail(30), color='#FFFFFF', width=1.2, linestyle='--'),
+                mpf.make_addplot(lower_b.tail(30), color='#FF9800', width=1.2)
+            ]
+            title_str = f"\nAnalisi St.2 (Bollinger 10,1.5): {asset_name}"
+        else:
+            sma3, sma9, _ = calculate_sma_indicators(plot_df)
+            add_plots = [
+                mpf.make_addplot(sma3.tail(30), color='#00E676', width=1.5),
+                mpf.make_addplot(sma9.tail(30), color='#FF9800', width=1.5)
+            ]
+            title_str = f"\nAnalisi St.3 (SMA 3 & 9 + Momento): {asset_name}"
 
         buf = io.BytesIO()
-        fig, axes = mpf.plot(df_plot, type='candle', style=custom_style, addplot=add_plots, title=f"\nAnalisi: {asset_name}", volume=False, figsize=(8, 4.5), returnfig=True)
+        fig, axes = mpf.plot(df_plot, type='candle', style=custom_style, addplot=add_plots, title=title_str, volume=False, figsize=(8, 4.5), returnfig=True)
         fig.savefig(buf, format='png', facecolor='#1e1e1e', edgecolor='none', bbox_inches='tight', dpi=100)
         buf.seek(0)
         plt.close('all')
@@ -291,14 +342,11 @@ def generate_manual_otc_dataframe(manual_price, asset_name):
     now_utc = datetime.now(timezone.utc).replace(second=0, microsecond=0)
     dates = [pd.Timestamp(now_utc.replace(tzinfo=None)) - timedelta(minutes=i) for i in range(60, 0, -1)]
     np.random.seed(hash(asset_name) % 10000)
-    
     returns = np.random.normal(0.0000, 0.0008, len(dates))
     price_series = manual_price * np.cumprod(1 + returns)
     price_series[-1] = manual_price
-    
     opens = np.roll(price_series, 1)
     opens[0] = price_series[0] * 0.9999
-    
     df = pd.DataFrame({
         'Open': opens,
         'High': np.maximum(opens, price_series) * 1.0002,
@@ -313,7 +361,7 @@ def send_category_menu(chat_id, msg_id=None):
     kb = {
         "inline_keyboard": [
             [{"text": "📈 Mercato Reale", "callback_data": "cat_real_0"}],
-            [{"text": "📊 Mercato OTC (Manuale)", "callback_data": "cat_otc_0"}]
+            [{"text": "📊 Mercato OTC (Scegli Strategia)", "callback_data": "otc_strategy_menu"}]
         ]
     }
     text = "🇮🇹 SELEZIONA ‣ TIPO DI MERCATO"
@@ -321,6 +369,39 @@ def send_category_menu(chat_id, msg_id=None):
         try: api_call("deleteMessage", {"chat_id": chat_id, "message_id": msg_id})
         except: pass
     send_banner_photo(chat_id, BANNER_IMAGE, text, kb)
+
+def send_otc_strategy_menu(chat_id, msg_id=None):
+    kb = {
+        "inline_keyboard": [
+            [{"text": "⚙️ Strategia 1 (Donchian / RSI / DeMarker)", "callback_data": "strat_1_menu"}],
+            [{"text": "⚙️ Strategia 2 (Bollinger 10,1.5 / CCI / RSI)", "callback_data": "strat_2_select"}],
+            [{"text": "⚙️ Strategia 3 (SMA 3 & 9 + Momento 10)", "callback_data": "strat_3_select"}],
+            [{"text": "≡ Torna al Menu Principale", "callback_data": "main_categories"}]
+        ]
+    }
+    text = "🧠 *SELEZIONA LA STRATEGIA OTC* 🧠\n\nScegli quale delle 3 strategie applicare:"
+    if msg_id:
+        try: api_call("deleteMessage", {"chat_id": chat_id, "message_id": msg_id})
+        except: pass
+    send_message(chat_id, text, kb)
+
+def send_st1_variant_menu(chat_id, msg_id=None):
+    kb = {
+        "inline_keyboard": [
+            [{"text": "🕯️ Opzione A: Candele Standard", "callback_data": "var_st1_A"}],
+            [{"text": "📊 Opzione B: Candele Heikin Ashi", "callback_data": "var_st1_B"}],
+            [{"text": "◀️ Indietro", "callback_data": "otc_strategy_menu"}]
+        ]
+    }
+    text = "⚙️ *STRATEGIA 1 - PARAMETRI E REGOLE* ⚙️\n\n" \
+           "📌 *Indicatori da impostare sulla piattaforma:*\n" \
+           "• **Canali Donchian**: Periodo `22`\n" \
+           "• **RSI**: Periodo `14` (o 20)\n\n" \
+           "Scegli il tipo di candele da analizzare:"
+    if msg_id:
+        try: api_call("deleteMessage", {"chat_id": chat_id, "message_id": msg_id})
+        except: pass
+    send_message(chat_id, text, kb)
 
 def send_assets_menu(chat_id, category="real", page=0, msg_id=None):
     lst = REAL_ASSETS if category == "real" else OTC_ASSETS
@@ -340,9 +421,12 @@ def send_assets_menu(chat_id, category="real", page=0, msg_id=None):
     nav.append({"text": f"{page+1}/{total_pages}", "callback_data": "noop"})
     if (page + 1) * 12 < len(lst): nav.append({"text": "Avanti ▶️", "callback_data": f"pg_{category}_{page+1}"})
     if nav: kb.append(nav)
+    
+    if category == "otc":
+        kb.append([{"text": "🔄 Cambia Strategia OTC", "callback_data": "otc_strategy_menu"}])
     kb.append([{"text": "≡ Torna al Menu Principale", "callback_data": "main_categories"}])
     
-    cat_nome = "REALE" if category == "real" else "OTC"
+    cat_nome = "REALE" if category == "real" else "OTC (3 Strategie Disponibili)"
     text = f"🇮🇹 SELEZIONA ‣ COPPIA DI VALUTE ({cat_nome})"
     if msg_id:
         try: api_call("deleteMessage", {"chat_id": chat_id, "message_id": msg_id})
@@ -381,9 +465,60 @@ def webhook():
                 return "ok", 200
             elif val == "main_categories":
                 send_category_menu(cid, mid)
-            elif val.startswith("cat_"):
-                parts = val.split("_")
-                send_assets_menu(cid, parts[1], int(parts[2]), mid)
+            elif val == "cat_real_0":
+                send_assets_menu(cid, "real", 0, mid)
+            elif val == "otc_strategy_menu":
+                send_otc_strategy_menu(cid, mid)
+            elif val == "strat_1_menu":
+                send_st1_variant_menu(cid, mid)
+            elif val in ["var_st1_A", "var_st1_B"]:
+                if cid not in user_selection: user_selection[cid] = {}
+                user_selection[cid]["strategy"] = "st1"
+                user_selection[cid]["variant"] = val.replace("var_st1_", "")
+                var_label = "Strategia 1 (Standard)" if val == "var_st1_A" else "Strategia 1 (Heikin Ashi)"
+                send_message(cid, f"✅ Selezionato: *{var_label}*\n\nOra scegli l'asset OTC:")
+                send_assets_menu(cid, "otc", 0, mid)
+            elif val == "strat_2_select":
+                if cid not in user_selection: user_selection[cid] = {}
+                user_selection[cid]["strategy"] = "st2"
+                user_selection[cid]["variant"] = "A"
+                
+                # Messaggio con regole e parametri per la Strategia 2
+                rules_text = (
+                    "⚙️ *STRATEGIA 2 - PARAMETRI E REGOLE* ⚙️\n\n"
+                    "📌 *Indicatori da impostare sulla piattaforma:*\n"
+                    "• **Bande di Bollinger**: Periodo `10`, Deviazione `1.5`\n"
+                    "• **CCI**: Periodo `14`\n"
+                    "• **RSI**: Periodo `10` o `14`\n\n"
+                    "🎯 *Regola operativa:*\n"
+                    "Segnale di acquisto/vendita basato sul tocco delle bande esterne confermato da CCI e RSI."
+                )
+                try: api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
+                except: pass
+                send_message(cid, rules_text)
+                send_assets_menu(cid, "otc", 0, None)
+                
+            elif val == "strat_3_select":
+                if cid not in user_selection: user_selection[cid] = {}
+                user_selection[cid]["strategy"] = "st3"
+                user_selection[cid]["variant"] = "A"
+                
+                # Messaggio con regole e parametri per la Strategia 3
+                rules_text = (
+                    "⚙️ *STRATEGIA 3 - PARAMETRI E REGOLE* ⚙️\n\n"
+                    "📌 *Indicatori da impostare sulla piattaforma:*\n"
+                    "• **Media Mobile 1 (SMA)**: Periodo `9`\n"
+                    "• **Media Mobile 2 (SMA)**: Periodo `3`\n"
+                    "• **Frattali**: Periodo `2`\n"
+                    "• **Momento**: Periodo `10`\n\n"
+                    "🎯 *Regola operativa:*\n"
+                    "Entra a favore dell'incrocio tra la SMA 3 e la SMA 9, confermato dalla tacca verde/rossa dell'indicatore Momento."
+                )
+                try: api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
+                except: pass
+                send_message(cid, rules_text)
+                send_assets_menu(cid, "otc", 0, None)
+                
             elif val.startswith("pg_"):
                 parts = val.split("_")
                 send_assets_menu(cid, parts[1], int(parts[2]), mid)
@@ -391,7 +526,8 @@ def webhook():
                 is_otc = val.startswith("ast_o_")
                 idx = int(val.split("_")[2])
                 ast = (OTC_ASSETS if is_otc else REAL_ASSETS)[idx]
-                user_selection[cid] = {"asset": ast}
+                if cid not in user_selection: user_selection[cid] = {}
+                user_selection[cid]["asset"] = ast
                 send_timeframe_menu(cid, ast, mid)
             elif val.startswith("tf_"):
                 tf_selected = val.replace("tf_", "")
@@ -410,10 +546,10 @@ def webhook():
                     edit_message(cid, mid, f"⏳ Analisi in corso per {ast} ({tf_selected})...")
                     data = fetch_market_data(ast)
                     next_entry = get_next_entry_time(tf_selected)
-                    action, rsi, close = get_market_signal(data)
+                    action, rsi, close = get_market_signal_real(data)
                     
-                    text = f"🤖 **MERCATO REALE (Scadenza {tf_selected})** 🤖\n\n📊 Asset: `{ast}`\n🎯 Direzione: **{action}**\n💰 Prezzo: `{close}`\n📈 RSI (9): `{rsi}`\n⏱ Timeframe: `{tf_selected}`\n⏰ **Ingresso:** `{next_entry}`"
-                    buf = generate_chart_image(data, ast)
+                    text = f"🤖 **MERCATO REALE (Scadenza {tf_selected})** 🤖\n\n📊 Asset: `{ast}`\n🎯 Direzione: **{action}**\n💰 Prezzo: `{close}`\n📈 RSI (14): `{rsi}`\n⏱ Timeframe: `{tf_selected}`\n⏰ **Ingresso:** `{next_entry}`"
+                    buf = generate_chart_image(data, ast, "st1", "A")
                     try: api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
                     except: pass
                     
@@ -437,16 +573,27 @@ def webhook():
                         sel = user_selection[cid]
                         ast = sel.get("asset")
                         tf_selected = sel.get("tf", "M1")
+                        strategy = sel.get("strategy", "st1")
+                        variant = sel.get("variant", "A")
                         
                         user_selection[cid]["waiting_for_price"] = False
                         
                         data = generate_manual_otc_dataframe(manual_price, ast)
                         next_entry = get_next_entry_time(tf_selected)
-                        action, rsi, close = get_market_signal(data)
                         
-                        signal_text = f"💎 **SEGNALE OTC (Scadenza {tf_selected})** 💎\n\n📊 Asset: `{ast}`\n🎯 Direzione: **{action}**\n💰 Prezzo Inserito: `{close}`\n📈 RSI (9): `{rsi}`\n⏱ Timeframe: `{tf_selected}`\n⏰ **Ingresso:** `{next_entry}`"
+                        if strategy == "st2":
+                            action, rsi, close = get_strategy_2_signal(data)
+                            strat_label = "Strategia 2 (Bollinger + CCI + RSI)"
+                        elif strategy == "st3":
+                            action, rsi, close = get_strategy_3_signal(data)
+                            strat_label = "Strategia 3 (SMA 3 & 9 + Momento)"
+                        else:
+                            action, rsi, close = get_strategy_1_signal(data, variant)
+                            strat_label = "Strategia 1 (Donchian)" if variant == "A" else "Strategia 1 (Heikin Ashi)"
                         
-                        buf = generate_chart_image(data, ast)
+                        signal_text = f"💎 **SEGNALE OTC ({strat_label} | Scadenza {tf_selected})** 💎\n\n📊 Asset: `{ast}`\n🎯 Direzione: **{action}**\n💰 Prezzo Inserito: `{close}`\n📈 Indicatore: `{rsi}`\n⏱ Timeframe: `{tf_selected}`\n⏰ **Ingresso:** `{next_entry}`"
+                        
+                        buf = generate_chart_image(data, ast, strategy, variant)
                         reply_kb = {"inline_keyboard": [[{"text": "≡ Menu Principale", "callback_data": "main_categories"}]]}
                         
                         if buf: send_photo_message(cid, buf, signal_text, reply_kb)
