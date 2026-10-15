@@ -32,7 +32,7 @@ genai.configure(api_key=GEMINI_API_KEY)
 gemini_model = genai.GenerativeModel('gemini-1.5-flash')
 
 market_cache = {}
-CACHE_DURATION = 60
+CACHE_DURATION = 30
 
 REAL_ASSETS = [
     # 1. Valute Reali
@@ -84,6 +84,7 @@ STOCK_TICKERS = {
 }
 
 user_selection = {}
+last_alert_times = {}
 
 def api_call(method, data):
     try:
@@ -224,8 +225,9 @@ def calculate_indicators(df):
 
     return current_rsi, round(float(macd.iloc[-1]), 5), round(float(signal_line.iloc[-1]), 5), round(float(hist.iloc[-1]), 5), float(close.iloc[-1]), round(float(ema20.iloc[-1]), 5), float(upper_f.iloc[-1]), float(lower_f.iloc[-1]), float(band_width.iloc[-1]), float(band_width.rolling(20, min_periods=1).mean().iloc[-1]), float(atr)
 
-def apply_otc_synthetic_processing(df):
-    # Ancoraggio perfetto al prezzo reale: nessun drifting casuale dei livelli
+def apply_otc_synthetic_processing(df, asset_name):
+    if df is None or df.empty:
+        return df
     return df
 
 def get_market_signal(df):
@@ -331,20 +333,29 @@ def fetch_market_data(asset_name):
         now_utc = datetime.now(timezone.utc).replace(second=0, microsecond=0)
         dates = [pd.Timestamp(now_utc.replace(tzinfo=None)) - timedelta(minutes=i) for i in range(60, 0, -1)]
         np.random.seed(hash(asset_name) % 10000)
-        base_price = 150.0 if "OTC" in asset_name else 100.0
-        returns = np.random.normal(0.0001, 0.002, len(dates))
+        
+        if "USD/CAD" in base_asset:
+            base_price = 1.4251
+        elif "EUR/USD" in base_asset:
+            base_price = 1.0850
+        elif "GBP/USD" in base_asset:
+            base_price = 1.2950
+        else:
+            base_price = 150.0 if "OTC" in asset_name else 100.0
+            
+        returns = np.random.normal(0.00001, 0.0008, len(dates))
         price_series = base_price * np.cumprod(1 + returns)
         
         df = pd.DataFrame({
-            'Open': price_series * 0.999,
-            'High': price_series * 1.002,
-            'Low': price_series * 0.998,
+            'Open': price_series * 0.9999,
+            'High': price_series * 1.0003,
+            'Low': price_series * 0.9997,
             'Close': price_series
         }, index=dates)
 
     clean_df = force_realtime_last_candle(df)
     if "OTC" in asset_name:
-        clean_df = apply_otc_synthetic_processing(clean_df)
+        clean_df = apply_otc_synthetic_processing(clean_df, asset_name)
         
     market_cache[asset_name] = (current_time, clean_df)
     return clean_df
@@ -507,10 +518,17 @@ def check_market_conditions():
     for asset in monitoring_targets:
         try:
             if not is_market_open(asset, now): continue
+            
+            # Anti-spam: evita di reinviare lo stesso alert se è passata meno di 1 ora
+            if asset in last_alert_times:
+                if (now - last_alert_times[asset]).total_seconds() < 3600:
+                    continue
+
             data = fetch_market_data(asset)
             if data is not None and not data.empty:
                 rsi, _, _, hist, close, ema, _, _, _, _, atr = calculate_indicators(data)
                 if (rsi > 65 or rsi < 35 or abs(hist) > 0.0005) and atr > 0.0001:
+                    last_alert_times[asset] = now
                     text = (
                         f"🚨 **ALERT OPERATIVO – {asset}**\n\n"
                         f"• `{asset}` mostra forte volatilità e allineamento di prezzo.\n\n"
@@ -540,10 +558,8 @@ ping_thread.start()
 
 if not scheduler.running if 'scheduler' in globals() else True:
     scheduler = BackgroundScheduler(timezone="Europe/Rome")
-    scheduler.add_job(lambda: check_market_conditions(), 'interval', minutes=15)
-    scheduler.add_job(lambda: check_market_conditions(), 'cron', hour=9, minute=0)
-    scheduler.add_job(lambda: check_market_conditions(), 'cron', hour=14, minute=30)
-    scheduler.add_job(lambda: check_market_conditions(), 'cron', hour=19, minute=0)
+    # Scheduler impostato a intervalli regolari senza trigger all'avvio
+    scheduler.add_job(lambda: check_market_conditions(), 'interval', minutes=30)
     scheduler.start()
 
 RENDER_URL = os.environ.get('RENDER_EXTERNAL_URL')
