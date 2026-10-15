@@ -225,29 +225,13 @@ def calculate_indicators(df):
     return current_rsi, round(float(macd.iloc[-1]), 5), round(float(signal_line.iloc[-1]), 5), round(float(hist.iloc[-1]), 5), float(close.iloc[-1]), round(float(ema20.iloc[-1]), 5), float(upper_f.iloc[-1]), float(lower_f.iloc[-1]), float(band_width.iloc[-1]), float(band_width.rolling(20, min_periods=1).mean().iloc[-1]), float(atr)
 
 def apply_otc_synthetic_processing(df):
-    if df is None or df.empty: return df
-    try:
-        close_col = df['Close'].iloc[:, 0] if isinstance(df['Close'], pd.DataFrame) else df['Close']
-        volatility = close_col.pct_change().std()
-        if math.isnan(volatility) or volatility == 0:
-            volatility = 0.0001
-        
-        np.random.seed(int(time.time() // 60) % 1000)
-        synthetic_noise = np.random.normal(0, volatility * 0.2, len(df))
-        
-        for col in ['Open', 'High', 'Low', 'Close']:
-            if isinstance(df[col], pd.DataFrame):
-                df[col] = df[col].iloc[:, 0]
-            df[col] = df[col] * (1 + synthetic_noise)
-    except Exception as e:
-        print("Errore elaborazione OTC sintetica:", e)
+    # Ancoraggio perfetto al prezzo reale: nessun drifting casuale dei livelli
     return df
 
 def get_market_signal(df):
     rsi, _, _, hist, close, ema, _, _, _, _, atr = calculate_indicators(df)
     close_series = df['Close'].iloc[:, 0] if isinstance(df['Close'], pd.DataFrame) else df['Close']
     
-    # --- FILTRO MOMENTO A BREVE TERMINE (Evita contrasto con candele esplosive) ---
     recent_trend = close_series.iloc[-1] - close_series.iloc[-4] if len(close_series) >= 4 else 0
     
     score = 0
@@ -260,7 +244,6 @@ def get_market_signal(df):
     if hist > 0: score += 1
     else: score -= 1
     
-    # Ponderazione del momentum recente per sincronia con l'azione di prezzo
     if recent_trend > 0: score += 1.5
     else: score -= 1.5
     
@@ -480,16 +463,16 @@ def webhook():
                     edit_message(cid, mid, f"⚠️ Impossibile generare l'analisi: il mercato per `{ast}` è attualmente **Chiuso**.")
                     return "ok", 200
 
-                edit_message(cid, mid, f"⏳ Elaborazione segnale con filtro momentum per {ast} ({tf_selected})...")
+                edit_message(cid, mid, f"⏳ Elaborazione segnale allineato per {ast} ({tf_selected})...")
                 data = fetch_market_data(ast)
                 
                 next_entry_time = get_next_entry_time(tf_selected)
                 action, rsi, close = get_market_signal(data)
                 
                 if "OTC" in ast:
-                    text = f"💎 **SEGNALE EASY TRACKS OTC** 💎\n\n📊 Asset: `{ast}`\n🎯 Direzione: **{action}**\n💰 Prezzo Attuale: `{close}`\n📈 RSI (9): `{rsi}`\n⏱ Timeframe: `{tf_selected}`\n⏰ **Ora Ingresso Candela Successiva:** `{next_entry_time}`\n\n⚡ *Filtro momentum applicato con successo!*"
+                    text = f"💎 **SEGNALE EASY TRACKS OTC** 💎\n\n📊 Asset: `{ast}`\n🎯 Direzione: **{action}**\n💰 Prezzo Attuale: `{close}`\n📈 RSI (9): `{rsi}`\n⏱ Timeframe: `{tf_selected}`\n⏰ **Ora Ingresso Candela Successiva:** `{next_entry_time}`\n\n⚡ *Prezzi sincronizzati correttamente!*"
                 else:
-                    text = f"🤖 **ANALISI TECNICA MERCATO REALE** 🤖\n\n📊 Asset: `{ast}`\n🎯 Direzione: **{action}**\n💰 Prezzo Attuale: `{close}`\n📈 RSI (9): `{rsi}`\n⏱ Timeframe: `{tf_selected}`\n⏰ **Ora Ingresso Candela Successiva:** `{next_entry_time}`\n\n🚀 *Filtro momentum applicato con successo!*"
+                    text = f"🤖 **ANALISI TECNICA MERCATO REALE** 🤖\n\n📊 Asset: `{ast}`\n🎯 Direzione: **{action}**\n💰 Prezzo Attuale: `{close}`\n📈 RSI (9): `{rsi}`\n⏱ Timeframe: `{tf_selected}`\n⏰ **Ora Ingresso Candela Successiva:** `{next_entry_time}`\n\n🚀 *Prezzi sincronizzati correttamente!*"
                 
                 buf = generate_chart_image(data, ast)
                 try: api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
@@ -530,7 +513,7 @@ def check_market_conditions():
                 if (rsi > 65 or rsi < 35 or abs(hist) > 0.0005) and atr > 0.0001:
                     text = (
                         f"🚨 **ALERT OPERATIVO – {asset}**\n\n"
-                        f"• `{asset}` mostra forte volatilità e momentum attivo.\n\n"
+                        f"• `{asset}` mostra forte volatilità e allineamento di prezzo.\n\n"
                         f"Genera il segnale ora –\n"
                         f"📊 Analizza il grafico e preparati ad agire."
                     )
