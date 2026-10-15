@@ -161,12 +161,15 @@ def is_market_open(asset_name, now):
     return True
 
 def get_next_entry_time(tf_str):
+    """Calcola l'orario della candela successiva garantendo un margine di sicurezza per prepararsi"""
     now = datetime.now(pytz.timezone("Europe/Rome"))
     if tf_str.startswith('S'):
         sec = int(tf_str[1:])
         current_sec = now.second + now.microsecond / 1e6
         remaining = sec - (current_sec % sec)
         next_time = now + timedelta(seconds=remaining)
+        if remaining < 5: # Se manca troppo poco, passa alla candela dopo
+            next_time += timedelta(seconds=sec)
     elif tf_str.startswith('M'):
         mins = int(tf_str[1:])
         current_min = now.minute
@@ -174,6 +177,11 @@ def get_next_entry_time(tf_str):
         next_time = now.replace(second=0, microsecond=0) + timedelta(minutes=remaining_mins)
         if next_time <= now:
             next_time += timedelta(minutes=mins)
+        
+        # Margine di sicurezza: se mancano meno di 25 secondi all'inizio, slitta alla candela successiva
+        if (next_time - now).total_seconds() < 25:
+            next_time += timedelta(minutes=mins)
+            
     elif tf_str.startswith('H'):
         hours = int(tf_str[1:])
         next_time = (now + timedelta(hours=hours)).replace(minute=0, second=0, microsecond=0)
@@ -456,9 +464,9 @@ def webhook():
                 action, rsi, close = get_market_signal(data)
                 
                 if "OTC" in ast:
-                    text = f"💎 **SEGNALE EASY TRACKS OTC** 💎\n\n📊 Asset: `{ast}`\n🎯 Direzione: **{action}**\n💰 Prezzo Attuale: `{close}`\n📈 RSI (9): `{rsi}`\n⏱ Timeframe: `{tf_selected}`\n⏰ **Ora Ingresso Candela Successiva:** `{next_entry_time}`\n\n⚡ *Preparati all'ingresso a inizio candela!*"
+                    text = f"💎 **SEGNALE EASY TRACKS OTC** 💎\n\n📊 Asset: `{ast}`\n🎯 Direzione: **{action}**\n💰 Prezzo Attuale: `{close}`\n📈 RSI (9): `{rsi}`\n⏱ Timeframe: `{tf_selected}`\n⏰ **Ora Ingresso Candela Successiva:** `{next_entry_time}`\n\n⚡ *Hai tempo per aprire la piattaforma e prepararti all'ingresso!*"
                 else:
-                    text = f"🤖 **ANALISI TECNICA MERCATO REALE** 🤖\n\n📊 Asset: `{ast}`\n🎯 Direzione: **{action}**\n💰 Prezzo Attuale: `{close}`\n📈 RSI (9): `{rsi}`\n⏱ Timeframe: `{tf_selected}`\n⏰ **Ora Ingresso Candela Successiva:** `{next_entry_time}`\n\n🚀 *Preparati all'ingresso a inizio candela!*"
+                    text = f"🤖 **ANALISI TECNICA MERCATO REALE** 🤖\n\n📊 Asset: `{ast}`\n🎯 Direzione: **{action}**\n💰 Prezzo Attuale: `{close}`\n📈 RSI (9): `{rsi}`\n⏱ Timeframe: `{tf_selected}`\n⏰ **Ora Ingresso Candela Successiva:** `{next_entry_time}`\n\n🚀 *Hai tempo per aprire la piattaforma e prepararti all'ingresso!*"
                 
                 buf = generate_chart_image(data, ast)
                 try: api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
@@ -481,7 +489,6 @@ def webhook():
         print("Errore webhook:", e)
     return "ok", 200
 
-# --- CONTROLLO CONDIZIONI IN TEMPO REALE ---
 def check_market_conditions():
     now = datetime.now(pytz.timezone("Europe/Rome"))
     users = []
@@ -515,17 +522,14 @@ def check_market_conditions():
         except Exception as e:
             print(f"Errore controllo live {asset}: {e}")
 
-# --- KEEP-ALIVE AUTOMATICO (Visita il link ogni 5 minuti per non spegnere Render) ---
 def keep_alive_ping():
     while True:
         try:
             requests.get(BOT_URL, timeout=10)
-            print("Ping Keep-Alive eseguito con successo.")
         except Exception as e:
-            print("Errore durante il ping keep-alive:", e)
-        time.sleep(300) # 300 secondi = 5 minuti
+            print("Errore keep-alive:", e)
+        time.sleep(300)
 
-# Avvio del thread Keep-Alive in background
 ping_thread = threading.Thread(target=keep_alive_ping, daemon=True)
 ping_thread.start()
 
