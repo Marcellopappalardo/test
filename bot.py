@@ -102,24 +102,22 @@ def send_photo_message(chat_id, photo_buf, caption, markup=None):
 
 def send_banner_photo(chat_id, image_path_or_url, caption, markup=None):
     try:
-        url = BASE_URL + "/sendPhoto"
-        data = {'chat_id': chat_id, 'caption': caption, 'parse_mode': 'Markdown'}
-        if markup:
-            data['reply_markup'] = json.dumps(markup)
-        
         if os.path.exists(image_path_or_url):
+            url = BASE_URL + "/sendPhoto"
+            data = {'chat_id': chat_id, 'caption': caption, 'parse_mode': 'Markdown'}
+            if markup:
+                data['reply_markup'] = json.dumps(markup)
             with open(image_path_or_url, 'rb') as f:
                 files = {'photo': f}
                 response = requests.post(url, data=data, files=files, timeout=10.0)
-        else:
-            data['photo'] = image_path_or_url
-            response = requests.post(url, data=data, timeout=10.0)
-            
-        res_json = response.json()
-        return res_json.get("result", {}).get("message_id") if res_json.get("ok") else None
+            res_json = response.json()
+            if res_json.get("ok"):
+                return res_json.get("result", {}).get("message_id")
     except Exception as e:
-        print("Errore invio banner:", e)
-        return None
+        print("Errore invio banner con foto:", e)
+    
+    # Fallback sicuro a messaggio di testo se l'immagine manca o fallisce
+    return send_message(chat_id, caption, markup)
 
 def edit_message(chat_id, msg_id, text, markup=None):
     p = {"chat_id": chat_id, "message_id": msg_id, "text": text, "parse_mode": "Markdown"}
@@ -333,8 +331,12 @@ def send_timeframe_menu(chat_id, asset_name, msg_id=None):
         ]
     }
     text = f"💹 Asset: *{asset_name}*\n\nSeleziona l'intervallo / timeframe:"
-    if msg_id: edit_message(chat_id, msg_id, text, kb)
-    else: send_message(chat_id, text, kb)
+    if msg_id:
+        try:
+            api_call("deleteMessage", {"chat_id": chat_id, "message_id": msg_id})
+        except:
+            pass
+    send_message(chat_id, text, kb)
 
 @app.route('/')
 def index():
@@ -356,7 +358,7 @@ def webhook():
                 send_category_menu(cid, mid)
             elif val.startswith("cat_"):
                 parts = val.split("_")
-                cat = parts[1]
+                cat = parts[1] # "real" o "otc"
                 page = int(parts[2])
                 send_assets_menu(cid, cat, page, mid)
             elif val.startswith("pg_"):
@@ -405,7 +407,11 @@ def webhook():
                     text = f"🤖 **ANALISI TECNICA MERCATO REALE** 🤖\n\n📊 Asset: `{ast}`\n🎯 Direzione: **{action}**\n💰 Prezzo Attuale: `{close}`\n📈 RSI (9): `{rsi}`\n⏱ Timeframe: `{tf_selected}`\n📌 Ora Esatta Ingresso: `{now_time}`\n\n🚀 *Analisi di mercato reale aggiornata!*"
                 
                 buf = generate_chart_image(data, ast)
-                api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
+                try:
+                    api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
+                except:
+                    pass
+                
                 reply_kb = {"inline_keyboard": [[{"text": "🔄 Aggiorna", "callback_data": f"tf_{tf_selected}"}], [{"text": "≡ Torna al Menu Principale", "callback_data": "main_categories"}]]}
                 
                 if buf: send_photo_message(cid, buf, text, reply_kb)
