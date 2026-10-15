@@ -45,10 +45,13 @@ REAL_ASSETS = [
 ]
 
 OTC_ASSETS = [
+    # Stock OTC
     "American Express OTC", "Johnson & Johnson OTC", "McDonald's OTC", "Microsoft OTC", 
     "Tesla OTC", "Amazon OTC", "Citigroup Inc OTC", "FedEx OTC", "Netflix OTC", 
     "VISA OTC", "Apple OTC", "Boeing Company OTC", "Intel OTC", "Cisco OTC", 
     "Alibaba OTC", "Advanced Micro Devices OTC", "Coinbase Global OTC",
+    
+    # Valute OTC
     "EUR/RUB OTC", "EUR/TRY OTC", "NZD/JPY OTC", "TND/USD OTC", "USD/CHF OTC", 
     "USD/JPY OTC", "USD/MYR OTC", "AUD/CAD OTC", "AUD/CHF OTC", "AUD/NZD OTC", 
     "AUD/USD OTC", "CAD/JPY OTC", "EUR/CHF OTC", "EUR/JPY OTC", "EUR/NZD OTC", 
@@ -58,6 +61,8 @@ OTC_ASSETS = [
     "LBP/USD OTC", "SAR/CNY OTC", "USD/BRL OTC", "USD/PHP OTC", "USD/ARS OTC", 
     "MAD/USD OTC", "USD/CLP OTC", "GBP/AUD OTC", "QAR/CNY OTC", "USD/COP OTC", 
     "CAD/CHF OTC",
+    
+    # Cripto e Indici OTC
     "Bitcoin OTC", "Cardano OTC", "Polkadot OTC", "Toncoin OTC", "Bitcoin ETF OTC", 
     "TRON OTC", "Dogecoin OTC", "Litecoin OTC", "Chainlink OTC", "Solana OTC", 
     "BNB OTC", "Polygon OTC", "Ethereum OTC", "Avalanche OTC"
@@ -276,30 +281,45 @@ def fetch_market_data(asset_name):
 BANNER_IMAGE = "easy_tracks.jpg" 
 
 def send_category_menu(chat_id, msg_id=None):
-    kb = {"inline_keyboard": [[{"text": "📈 Mercato Reale", "callback_data": "cat_real_0"}], [{"text": "📊 Mercato OTC (Easy Tracks)", "callback_data": "cat_otc_0"}]]}
+    kb = {
+        "inline_keyboard": [
+            [{"text": "📈 Mercato Reale", "callback_data": "cat_real_0"}],
+            [{"text": "📊 Mercato OTC (Easy Tracks)", "callback_data": "cat_otc_0"}]
+        ]
+    }
     text = "SELEZIONA ‣ TIPO DI MERCATO"
-    if msg_id: api_call("deleteMessage", {"chat_id": chat_id, "message_id": msg_id})
+    if msg_id:
+        try: api_call("deleteMessage", {"chat_id": chat_id, "message_id": msg_id})
+        except: pass
     send_banner_photo(chat_id, BANNER_IMAGE, text, kb)
 
 def send_assets_menu(chat_id, category="real", page=0, msg_id=None):
     lst = REAL_ASSETS if category == "real" else OTC_ASSETS
+    total_pages = math.ceil(len(lst) / 9)
     sub = lst[page*9:(page+1)*9]
     kb = []
+    
     for i in range(0, len(sub), 3):
         row = []
         for j in range(3):
             if i + j < len(sub):
                 item = sub[i+j]
-                row.append({"text": item, "callback_data": ("ast_r_" if category=="real" else "ast_o_") + str(lst.index(item))})
+                idx = lst.index(item)
+                row.append({"text": item, "callback_data": ("ast_r_" if category=="real" else "ast_o_") + str(idx)})
         kb.append(row)
+        
     nav = []
-    if page > 0: nav.append({"text": "Indietro", "callback_data": f"pg_{category}_{page-1}"})
-    if (page + 1) * 9 < len(lst): nav.append({"text": "Avanti", "callback_data": f"pg_{category}_{page+1}"})
+    if page > 0: nav.append({"text": "◀️ Indietro", "callback_data": f"pg_{category}_{page-1}"})
+    nav.append({"text": f"{page+1}/{total_pages}", "callback_data": "noop"})
+    if (page + 1) * 9 < len(lst): nav.append({"text": "Avanti ▶️", "callback_data": f"pg_{category}_{page+1}"})
     if nav: kb.append(nav)
+    
     kb.append([{"text": "≡ Torna al Menu Principale", "callback_data": "main_categories"}])
     
-    text = "SELEZIONA ‣ COPPIA DI VALUTE"
-    if msg_id: api_call("deleteMessage", {"chat_id": chat_id, "message_id": msg_id})
+    text = f"SELEZIONA ‣ COPPIA DI VALUTE ({category.upper()})"
+    if msg_id:
+        try: api_call("deleteMessage", {"chat_id": chat_id, "message_id": msg_id})
+        except: pass
     send_banner_photo(chat_id, BANNER_IMAGE, text, {"inline_keyboard": kb})
 
 def send_timeframe_menu(chat_id, asset_name, msg_id=None):
@@ -309,7 +329,7 @@ def send_timeframe_menu(chat_id, asset_name, msg_id=None):
             [{"text": "M1", "callback_data": "tf_M1"}, {"text": "M2", "callback_data": "tf_M2"}, {"text": "M3", "callback_data": "tf_M3"}, {"text": "M5", "callback_data": "tf_M5"}],
             [{"text": "M10", "callback_data": "tf_M10"}, {"text": "M15", "callback_data": "tf_M15"}, {"text": "M30", "callback_data": "tf_M30"}],
             [{"text": "H1", "callback_data": "tf_H1"}, {"text": "H4", "callback_data": "tf_H4"}, {"text": "D1", "callback_data": "tf_D1"}],
-            [{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]
+            [{"text": "≡ Torna al Menu Principale", "callback_data": "main_categories"}]
         ]
     }
     text = f"💹 Asset: *{asset_name}*\n\nSeleziona l'intervallo / timeframe:"
@@ -330,18 +350,27 @@ def webhook():
             cid, mid, val = cq["message"]["chat"]["id"], cq["message"]["message_id"], cq["data"]
             answer_callback(cq["id"])
             
-            if val == "main_categories":
+            if val == "noop":
+                return "ok", 200
+            elif val == "main_categories":
                 send_category_menu(cid, mid)
-            elif val.startswith("cat_") or val.startswith("pg_"):
+            elif val.startswith("cat_"):
                 parts = val.split("_")
-                send_assets_menu(cid, parts[1], int(parts[2]), mid)
+                cat = parts[1]
+                page = int(parts[2])
+                send_assets_menu(cid, cat, page, mid)
+            elif val.startswith("pg_"):
+                parts = val.split("_")
+                cat = parts[1]
+                page = int(parts[2])
+                send_assets_menu(cid, cat, page, mid)
             elif val.startswith("ast_r_") or val.startswith("ast_o_"):
                 is_otc = val.startswith("ast_o_")
-                ast = (OTC_ASSETS if is_otc else REAL_ASSETS)[int(val.split("_")[2])]
+                idx = int(val.split("_")[2])
+                ast = (OTC_ASSETS if is_otc else REAL_ASSETS)[idx]
                 
                 now = datetime.now(pytz.timezone("Europe/Rome"))
                 if not is_market_open(ast, now):
-                    answer_callback(cq["id"])
                     api_call("answerCallbackQuery", {"callback_query_id": cq["id"], "text": "⚠️ Mercato Chiuso! Scegli un asset OTC o una Cripto.", "show_alert": True})
                     return "ok", 200
 
@@ -377,7 +406,7 @@ def webhook():
                 
                 buf = generate_chart_image(data, ast)
                 api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
-                reply_kb = {"inline_keyboard": [[{"text": "🔄 Aggiorna", "callback_data": f"tf_{tf_selected}"}], [{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
+                reply_kb = {"inline_keyboard": [[{"text": "🔄 Aggiorna", "callback_data": f"tf_{tf_selected}"}], [{"text": "≡ Torna al Menu Principale", "callback_data": "main_categories"}]]}
                 
                 if buf: send_photo_message(cid, buf, text, reply_kb)
                 else: send_message(cid, text, reply_kb)
@@ -427,7 +456,6 @@ def check_market_conditions():
         except Exception as e:
             print(f"Errore controllo live {asset}: {e}")
 
-# Configurazione dello schedulatore (avviato una sola volta in modo sicuro)
 if not scheduler.running if 'scheduler' in globals() else True:
     scheduler = BackgroundScheduler(timezone="Europe/Rome")
     scheduler.add_job(lambda: check_market_conditions(), 'interval', minutes=30)
@@ -435,6 +463,12 @@ if not scheduler.running if 'scheduler' in globals() else True:
     scheduler.add_job(lambda: check_market_conditions(), 'cron', hour=14, minute=30)
     scheduler.add_job(lambda: check_market_conditions(), 'cron', hour=19, minute=0)
     scheduler.start()
+
+RENDER_URL = os.environ.get('RENDER_EXTERNAL_URL')
+if RENDER_URL:
+    try:
+        requests.get(f"{BASE_URL}/setWebhook?url={RENDER_URL}/webhook", timeout=5)
+    except: pass
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
