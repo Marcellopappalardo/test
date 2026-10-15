@@ -138,12 +138,9 @@ def register_user(chat_id):
         print("Errore registrazione utente:", e)
 
 def is_market_open(asset_name, now):
-    """Riconosce se il mercato reale è aperto o chiuso (Weekend / Orari)"""
     if "OTC" in asset_name: return True
     crypto_list = ["Bitcoin", "Ethereum", "Cardano", "Solana", "Dogecoin", "Litecoin", "Polkadot", "Toncoin", "TRON", "Chainlink", "Avalanche", "Polygon", "BNB", "Dash"]
     if asset_name in crypto_list: return True
-    
-    # Controllo weekend per Forex e Azioni reali (Sabato e Domenica)
     if now.weekday() >= 5: return False
     return True
 
@@ -342,13 +339,16 @@ def webhook():
                 is_otc = val.startswith("ast_o_")
                 ast = (OTC_ASSETS if is_otc else REAL_ASSETS)[int(val.split("_")[2])]
                 
-                # Controllo se il mercato reale è chiuso
                 now = datetime.now(pytz.timezone("Europe/Rome"))
                 if not is_market_open(ast, now):
                     answer_callback(cq["id"])
                     api_call("answerCallbackQuery", {"callback_query_id": cq["id"], "text": "⚠️ Mercato Chiuso! Scegli un asset OTC o una Cripto.", "show_alert": True})
                     return "ok", 200
 
+                user_selection[cid] = {"asset": ast}
+                send_timeframe_menu(cid, ast, mid)
+            elif val.startswith("gen_alert_"):
+                ast = val.replace("gen_alert_", "")
                 user_selection[cid] = {"asset": ast}
                 send_timeframe_menu(cid, ast, mid)
             elif val.startswith("tf_"):
@@ -394,10 +394,8 @@ def webhook():
         print("Errore webhook:", e)
     return "ok", 200
 
-# --- CONTROLLO CONDIZIONI IN TEMPO REALE E RICONOSCIMENTO MERCATO CHIUSO ---
 def check_market_conditions():
     now = datetime.now(pytz.timezone("Europe/Rome"))
-    
     users = []
     if os.path.exists("users.txt"):
         with open("users.txt", "r") as f:
@@ -405,47 +403,38 @@ def check_market_conditions():
     if not users: return
 
     monitoring_targets = ["EUR/USD", "GBP/USD OTC", "Bitcoin OTC", "EUR/JPY OTC"]
-    
     for asset in monitoring_targets:
         try:
-            # Salta automaticamente se il mercato reale è chiuso
             if not is_market_open(asset, now): continue
-            
             data = fetch_market_data(asset)
             if data is not None and not data.empty:
                 rsi, _, _, hist, close, ema, _, _, _, _ = calculate_indicators(data)
-                
                 if rsi > 65 or rsi < 35 or abs(hist) > 0.0005:
-                    now_time = now.strftime("%H:%M:%S")
-                    action, _, _ = get_market_signal(data)
-                    
-                    if "OTC" in asset:
-                        text = f"💎 **SEGNALE LIVE AUTOMATICO OTC** 💎\n\n📊 Asset: `{asset}`\n🎯 Direzione: **{action}**\n💰 Prezzo: `{close}`\n📈 RSI (9): `{rsi}`\n📌 Ora Ingresso: `{now_time}`\n\n🚀 *Condizione di mercato ottimale rilevata in tempo reale!*"
-                    else:
-                        text = f"🤖 **SEGNALE LIVE AUTOMATICO REALE** 🤖\n\n📊 Asset: `{asset}`\n🎯 Direzione: **{action}**\n💰 Prezzo: `{close}`\n📈 RSI (9): `{rsi}`\n📌 Ora Ingresso: `{now_time}`\n\n🚀 *Condizione di mercato ottimale rilevata in tempo reale!*"
-                    
-                    buf = generate_chart_image(data, asset)
+                    text = (
+                        f"🚨 **ALERT OPERATIVO – {asset}**\n\n"
+                        f"• `{asset}` si trova in una zona di breakout imminente. "
+                        f"Movimento atteso nelle prossime candele.\n\n"
+                        f"Genera il segnale ora –\n"
+                        f"📊 Analizza il grafico e preparati ad agire."
+                    )
+                    alert_kb = {
+                        "inline_keyboard": [
+                            [{"text": "📊 GENERA SEGNALE", "callback_data": f"gen_alert_{asset}"}]
+                        ]
+                    }
                     for chat_id in users:
-                        if buf:
-                            buf.seek(0)
-                            send_photo_message(chat_id, buf, text)
-                        else:
-                            send_message(chat_id, text)
+                        send_message(chat_id, text, alert_kb)
         except Exception as e:
-            print(f"Errore controllo live {asset}: %s", e)
+            print(f"Errore controllo live {asset}: {e}")
 
-scheduler = BackgroundScheduler(timezone="Europe/Rome")
-scheduler.add_job(lambda: check_market_conditions(), 'interval', minutes=30)
-scheduler.add_job(lambda: check_market_conditions(), 'cron', hour=9, minute=0)
-scheduler.add_job(lambda: check_market_conditions(), 'cron', hour=14, minute=30)
-scheduler.add_job(lambda: check_market_conditions(), 'cron', hour=19, minute=0)
-scheduler.start()
-
-RENDER_URL = os.environ.get('RENDER_EXTERNAL_URL')
-if RENDER_URL:
-    try:
-        requests.get(f"{BASE_URL}/setWebhook?url={RENDER_URL}/webhook", timeout=5)
-    except: pass
+# Configurazione dello schedulatore (avviato una sola volta in modo sicuro)
+if not scheduler.running if 'scheduler' in globals() else True:
+    scheduler = BackgroundScheduler(timezone="Europe/Rome")
+    scheduler.add_job(lambda: check_market_conditions(), 'interval', minutes=30)
+    scheduler.add_job(lambda: check_market_conditions(), 'cron', hour=9, minute=0)
+    scheduler.add_job(lambda: check_market_conditions(), 'cron', hour=14, minute=30)
+    scheduler.add_job(lambda: check_market_conditions(), 'cron', hour=19, minute=0)
+    scheduler.start()
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
