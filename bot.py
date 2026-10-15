@@ -3,8 +3,6 @@ import json
 import math
 import time
 import io
-import re
-import traceback
 import threading
 from datetime import datetime, timedelta, timezone
 import pytz
@@ -556,11 +554,9 @@ def webhook():
                 
                 signal_text = f"💎 **SEGNALE ({strat_label} | {tf_selected})** 💎\n\n📊 Asset: `{ast}`\n🎯 Direzione: **{action}**\n💰 Prezzo Calcolato: `{close}`\n📈 Indicatore: `{ind_val}`\n⏱ Timeframe: `{tf_selected}`\n⏰ **Ingresso:** `{next_entry}`"
                 
-                buf = generate_chart_image(data, ast, strategy, variant)
                 try: api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
                 except: pass
                 
-                # --- MODIFICA TASTI SOTTO IL SEGNALE ---
                 is_otc_asset = "OTC" in ast
                 back_callback = "pg_otc_0" if is_otc_asset else "cat_real_0"
                 back_text = "◀️ Torna agli Asset OTC" if is_otc_asset else "◀️ Torna agli Asset Reali"
@@ -573,8 +569,15 @@ def webhook():
                     ]
                 }
                 
-                if buf: send_photo_message(cid, buf, signal_text, reply_kb)
-                else: send_message(cid, signal_text, reply_kb)
+                # INVIO CONDIZIONALE: Solo sul mercato Reale viene inviato il grafico, su OTC solo testo
+                if is_otc_asset:
+                    send_message(cid, signal_text, reply_kb)
+                else:
+                    buf = generate_chart_image(data, ast, strategy, variant)
+                    if buf:
+                        send_photo_message(cid, buf, signal_text, reply_kb)
+                    else:
+                        send_message(cid, signal_text, reply_kb)
 
         elif "message" in up:
             msg = up["message"]
