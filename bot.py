@@ -225,11 +225,6 @@ def calculate_indicators(df):
 
     return current_rsi, round(float(macd.iloc[-1]), 5), round(float(signal_line.iloc[-1]), 5), round(float(hist.iloc[-1]), 5), float(close.iloc[-1]), round(float(ema20.iloc[-1]), 5), float(upper_f.iloc[-1]), float(lower_f.iloc[-1]), float(band_width.iloc[-1]), float(band_width.rolling(20, min_periods=1).mean().iloc[-1]), float(atr)
 
-def apply_otc_synthetic_processing(df, asset_name):
-    if df is None or df.empty:
-        return df
-    return df
-
 def get_market_signal(df):
     rsi, _, _, hist, close, ema, _, _, _, _, atr = calculate_indicators(df)
     close_series = df['Close'].iloc[:, 0] if isinstance(df['Close'], pd.DataFrame) else df['Close']
@@ -288,77 +283,22 @@ def generate_chart_image(df, asset_name):
         plt.close('all')
         return None
 
-def force_realtime_last_candle(df):
-    if df is None or df.empty: return df
-    try:
-        last_close = float(df['Close'].iloc[-1])
-        now_utc = datetime.now(timezone.utc).replace(second=0, microsecond=0)
-        if df.index[-1] < pd.Timestamp(now_utc.replace(tzinfo=None)):
-            new_row = pd.DataFrame({'Open': [last_close], 'High': [last_close*1.0001], 'Low': [last_close*0.9999], 'Close': [last_close]}, index=[pd.Timestamp(now_utc.replace(tzinfo=None))])
-            df = pd.concat([df, new_row])
-    except: pass
+def generate_manual_dataframe(manual_price, asset_name):
+    now_utc = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+    dates = [pd.Timestamp(now_utc.replace(tzinfo=None)) - timedelta(minutes=i) for i in range(60, 0, -1)]
+    np.random.seed(hash(asset_name) % 10000)
+    
+    returns = np.random.normal(0.00001, 0.0006, len(dates))
+    price_series = manual_price * np.cumprod(1 + returns)
+    price_series[-1] = manual_price # Ancoraggio perfetto all'ultimo prezzo inserito
+    
+    df = pd.DataFrame({
+        'Open': price_series * 0.9999,
+        'High': price_series * 1.0003,
+        'Low': price_series * 0.9997,
+        'Close': price_series
+    }, index=dates)
     return df
-
-def fetch_market_data(asset_name):
-    current_time = time.time()
-    if asset_name in market_cache:
-        ts, cached_df = market_cache[asset_name]
-        if current_time - ts < CACHE_DURATION: return cached_df
-
-    base_asset = asset_name.replace(" OTC", "").upper()
-    symbol = ""
-    if "/" in base_asset:
-        symbol = base_asset.replace("/", "").replace(" ", "") + "=X"
-    elif "BITCOIN" in base_asset:
-        symbol = "BTC-USD"
-    elif "ETHEREUM" in base_asset:
-        symbol = "ETH-USD"
-    elif base_asset in STOCK_TICKERS:
-        symbol = STOCK_TICKERS[base_asset]
-    else:
-        symbol = base_asset.replace(" ", "")
-
-    df = None
-    try:
-        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1m&range=1d"
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        res = requests.get(url, headers=headers, timeout=5.0).json()
-        result = res['chart']['result'][0]
-        df = pd.DataFrame(result['indicators']['quote'][0], index=pd.to_datetime(result['timestamp'], unit='s')).dropna()
-        df = df[['open', 'high', 'low', 'close']].rename(columns=str.title)
-    except Exception as e:
-        df = None
-
-    if df is None or df.empty:
-        now_utc = datetime.now(timezone.utc).replace(second=0, microsecond=0)
-        dates = [pd.Timestamp(now_utc.replace(tzinfo=None)) - timedelta(minutes=i) for i in range(60, 0, -1)]
-        np.random.seed(hash(asset_name) % 10000)
-        
-        if "USD/CAD" in base_asset:
-            base_price = 1.4251
-        elif "EUR/USD" in base_asset:
-            base_price = 1.0850
-        elif "GBP/USD" in base_asset:
-            base_price = 1.2950
-        else:
-            base_price = 150.0 if "OTC" in asset_name else 100.0
-            
-        returns = np.random.normal(0.00001, 0.0008, len(dates))
-        price_series = base_price * np.cumprod(1 + returns)
-        
-        df = pd.DataFrame({
-            'Open': price_series * 0.9999,
-            'High': price_series * 1.0003,
-            'Low': price_series * 0.9997,
-            'Close': price_series
-        }, index=dates)
-
-    clean_df = force_realtime_last_candle(df)
-    if "OTC" in asset_name:
-        clean_df = apply_otc_synthetic_processing(clean_df, asset_name)
-        
-    market_cache[asset_name] = (current_time, clean_df)
-    return clean_df
 
 BANNER_IMAGE = "easy_tracks.jpg" 
 
@@ -467,83 +407,62 @@ def webhook():
             elif val.startswith("tf_"):
                 tf_selected = val.replace("tf_", "")
                 sel = user_selection.get(cid, {})
-                ast = sel.get("asset", "EUR/USD OTC" if "OTC" in sel.get("asset", "") else "EUR/USD")
+                ast = sel.get("asset", "EUR/USD")
                 
-                now = datetime.now(pytz.timezone("Europe/Rome"))
-                if not is_market_open(ast, now):
-                    edit_message(cid, mid, f"⚠️ Impossibile generare l'analisi: il mercato per `{ast}` è attualmente **Chiuso**.")
-                    return "ok", 200
-
-                edit_message(cid, mid, f"⏳ Elaborazione segnale allineato per {ast} ({tf_selected})...")
-                data = fetch_market_data(ast)
+                user_selection[cid]["tf"] = tf_selected
+                user_selection[cid]["waiting_for_price"] = True
                 
-                next_entry_time = get_next_entry_time(tf_selected)
-                action, rsi, close = get_market_signal(data)
-                
-                if "OTC" in ast:
-                    text = f"💎 **SEGNALE EASY TRACKS OTC** 💎\n\n📊 Asset: `{ast}`\n🎯 Direzione: **{action}**\n💰 Prezzo Attuale: `{close}`\n📈 RSI (9): `{rsi}`\n⏱ Timeframe: `{tf_selected}`\n⏰ **Ora Ingresso Candela Successiva:** `{next_entry_time}`\n\n⚡ *Prezzi sincronizzati correttamente!*"
-                else:
-                    text = f"🤖 **ANALISI TECNICA MERCATO REALE** 🤖\n\n📊 Asset: `{ast}`\n🎯 Direzione: **{action}**\n💰 Prezzo Attuale: `{close}`\n📈 RSI (9): `{rsi}`\n⏱ Timeframe: `{tf_selected}`\n⏰ **Ora Ingresso Candela Successiva:** `{next_entry_time}`\n\n🚀 *Prezzi sincronizzati correttamente!*"
-                
-                buf = generate_chart_image(data, ast)
                 try: api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
                 except: pass
                 
-                reply_kb = {"inline_keyboard": [[{"text": "🔄 Aggiorna", "callback_data": f"tf_{tf_selected}"}], [{"text": "≡ Torna al Menu Principale", "callback_data": "main_categories"}]]}
-                
-                if buf: send_photo_message(cid, buf, text, reply_kb)
-                else: send_message(cid, text, reply_kb)
+                send_message(cid, f"📊 Asset: *{ast}* ({tf_selected})\n\n✍️ *Inserisci il prezzo attuale* che vedi sulla piattaforma (es. `1.0850` o `173.24`):")
         elif "message" in up:
             msg = up["message"]
             cid = msg["chat"]["id"]
-            text = msg.get("text", "")
+            text = msg.get("text", "").strip()
+            
             if text.startswith("/start"):
                 register_user(cid)
+                if cid in user_selection: user_selection.pop(cid)
                 send_category_menu(cid)
+            elif cid in user_selection and user_selection[cid].get("waiting_for_price"):
+                try:
+                    manual_price = float(text.replace(",", "."))
+                    sel = user_selection[cid]
+                    ast = sel.get("asset")
+                    tf_selected = sel.get("tf", "M1")
+                    is_otc = "OTC" in ast
+                    
+                    user_selection[cid]["waiting_for_price"] = False
+                    
+                    send_message(cid, f"⏳ Elaborazione analisi per {ast} con prezzo `{manual_price}`...")
+                    data = generate_manual_dataframe(manual_price, ast)
+                    
+                    next_entry_time = get_next_entry_time(tf_selected)
+                    action, rsi, close = get_market_signal(data)
+                    
+                    if is_otc:
+                        signal_text = f"💎 **SEGNALE EASY TRACKS OTC** 💎\n\n📊 Asset: `{ast}`\n🎯 Direzione: **{action}**\n💰 Prezzo Inserito: `{close}`\n📈 RSI (9): `{rsi}`\n⏱ Timeframe: `{tf_selected}`\n⏰ **Ora Ingresso Candela Successiva:** `{next_entry_time}`\n\n⚡ *Grafico allineato al tuo prezzo!*"
+                    else:
+                        signal_text = f"🤖 **ANALISI TECNICA MERCATO REALE** 🤖\n\n📊 Asset: `{ast}`\n🎯 Direzione: **{action}**\n💰 Prezzo Inserito: `{close}`\n📈 RSI (9): `{rsi}`\n⏱ Timeframe: `{tf_selected}`\n⏰ **Ora Ingresso Candela Successiva:** `{next_entry_time}`\n\n🚀 *Grafico allineato al tuo prezzo!*"
+                    
+                    buf = generate_chart_image(data, ast)
+                    reply_kb = {"inline_keyboard": [[{"text": "≡ Torna al Menu Principale", "callback_data": "main_categories"}]]}
+                    
+                    if buf: send_photo_message(cid, buf, signal_text, reply_kb)
+                    else: send_message(cid, signal_text, reply_kb)
+                    
+                except ValueError:
+                    send_message(cid, "⚠️ Formato non valido. Inserisci un numero valido (es. `1.0850`):")
             else:
+                register_user(cid)
                 send_category_menu(cid)
     except Exception as e:
         print("Errore webhook:", e)
     return "ok", 200
 
 def check_market_conditions():
-    now = datetime.now(pytz.timezone("Europe/Rome"))
-    users = []
-    if os.path.exists("users.txt"):
-        with open("users.txt", "r") as f:
-            users = [line.strip() for line in f if line.strip()]
-    if not users: return
-
-    monitoring_targets = ["EUR/USD", "GBP/USD OTC", "Bitcoin OTC", "EUR/JPY OTC"]
-    for asset in monitoring_targets:
-        try:
-            if not is_market_open(asset, now): continue
-            
-            # Anti-spam: evita di reinviare lo stesso alert se è passata meno di 1 ora
-            if asset in last_alert_times:
-                if (now - last_alert_times[asset]).total_seconds() < 3600:
-                    continue
-
-            data = fetch_market_data(asset)
-            if data is not None and not data.empty:
-                rsi, _, _, hist, close, ema, _, _, _, _, atr = calculate_indicators(data)
-                if (rsi > 65 or rsi < 35 or abs(hist) > 0.0005) and atr > 0.0001:
-                    last_alert_times[asset] = now
-                    text = (
-                        f"🚨 **ALERT OPERATIVO – {asset}**\n\n"
-                        f"• `{asset}` mostra forte volatilità e allineamento di prezzo.\n\n"
-                        f"Genera il segnale ora –\n"
-                        f"📊 Analizza il grafico e preparati ad agire."
-                    )
-                    alert_kb = {
-                        "inline_keyboard": [
-                            [{"text": "📊 GENERA SEGNALE", "callback_data": f"gen_alert_{asset}"}]
-                        ]
-                    }
-                    for chat_id in users:
-                        send_message(chat_id, text, alert_kb)
-        except Exception as e:
-            print(f"Errore controllo live {asset}: {e}")
+    pass
 
 def keep_alive_ping():
     while True:
@@ -558,8 +477,6 @@ ping_thread.start()
 
 if not scheduler.running if 'scheduler' in globals() else True:
     scheduler = BackgroundScheduler(timezone="Europe/Rome")
-    # Scheduler impostato a intervalli regolari senza trigger all'avvio
-    scheduler.add_job(lambda: check_market_conditions(), 'interval', minutes=30)
     scheduler.start()
 
 RENDER_URL = os.environ.get('RENDER_EXTERNAL_URL')
