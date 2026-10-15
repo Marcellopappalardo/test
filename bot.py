@@ -25,6 +25,7 @@ app = Flask(__name__)
 # --- CONFIGURAZIONE CHIAVI INSERITE ---
 TG_TOKEN = "8585533636:AAE_J2ospaddCWva9gPHzE26dCp2_WaziLk"
 BASE_URL = "https://api.telegram.org/bot" + TG_TOKEN
+BOT_URL = "https://easy-track-bot.onrender.com"
 
 GEMINI_API_KEY = "AQ.Ab8RN6IDlTHsxy-8n-Uie0x-MQsFt3F22lNlqhIwA-Mg13XDLA"
 genai.configure(api_key=GEMINI_API_KEY)
@@ -160,7 +161,6 @@ def is_market_open(asset_name, now):
     return True
 
 def get_next_entry_time(tf_str):
-    """Calcola l'orario esatto della candela successiva in base al timeframe selezionato"""
     now = datetime.now(pytz.timezone("Europe/Rome"))
     if tf_str.startswith('S'):
         sec = int(tf_str[1:])
@@ -481,6 +481,7 @@ def webhook():
         print("Errore webhook:", e)
     return "ok", 200
 
+# --- CONTROLLO CONDIZIONI IN TEMPO REALE ---
 def check_market_conditions():
     now = datetime.now(pytz.timezone("Europe/Rome"))
     users = []
@@ -514,9 +515,23 @@ def check_market_conditions():
         except Exception as e:
             print(f"Errore controllo live {asset}: {e}")
 
+# --- KEEP-ALIVE AUTOMATICO (Visita il link ogni 5 minuti per non spegnere Render) ---
+def keep_alive_ping():
+    while True:
+        try:
+            requests.get(BOT_URL, timeout=10)
+            print("Ping Keep-Alive eseguito con successo.")
+        except Exception as e:
+            print("Errore durante il ping keep-alive:", e)
+        time.sleep(300) # 300 secondi = 5 minuti
+
+# Avvio del thread Keep-Alive in background
+ping_thread = threading.Thread(target=keep_alive_ping, daemon=True)
+ping_thread.start()
+
 if not scheduler.running if 'scheduler' in globals() else True:
     scheduler = BackgroundScheduler(timezone="Europe/Rome")
-    scheduler.add_job(lambda: check_market_conditions(), 'interval', minutes=30)
+    scheduler.add_job(lambda: check_market_conditions(), 'interval', minutes=15)
     scheduler.add_job(lambda: check_market_conditions(), 'cron', hour=9, minute=0)
     scheduler.add_job(lambda: check_market_conditions(), 'cron', hour=14, minute=30)
     scheduler.add_job(lambda: check_market_conditions(), 'cron', hour=19, minute=0)
