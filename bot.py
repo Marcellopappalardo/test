@@ -33,7 +33,6 @@ gemini_model = genai.GenerativeModel('gemini-1.5-flash')
 market_cache = {}
 CACHE_DURATION = 60
 
-# --- MERCATO REALE ORDINATO: 1. Valute, 2. Crypto, 3. Azioni ---
 REAL_ASSETS = [
     # 1. Valute Reali
     "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD", "AUD/CAD", "USD/CHF",
@@ -50,7 +49,6 @@ REAL_ASSETS = [
     "APPLE", "MICROSOFT", "TESLA", "AMAZON", "NETFLIX", "GOOGLE", "META", "MCDONALD'S", "INTEL", "ALIBABA"
 ]
 
-# --- MERCATO OTC ORDINATO: 1. Valute OTC, 2. Crypto OTC, 3. Azioni OTC ---
 OTC_ASSETS = [
     # 1. Valute OTC
     "EUR/USD OTC", "GBP/USD OTC", "USD/JPY OTC", "EUR/JPY OTC", "GBP/JPY OTC", 
@@ -160,6 +158,28 @@ def is_market_open(asset_name, now):
     if asset_name in crypto_list: return True
     if now.weekday() >= 5: return False
     return True
+
+def get_next_entry_time(tf_str):
+    """Calcola l'orario esatto della candela successiva in base al timeframe selezionato"""
+    now = datetime.now(pytz.timezone("Europe/Rome"))
+    if tf_str.startswith('S'):
+        sec = int(tf_str[1:])
+        current_sec = now.second + now.microsecond / 1e6
+        remaining = sec - (current_sec % sec)
+        next_time = now + timedelta(seconds=remaining)
+    elif tf_str.startswith('M'):
+        mins = int(tf_str[1:])
+        current_min = now.minute
+        remaining_mins = mins - (current_min % mins)
+        next_time = now.replace(second=0, microsecond=0) + timedelta(minutes=remaining_mins)
+        if next_time <= now:
+            next_time += timedelta(minutes=mins)
+    elif tf_str.startswith('H'):
+        hours = int(tf_str[1:])
+        next_time = (now + timedelta(hours=hours)).replace(minute=0, second=0, microsecond=0)
+    else:
+        next_time = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    return next_time.strftime("%H:%M:%S")
 
 def calculate_fractal_chaos_bands(df, period=2):
     highs = df['High'].iloc[:, 0] if isinstance(df['High'], pd.DataFrame) else df['High']
@@ -432,13 +452,13 @@ def webhook():
                 edit_message(cid, mid, f"⏳ Elaborazione segnale per {ast} ({tf_selected})...")
                 data = fetch_market_data(ast)
                 
-                now_time = now.strftime("%H:%M:%S")
+                next_entry_time = get_next_entry_time(tf_selected)
                 action, rsi, close = get_market_signal(data)
                 
                 if "OTC" in ast:
-                    text = f"💎 **SEGNALE EASY TRACKS OTC** 💎\n\n📊 Asset: `{ast}`\n🎯 Direzione: **{action}**\n💰 Prezzo Attuale: `{close}`\n📈 RSI (9): `{rsi}`\n⏱ Timeframe: `{tf_selected}`\n📌 Ora Esatta Ingresso: `{now_time}`\n\n⚡ *Analisi sintetica OTC sincronizzata!*"
+                    text = f"💎 **SEGNALE EASY TRACKS OTC** 💎\n\n📊 Asset: `{ast}`\n🎯 Direzione: **{action}**\n💰 Prezzo Attuale: `{close}`\n📈 RSI (9): `{rsi}`\n⏱ Timeframe: `{tf_selected}`\n⏰ **Ora Ingresso Candela Successiva:** `{next_entry_time}`\n\n⚡ *Preparati all'ingresso a inizio candela!*"
                 else:
-                    text = f"🤖 **ANALISI TECNICA MERCATO REALE** 🤖\n\n📊 Asset: `{ast}`\n🎯 Direzione: **{action}**\n💰 Prezzo Attuale: `{close}`\n📈 RSI (9): `{rsi}`\n⏱ Timeframe: `{tf_selected}`\n📌 Ora Esatta Ingresso: `{now_time}`\n\n🚀 *Analisi di mercato reale aggiornata!*"
+                    text = f"🤖 **ANALISI TECNICA MERCATO REALE** 🤖\n\n📊 Asset: `{ast}`\n🎯 Direzione: **{action}**\n💰 Prezzo Attuale: `{close}`\n📈 RSI (9): `{rsi}`\n⏱ Timeframe: `{tf_selected}`\n⏰ **Ora Ingresso Candela Successiva:** `{next_entry_time}`\n\n🚀 *Preparati all'ingresso a inizio candela!*"
                 
                 buf = generate_chart_image(data, ast)
                 try: api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
