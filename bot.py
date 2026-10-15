@@ -214,7 +214,6 @@ def calculate_indicators(df):
     upper_f, lower_f = calculate_fractal_chaos_bands(df, period=2)
     band_width = upper_f - lower_f
 
-    # --- FILTRO TENDENZA FORTE (ATR / Volatilità) ---
     high_low = high - low
     high_close = np.abs(high - close.shift())
     low_close = np.abs(low - close.shift())
@@ -247,15 +246,20 @@ def apply_otc_synthetic_processing(df):
 def get_market_signal(df):
     rsi, _, _, hist, close, ema, _, _, _, _, atr = calculate_indicators(df)
     
-    # Valutazione della forza del trend tramite filtro di volatilità (ATR)
+    # --- SISTEMA A PUNTEGGIO SIMMETRICO (-3 a +3) ---
     score = 0
     if close > ema: score += 1
+    else: score -= 1
+
     if rsi > 50: score += 1
+    else: score -= 1
+
     if hist > 0: score += 1
+    else: score -= 1
     
     trend_strength = "Forte 🚀" if atr > 0.0002 else "Laterale/Debole ⚠️"
     
-    if score >= 2:
+    if score > 0 or (score == 0 and rsi >= 50):
         return f"ACQUISTA 🟢 (ALTO) [{trend_strength}]", rsi, close
     else:
         return f"VENDI 🔴 (BASSO) [{trend_strength}]", rsi, close
@@ -469,16 +473,16 @@ def webhook():
                     edit_message(cid, mid, f"⚠️ Impossibile generare l'analisi: il mercato per `{ast}` è attualmente **Chiuso**.")
                     return "ok", 200
 
-                edit_message(cid, mid, f"⏳ Elaborazione segnale e filtro trend per {ast} ({tf_selected})...")
+                edit_message(cid, mid, f"⏳ Elaborazione segnale e analisi bilanciata per {ast} ({tf_selected})...")
                 data = fetch_market_data(ast)
                 
                 next_entry_time = get_next_entry_time(tf_selected)
                 action, rsi, close = get_market_signal(data)
                 
                 if "OTC" in ast:
-                    text = f"💎 **SEGNALE EASY TRACKS OTC** 💎\n\n📊 Asset: `{ast}`\n🎯 Direzione: **{action}**\n💰 Prezzo Attuale: `{close}`\n📈 RSI (9): `{rsi}`\n⏱ Timeframe: `{tf_selected}`\n⏰ **Ora Ingresso Candela Successiva:** `{next_entry_time}`\n\n⚡ *Filtro trend attivo: pronto per l'operazione!*"
+                    text = f"💎 **SEGNALE EASY TRACKS OTC** 💎\n\n📊 Asset: `{ast}`\n🎯 Direzione: **{action}**\n💰 Prezzo Attuale: `{close}`\n📈 RSI (9): `{rsi}`\n⏱ Timeframe: `{tf_selected}`\n⏰ **Ora Ingresso Candela Successiva:** `{next_entry_time}`\n\n⚡ *Analisi simmetrica bilanciata completata!*"
                 else:
-                    text = f"🤖 **ANALISI TECNICA MERCATO REALE** 🤖\n\n📊 Asset: `{ast}`\n🎯 Direzione: **{action}**\n💰 Prezzo Attuale: `{close}`\n📈 RSI (9): `{rsi}`\n⏱ Timeframe: `{tf_selected}`\n⏰ **Ora Ingresso Candela Successiva:** `{next_entry_time}`\n\n🚀 *Filtro trend attivo: pronto per l'operazione!*"
+                    text = f"🤖 **ANALISI TECNICA MERCATO REALE** 🤖\n\n📊 Asset: `{ast}`\n🎯 Direzione: **{action}**\n💰 Prezzo Attuale: `{close}`\n📈 RSI (9): `{rsi}`\n⏱ Timeframe: `{tf_selected}`\n⏰ **Ora Ingresso Candela Successiva:** `{next_entry_time}`\n\n🚀 *Analisi simmetrica bilanciata completata!*"
                 
                 buf = generate_chart_image(data, ast)
                 try: api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
