@@ -245,11 +245,11 @@ def apply_otc_synthetic_processing(df):
 
 def get_market_signal(df):
     rsi, _, _, hist, close, ema, _, _, _, _, atr = calculate_indicators(df)
+    close_series = df['Close'].iloc[:, 0] if isinstance(df['Close'], pd.DataFrame) else df['Close']
     
-    last_open = float(df['Open'].iloc[-1])
-    last_close = float(df['Close'].iloc[-1])
+    # --- FILTRO MOMENTO A BREVE TERMINE (Evita contrasto con candele esplosive) ---
+    recent_trend = close_series.iloc[-1] - close_series.iloc[-4] if len(close_series) >= 4 else 0
     
-    # --- FILTRO RIGIDO CON CONFERMA MOMENTO CANDELA (-4 a +4) ---
     score = 0
     if close > ema: score += 1
     else: score -= 1
@@ -260,13 +260,13 @@ def get_market_signal(df):
     if hist > 0: score += 1
     else: score -= 1
     
-    # Conferma della candela corrente/precedente
-    if last_close > last_open: score += 1
-    else: score -= 1
+    # Ponderazione del momentum recente per sincronia con l'azione di prezzo
+    if recent_trend > 0: score += 1.5
+    else: score -= 1.5
     
-    trend_strength = "Forte con Conferma 🚀" if atr > 0.0002 else "Laterale/Prudente ⚠️"
+    trend_strength = "Forte con Momentum 🚀" if atr > 0.0002 else "Laterale/Prudente ⚠️"
     
-    if score >= 1:
+    if score > 0:
         return f"ACQUISTA 🟢 (ALTO) [{trend_strength}]", rsi, close
     else:
         return f"VENDI 🔴 (BASSO) [{trend_strength}]", rsi, close
@@ -480,16 +480,16 @@ def webhook():
                     edit_message(cid, mid, f"⚠️ Impossibile generare l'analisi: il mercato per `{ast}` è attualmente **Chiuso**.")
                     return "ok", 200
 
-                edit_message(cid, mid, f"⏳ Elaborazione segnale con filtro di conferma per {ast} ({tf_selected})...")
+                edit_message(cid, mid, f"⏳ Elaborazione segnale con filtro momentum per {ast} ({tf_selected})...")
                 data = fetch_market_data(ast)
                 
                 next_entry_time = get_next_entry_time(tf_selected)
                 action, rsi, close = get_market_signal(data)
                 
                 if "OTC" in ast:
-                    text = f"💎 **SEGNALE EASY TRACKS OTC** 💎\n\n📊 Asset: `{ast}`\n🎯 Direzione: **{action}**\n💰 Prezzo Attuale: `{close}`\n📈 RSI (9): `{rsi}`\n⏱ Timeframe: `{tf_selected}`\n⏰ **Ora Ingresso Candela Successiva:** `{next_entry_time}`\n\n⚡ *Filtro di conferma rigido applicato!*"
+                    text = f"💎 **SEGNALE EASY TRACKS OTC** 💎\n\n📊 Asset: `{ast}`\n🎯 Direzione: **{action}**\n💰 Prezzo Attuale: `{close}`\n📈 RSI (9): `{rsi}`\n⏱ Timeframe: `{tf_selected}`\n⏰ **Ora Ingresso Candela Successiva:** `{next_entry_time}`\n\n⚡ *Filtro momentum applicato con successo!*"
                 else:
-                    text = f"🤖 **ANALISI TECNICA MERCATO REALE** 🤖\n\n📊 Asset: `{ast}`\n🎯 Direzione: **{action}**\n💰 Prezzo Attuale: `{close}`\n📈 RSI (9): `{rsi}`\n⏱ Timeframe: `{tf_selected}`\n⏰ **Ora Ingresso Candela Successiva:** `{next_entry_time}`\n\n🚀 *Filtro di conferma rigido applicato!*"
+                    text = f"🤖 **ANALISI TECNICA MERCATO REALE** 🤖\n\n📊 Asset: `{ast}`\n🎯 Direzione: **{action}**\n💰 Prezzo Attuale: `{close}`\n📈 RSI (9): `{rsi}`\n⏱ Timeframe: `{tf_selected}`\n⏰ **Ora Ingresso Candela Successiva:** `{next_entry_time}`\n\n🚀 *Filtro momentum applicato con successo!*"
                 
                 buf = generate_chart_image(data, ast)
                 try: api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
@@ -530,7 +530,7 @@ def check_market_conditions():
                 if (rsi > 65 or rsi < 35 or abs(hist) > 0.0005) and atr > 0.0001:
                     text = (
                         f"🚨 **ALERT OPERATIVO – {asset}**\n\n"
-                        f"• `{asset}` mostra forte volatilità con conferma di momento.\n\n"
+                        f"• `{asset}` mostra forte volatilità e momentum attivo.\n\n"
                         f"Genera il segnale ora –\n"
                         f"📊 Analizza il grafico e preparati ad agire."
                     )
