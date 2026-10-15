@@ -119,11 +119,6 @@ def register_user(chat_id):
     except Exception as e:
         print("Errore registrazione utente:", e)
 
-def is_market_open(asset_name, now):
-    if "OTC" in asset_name: return True
-    if now.weekday() >= 5 and "Bitcoin" not in asset_name: return False
-    return True
-
 def get_next_entry_time(tf_str="M1"):
     now = datetime.now(pytz.timezone("Europe/Rome"))
     if tf_str.startswith('S'):
@@ -302,7 +297,7 @@ def send_category_menu(chat_id, msg_id=None):
     kb = {
         "inline_keyboard": [
             [{"text": "📈 Mercato Reale", "callback_data": "cat_real_0"}],
-            [{"text": "📊 Mercato OTC", "callback_data": "cat_otc_0"}]
+            [{"text": "📊 Mercato OTC (Manuale)", "callback_data": "cat_otc_0"}]
         ]
     }
     text = "SELEZIONA ‣ TIPO DI MERCATO"
