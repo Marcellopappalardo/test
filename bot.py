@@ -434,11 +434,12 @@ def send_assets_menu(chat_id, category="real", page=0, msg_id=None):
     send_banner_photo(chat_id, BANNER_IMAGE, text, {"inline_keyboard": kb})
 
 def send_timeframe_menu(chat_id, asset_name, msg_id=None):
+    category = "otc" if "OTC" in asset_name else "real"
     kb = {
         "inline_keyboard": [
             [{"text": "S30", "callback_data": "tf_S30"}, {"text": "M1", "callback_data": "tf_M1"}, {"text": "M2", "callback_data": "tf_M2"}],
             [{"text": "M5", "callback_data": "tf_M5"}, {"text": "M15", "callback_data": "tf_M15"}, {"text": "H1", "callback_data": "tf_H1"}],
-            [{"text": "≡ Torna al Menu Principale", "callback_data": "main_categories"}]
+            [{"text": "◀️ Indietro (Asset)", "callback_data": f"pg_{category}_0" if category=="otc" else "cat_real_0"}, {"text": "≡ Menu Principale", "callback_data": "main_categories"}]
         ]
     }
     text = f"💹 Asset: *{asset_name}*\n\n🇮🇹 Seleziona la scadenza/timeframe desiderato:"
@@ -463,7 +464,12 @@ def webhook():
             
             if val == "noop":
                 return "ok", 200
+            elif val == "cancel_input":
+                if cid in user_selection:
+                    user_selection[cid]["waiting_for_price"] = False
+                send_otc_strategy_menu(cid, mid)
             elif val == "main_categories":
+                if cid in user_selection: user_selection.pop(cid, None)
                 send_category_menu(cid, mid)
             elif val == "cat_real_0":
                 send_assets_menu(cid, "real", 0, mid)
@@ -483,7 +489,6 @@ def webhook():
                 user_selection[cid]["strategy"] = "st2"
                 user_selection[cid]["variant"] = "A"
                 
-                # Messaggio con regole e parametri per la Strategia 2
                 rules_text = (
                     "⚙️ *STRATEGIA 2 - PARAMETRI E REGOLE* ⚙️\n\n"
                     "📌 *Indicatori da impostare sulla piattaforma:*\n"
@@ -503,7 +508,6 @@ def webhook():
                 user_selection[cid]["strategy"] = "st3"
                 user_selection[cid]["variant"] = "A"
                 
-                # Messaggio con regole e parametri per la Strategia 3
                 rules_text = (
                     "⚙️ *STRATEGIA 3 - PARAMETRI E REGOLE* ⚙️\n\n"
                     "📌 *Indicatori da impostare sulla piattaforma:*\n"
@@ -541,7 +545,14 @@ def webhook():
                     user_selection[cid]["waiting_for_price"] = True
                     try: api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
                     except: pass
-                    send_message(cid, f"📊 Asset OTC: *{ast}* ({tf_selected})\n\n✍️ *Inserisci il prezzo attuale* che vedi sulla piattaforma (es. `1.7324`):")
+                    
+                    # Tasto indietro aggiunto qui sotto alla richiesta del prezzo!
+                    price_kb = {
+                        "inline_keyboard": [
+                            [{"text": "◀️ Annulla / Cambia Asset", "callback_data": f"ast_o_{OTC_ASSETS.index(ast) if ast in OTC_ASSETS else 0}"}]
+                        ]
+                    }
+                    send_message(cid, f"📊 Asset OTC: *{ast}* ({tf_selected})\n\n✍️ *Inserisci il prezzo attuale* che vedi sulla piattaforma (es. `1.7324`):", price_kb)
                 else:
                     edit_message(cid, mid, f"⏳ Analisi in corso per {ast} ({tf_selected})...")
                     data = fetch_market_data(ast)
@@ -565,7 +576,7 @@ def webhook():
                 text = msg.get("text", "").strip()
                 if text.startswith("/start"):
                     register_user(cid)
-                    if cid in user_selection: user_selection.pop(cid)
+                    if cid in user_selection: user_selection.pop(cid, None)
                     send_category_menu(cid)
                 elif cid in user_selection and user_selection[cid].get("waiting_for_price"):
                     try:
@@ -599,7 +610,12 @@ def webhook():
                         if buf: send_photo_message(cid, buf, signal_text, reply_kb)
                         else: send_message(cid, signal_text, reply_kb)
                     except ValueError:
-                        send_message(cid, "⚠️ Formato non valido. Inserisci un numero valido (es. `1.7324`):")
+                        price_kb = {
+                            "inline_keyboard": [
+                                [{"text": "◀️ Annulla / Cambia Asset", "callback_data": "otc_strategy_menu"}]
+                            ]
+                        }
+                        send_message(cid, "⚠️ Formato non valido. Inserisci un numero valido (es. `1.7324`) o clicca Annulla:", price_kb)
                 else:
                     register_user(cid)
                     send_category_menu(cid)
