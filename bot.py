@@ -232,24 +232,36 @@ def get_market_signal(df):
     recent_trend = close_series.iloc[-1] - close_series.iloc[-4] if len(close_series) >= 4 else 0
     
     score = 0
-    if close > ema: score += 1
-    else: score -= 1
+    
+    # Filtro Trend EMA
+    if close > ema: score += 1.5
+    else: score -= 1.5
 
-    if rsi > 50: score += 1
-    else: score -= 1
+    # Filtro RSI Intelligente (evita falsi acquisti in ipercomprato estremo)
+    if 50 < rsi < 68: score += 1.5
+    elif rsi >= 68: score -= 1
+    elif 32 < rsi <= 50: score -= 1.5
+    elif rsi <= 32: score += 1
 
+    # Filtro Momentum MACD
     if hist > 0: score += 1
     else: score -= 1
     
-    if recent_trend > 0: score += 1.5
-    else: score -= 1.5
+    # Filtro Trend Recente
+    if recent_trend > 0: score += 1
+    else: score -= 1
     
-    trend_strength = "Forte con Momentum 🚀" if atr > 0.0002 else "Laterale/Prudente ⚠️"
+    trend_strength = "Forte con Momentum 🚀" if atr > 0.00015 else "Laterale/Prudente ⚠️"
     
-    if score > 0:
+    if score >= 2.0:
         return f"ACQUISTA 🟢 (ALTO) [{trend_strength}]", rsi, close
-    else:
+    elif score <= -2.0:
         return f"VENDI 🔴 (BASSO) [{trend_strength}]", rsi, close
+    else:
+        if close > ema:
+            return f"ACQUISTA 🟢 (ALTO) [Mercato Misto ⚠️]", rsi, close
+        else:
+            return f"VENDI 🔴 (BASSO) [Mercato Misto ⚠️]", rsi, close
 
 def generate_chart_image(df, asset_name):
     try:
@@ -435,16 +447,16 @@ def webhook():
                     
                     user_selection[cid]["waiting_for_price"] = False
                     
-                    send_message(cid, f"⏳ Elaborazione analisi per {ast} con prezzo `{manual_price}`...")
+                    send_message(cid, f"⏳ Elaborazione analisi filtrata per {ast} con prezzo `{manual_price}`...")
                     data = generate_manual_dataframe(manual_price, ast)
                     
                     next_entry_time = get_next_entry_time(tf_selected)
                     action, rsi, close = get_market_signal(data)
                     
                     if is_otc:
-                        signal_text = f"💎 **SEGNALE EASY TRACKS OTC** 💎\n\n📊 Asset: `{ast}`\n🎯 Direzione: **{action}**\n💰 Prezzo Inserito: `{close}`\n📈 RSI (9): `{rsi}`\n⏱ Timeframe: `{tf_selected}`\n⏰ **Ora Ingresso Candela Successiva:** `{next_entry_time}`\n\n⚡ *Grafico allineato al tuo prezzo!*"
+                        signal_text = f"💎 **SEGNALE EASY TRACKS OTC (Filtrato)** 💎\n\n📊 Asset: `{ast}`\n🎯 Direzione: **{action}**\n💰 Prezzo Inserito: `{close}`\n📈 RSI (9): `{rsi}`\n⏱ Timeframe: `{tf_selected}`\n⏰ **Ora Ingresso Candela Successiva:** `{next_entry_time}`\n\n⚡ *Grafico allineato al tuo prezzo!*"
                     else:
-                        signal_text = f"🤖 **ANALISI TECNICA MERCATO REALE** 🤖\n\n📊 Asset: `{ast}`\n🎯 Direzione: **{action}**\n💰 Prezzo Inserito: `{close}`\n📈 RSI (9): `{rsi}`\n⏱ Timeframe: `{tf_selected}`\n⏰ **Ora Ingresso Candela Successiva:** `{next_entry_time}`\n\n🚀 *Grafico allineato al tuo prezzo!*"
+                        signal_text = f"🤖 **ANALISI TECNICA MERCATO REALE (Filtrata)** 🤖\n\n📊 Asset: `{ast}`\n🎯 Direzione: **{action}**\n💰 Prezzo Inserito: `{close}`\n📈 RSI (9): `{rsi}`\n⏱ Timeframe: `{tf_selected}`\n⏰ **Ora Ingresso Candela Successiva:** `{next_entry_time}`\n\n🚀 *Grafico allineato al tuo prezzo!*"
                     
                     buf = generate_chart_image(data, ast)
                     reply_kb = {"inline_keyboard": [[{"text": "≡ Torna al Menu Principale", "callback_data": "main_categories"}]]}
