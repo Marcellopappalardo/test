@@ -22,7 +22,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 
 app = Flask(__name__)
 
-# --- CONFIGURAZIONE CHIAVI INSERITE ---
+# --- CONFIGURAZIONE CHIAVI ---
 TG_TOKEN = "8585533636:AAE_J2ospaddCWva9gPHzE26dCp2_WaziLk"
 BASE_URL = "https://api.telegram.org/bot" + TG_TOKEN
 BOT_URL = "https://easy-track-bot.onrender.com"
@@ -41,16 +41,32 @@ REAL_ASSETS = [
 ]
 
 OTC_ASSETS = [
-    "EUR/USD OTC", "GBP/USD OTC", "USD/JPY OTC", "EUR/JPY OTC", "GBP/JPY OTC", 
-    "AUD/USD OTC", "USD/CAD OTC", "USD/CHF OTC", "Bitcoin OTC", "Ethereum OTC", "Apple OTC"
+    # Valute OTC
+    "EUR/RUB OTC", "EUR/TRY OTC", "NZD/JPY OTC",
+    "TND/USD OTC", "USD/CHF OTC", "USD/JPY OTC",
+    "USD/MYR OTC", "AUD/CAD OTC", "AUD/CHF OTC",
+    "AUD/NZD OTC", "AUD/USD OTC", "CAD/JPY OTC",
+    "EUR/CHF OTC", "EUR/JPY OTC", "EUR/NZD OTC",
+    "AED/CNY OTC", "AUD/JPY OTC", "EUR/GBP OTC",
+    "NZD/USD OTC", "OMR/CNY OTC", "USD/CAD OTC",
+    "USD/BDT OTC", "CHF/NOK OTC", "EUR/USD OTC",
+    "JOD/CNY OTC", "BHD/CNY OTC", "GBP/USD OTC",
+    "USD/RUB OTC", "EUR/HUF OTC", "GBP/JPY OTC",
+    "LBP/USD OTC", "SAR/CNY OTC", "USD/BRL OTC",
+    "USD/PHP OTC", "USD/ARS OTC", "MAD/USD OTC",
+    "USD/CLP OTC", "GBP/AUD OTC", "QAR/CNY OTC",
+    "USD/COP OTC", "CAD/CHF OTC",
+    
+    # Azioni OTC
+    "American Express OTC", "Johnson & Johnson OTC", "McDonald's OTC",
+    "Microsoft OTC", "Tesla OTC", "Amazon OTC",
+    "Citigroup Inc OTC", "FedEx OTC", "Netflix OTC",
+    "VISA OTC", "Apple OTC", "Boeing Company OTC",
+    "Intel OTC", "Cisco OTC", "Alibaba OTC",
+    "ADVANCED MICRO OTC", "Coinbase Global OTC"
 ]
 
-STOCK_TICKERS = {
-    "APPLE": "AAPL", "MICROSOFT": "MSFT", "TESLA": "TSLA", "AMAZON": "AMZN"
-}
-
 user_selection = {}
-last_alert_times = {}
 
 def api_call(method, data):
     try:
@@ -71,7 +87,7 @@ def send_message(chat_id, text, markup=None):
 def send_photo_message(chat_id, photo_buf, caption, markup=None):
     try:
         url = BASE_URL + "/sendPhoto"
-        files = {'photo': ('chart.png', photo_buf, 'image/png')}
+        files = {'photo': ('grafico.png', photo_buf, 'image/png')}
         data = {'chat_id': chat_id, 'caption': caption, 'parse_mode': 'Markdown'}
         if markup:
             data['reply_markup'] = json.dumps(markup)
@@ -191,11 +207,11 @@ def get_market_signal(df):
     if recent_trend > 0: score += 1.5
     else: score -= 1.5
     
-    trend_strength = "Forte con Momentum 🚀" if atr > 0.0002 else "Laterale/Prudente ⚠️"
+    forza_trend = "Forte con Momentum 🚀" if atr > 0.0002 else "Laterale/Prudente ⚠️"
     if score > 0:
-        return f"ACQUISTA 🟢 (ALTO) [{trend_strength}]", rsi, close
+        return f"ACQUISTA 🟢 (ALTO) [{forza_trend}]", rsi, close
     else:
-        return f"VENDI 🔴 (BASSO) [{trend_strength}]", rsi, close
+        return f"VENDI 🔴 (BASSO) [{forza_trend}]", rsi, close
 
 def generate_chart_image(df, asset_name):
     try:
@@ -300,7 +316,7 @@ def send_category_menu(chat_id, msg_id=None):
             [{"text": "📊 Mercato OTC (Manuale)", "callback_data": "cat_otc_0"}]
         ]
     }
-    text = "SELEZIONA ‣ TIPO DI MERCATO"
+    text = "🇮🇹 SELEZIONA ‣ TIPO DI MERCATO"
     if msg_id:
         try: api_call("deleteMessage", {"chat_id": chat_id, "message_id": msg_id})
         except: pass
@@ -308,8 +324,8 @@ def send_category_menu(chat_id, msg_id=None):
 
 def send_assets_menu(chat_id, category="real", page=0, msg_id=None):
     lst = REAL_ASSETS if category == "real" else OTC_ASSETS
-    total_pages = math.ceil(len(lst) / 9)
-    sub = lst[page*9:(page+1)*9]
+    total_pages = math.ceil(len(lst) / 12)
+    sub = lst[page*12:(page+1)*12]
     kb = []
     for i in range(0, len(sub), 3):
         row = []
@@ -322,11 +338,12 @@ def send_assets_menu(chat_id, category="real", page=0, msg_id=None):
     nav = []
     if page > 0: nav.append({"text": "◀️ Indietro", "callback_data": f"pg_{category}_{page-1}"})
     nav.append({"text": f"{page+1}/{total_pages}", "callback_data": "noop"})
-    if (page + 1) * 9 < len(lst): nav.append({"text": "Avanti ▶️", "callback_data": f"pg_{category}_{page+1}"})
+    if (page + 1) * 12 < len(lst): nav.append({"text": "Avanti ▶️", "callback_data": f"pg_{category}_{page+1}"})
     if nav: kb.append(nav)
     kb.append([{"text": "≡ Torna al Menu Principale", "callback_data": "main_categories"}])
     
-    text = f"SELEZIONA ‣ COPPIA DI VALUTE ({category.upper()})"
+    cat_nome = "REALE" if category == "real" else "OTC"
+    text = f"🇮🇹 SELEZIONA ‣ COPPIA DI VALUTE ({cat_nome})"
     if msg_id:
         try: api_call("deleteMessage", {"chat_id": chat_id, "message_id": msg_id})
         except: pass
@@ -340,7 +357,7 @@ def send_timeframe_menu(chat_id, asset_name, msg_id=None):
             [{"text": "≡ Torna al Menu Principale", "callback_data": "main_categories"}]
         ]
     }
-    text = f"💹 Asset: *{asset_name}*\n\nSeleziona il timeframe/scadenza desiderato:"
+    text = f"💹 Asset: *{asset_name}*\n\n🇮🇹 Seleziona la scadenza/timeframe desiderato:"
     if msg_id:
         try: api_call("deleteMessage", {"chat_id": chat_id, "message_id": msg_id})
         except: pass
@@ -380,7 +397,7 @@ def webhook():
                 tf_selected = val.replace("tf_", "")
                 sel = user_selection.get(cid, {})
                 ast = sel.get("asset", "EUR/USD")
-                is_otc = "OTC" in ast
+                is_otc = "OTC" in ast or "OTC" in ast.upper()
                 
                 user_selection[cid]["tf"] = tf_selected
                 
