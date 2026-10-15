@@ -2,8 +2,9 @@ flask
 requests
 pandas
 numpy
+apscheduler
 matplotlib
 mplfinance
-pillow
 google-generativeai
-gunicorn
+pytz
+gunicorn 
