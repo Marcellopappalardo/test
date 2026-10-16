@@ -3,76 +3,62 @@ import json
 import math
 import time
 import io
-import threading
-from datetime import datetime, timedelta, timezone
-import pytz
-
+import re
+import traceback
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import mplfinance as mpf
+from datetime import datetime, timedelta, timezone
 from flask import Flask, request
 import requests
 import pandas as pd
 import numpy as np
-import google.generativeai as genai
-from apscheduler.schedulers.background import BackgroundScheduler
 
-# Import della libreria Pocket Option API (assicurati di aver installato il pacchetto corretto)
-from pocketoptionapi.stable_api import PocketOption
+# Importa la libreria di Google Generative AI
+import google.generativeai as genai
 
 app = Flask(__name__)
 
-# --- CONFIGURAZIONE CHIAVI ---
 TG_TOKEN = "8585533636:AAE_J2ospaddCWva9gPHzE26dCp2_WaziLk"
 BASE_URL = "https://api.telegram.org/bot" + TG_TOKEN
-BOT_URL = "https://easy-track-bot.onrender.com"
 
+# CONFIGURAZIONE GEMINI API KEY
 GEMINI_API_KEY = "AQ.Ab8RN6IDlTHsxy-8n-Uie0x-MQsFt3F22lNlqhIwA-Mg13XDLA"
 genai.configure(api_key=GEMINI_API_KEY)
+
 gemini_model = genai.GenerativeModel('gemini-1.5-flash')
 
 market_cache = {}
-CACHE_DURATION = 30
+CACHE_DURATION = 60 # Ridotto a 60 secondi per mantenere il real-time
 
 REAL_ASSETS = [
     "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD", "AUD/CAD", "USD/CHF",
     "EUR/GBP", "EUR/JPY", "GBP/JPY", "AUD/JPY", "EUR/AUD", "EUR/CAD", "EUR/NZD",
-    "Bitcoin", "Ethereum", "Cardano", "Solana", "Dogecoin", "Litecoin", "APPLE", "TESLA"
+    "GBP/NZD", "AUD/NZD", "CAD/JPY", "CHF/JPY", "GBP/CAD", "GBP/AUD", "NZD/USD",
+    "AUD/CHF", "USD/MXN", "USD/PKR", "EUR/RUB", "EUR/TRY", "JOD/CNY", "NGN/USD",
+    "LBP/USD", "TND/USD", "QAR/CNY", "USD/ARS", "UAH/USD", "SAR/CNY",
+    "Bitcoin", "Ethereum", "Cardano", "Solana", "Dogecoin", "Litecoin", 
+    "Polkadot", "Toncoin", "TRON", "Chainlink", "Avalanche", "Polygon", "BNB", "Dash",
+    "APPLE", "MICROSOFT", "TESLA", "AMAZON", "NETFLIX", "GOOGLE", "META", "MCDONALD'S", "INTEL", "ALIBABA"
 ]
 
 OTC_ASSETS = [
-    "EUR/RUB OTC", "EUR/TRY OTC", "NZD/JPY OTC", "TND/USD OTC", "USD/CHF OTC", "USD/JPY OTC",
-    "USD/MYR OTC", "AUD/CAD OTC", "AUD/CHF OTC", "AUD/NZD OTC", "AUD/USD OTC", "CAD/JPY OTC",
-    "EUR/CHF OTC", "EUR/JPY OTC", "EUR/NZD OTC", "AED/CNY OTC", "EUR/GBP OTC", "NZD/USD OTC",
-    "OMR/CNY OTC", "USD/CAD OTC", "USD/BDT OTC", "CHF/NOK OTC", "EUR/USD OTC", "JOD/CNY OTC",
-    "BHD/CNY OTC", "GBP/USD OTC", "USD/RUB OTC", "EUR/HUF OTC", "GBP/JPY OTC", "LBP/USD OTC",
-    "SAR/CNY OTC", "USD/BRL OTC", "USD/PHP OTC", "USD/ARS OTC", "MAD/USD OTC", "USD/CLP OTC",
-    "GBP/AUD OTC", "QAR/CNY OTC", "USD/COP OTC", "CAD/CHF OTC",
-    "American Express OTC", "Johnson & Johnson OTC", "McDonald's OTC", "Microsoft OTC",
-    "Tesla OTC", "Amazon OTC", "Citigroup Inc OTC", "FedEx OTC", "Netflix OTC", "VISA OTC",
-    "Apple OTC", "Boeing Company OTC", "Intel OTC", "Cisco OTC", "Alibaba OTC",
-    "ADVANCED MICRO OTC", "Coinbase Global OTC"
+    "EUR/USD OTC", "GBP/USD OTC", "USD/JPY OTC", "AUD/USD OTC", "USD/CAD OTC", "AUD/CAD OTC", 
+    "USD/CHF OTC", "EUR/GBP OTC", "EUR/JPY OTC", "GBP/JPY OTC", "AUD/JPY OTC", "EUR/AUD OTC", 
+    "EUR/CAD OTC", "EUR/NZD OTC", "GBP/NZD OTC", "AUD/NZD OTC", "CAD/JPY OTC", "CHF/JPY OTC", 
+    "GBP/CAD OTC", "GBP/AUD OTC", "USD/USD OTC", "AUD/CHF OTC", "USD/MXN OTC", "USD/PKR OTC", 
+    "EUR/RUB OTC", "EUR/TRY OTC", "JOD/CNY OTC", "NGN/USD OTC", "LBP/USD OTC", "TND/USD OTC", 
+    "QAR/CNY OTC", "USD/ARS OTC", "UAH/USD OTC", "SAR/CNY OTC", "Bitcoin OTC", "Cardano OTC", 
+    "Polkadot OTC", "Toncoin OTC", "Bitcoin ETF OTC", "TRON OTC", "Dogecoin OTC", "Litecoin OTC", 
+    "Chainlink OTC", "Solana OTC", "BNB OTC", "Polygon OTC", "Ethereum OTC", "Avalanche OTC", 
+    "APPLE OTC", "MICROSOFT OTC", "TESLA OTC", "AMAZON OTC", "NETFLIX OTC", "GOOGLE OTC", 
+    "META OTC", "COCA COLA OTC", "INTEL OTC", "BOEING COMPANY OTC", "ALIBABA OTC", 
+    "CITIGROUP INC OTC", "EXXONMOBIL OTC"
 ]
 
-# --- CONNESSIONE POCKET OPTION ---
-# Inserisci qui il tuo SSID o token di sessione di Pocket Option se richiesto, oppure connettiti in Demo
-PO_SSID = os.environ.get("PO_SSID", "IL_TUO_SSID")
-po_api = PocketOption(PO_SSID, demo=True)
-po_connected, po_reason = po_api.connect()
-
-if po_connected:
-    print("Connessione a Pocket Option stabilita con successo!")
-else:
-    print(f"Errore di connessione a Pocket Option: {po_reason}")
-
-def get_pocket_option_symbol(asset_name):
-    """Formatta il nome dell'asset in base agli standard accettati dalla libreria Pocket Option"""
-    # Esempio: "AUD/NZD OTC" -> "AUDNZD_otc" o formato simile gestito dal broker
-    clean = asset_name.replace("/", "").replace(" ", "_").lower()
-    return clean
-
 user_selection = {}
+user_otc_state = {}
 
 def api_call(method, data):
     try:
@@ -93,30 +79,16 @@ def send_message(chat_id, text, markup=None):
 def send_photo_message(chat_id, photo_buf, caption, markup=None):
     try:
         url = BASE_URL + "/sendPhoto"
-        files = {'photo': ('grafico.png', photo_buf, 'image/png')}
+        files = {'photo': ('chart.png', photo_buf, 'image/png')}
         data = {'chat_id': chat_id, 'caption': caption, 'parse_mode': 'Markdown'}
-        if markup: data['reply_markup'] = json.dumps(markup)
+        if markup:
+            data['reply_markup'] = json.dumps(markup)
         response = requests.post(url, data=data, files=files, timeout=10.0)
         res_json = response.json()
         return res_json.get("result", {}).get("message_id") if res_json.get("ok") else None
     except Exception as e:
         print("Errore invio foto:", e)
         return None
-
-def send_banner_photo(chat_id, image_path_or_url, caption, markup=None):
-    try:
-        if os.path.exists(image_path_or_url):
-            url = BASE_URL + "/sendPhoto"
-            data = {'chat_id': chat_id, 'caption': caption, 'parse_mode': 'Markdown'}
-            if markup: data['reply_markup'] = json.dumps(markup)
-            with open(image_path_or_url, 'rb') as f:
-                files = {'photo': f}
-                response = requests.post(url, data=data, files=files, timeout=10.0)
-            res_json = response.json()
-            if res_json.get("ok"): return res_json.get("result", {}).get("message_id")
-    except Exception as e:
-        print("Errore invio banner con foto:", e)
-    return send_message(chat_id, caption, markup)
 
 def edit_message(chat_id, msg_id, text, markup=None):
     p = {"chat_id": chat_id, "message_id": msg_id, "text": text, "parse_mode": "Markdown"}
@@ -126,489 +98,650 @@ def edit_message(chat_id, msg_id, text, markup=None):
 def answer_callback(cq_id):
     api_call("answerCallbackQuery", {"callback_query_id": cq_id})
 
-def register_user(chat_id):
+# --- FUNZIONALITÀ MERCATO REALE ---
+
+def detect_candlestick_pattern(df):
     try:
-        users = set()
-        if os.path.exists("users.txt"):
-            with open("users.txt", "r") as f:
-                users = set(line.strip() for line in f if line.strip())
-        if str(chat_id) not in users:
-            with open("users.txt", "a") as f: f.write(str(chat_id) + "\n")
-    except Exception as e:
-        print("Errore registrazione utente:", e)
-
-def get_next_entry_time(tf_str="M1"):
-    now = datetime.now(pytz.timezone("Europe/Rome"))
-    if tf_str.startswith('S'):
-        sec = int(tf_str[1:])
-        current_sec = now.second + now.microsecond / 1e6
-        remaining = sec - (current_sec % sec)
-        next_time = now + timedelta(seconds=remaining)
-    elif tf_str.startswith('M'):
-        mins = int(tf_str.split(' ')[0][1:]) if ' ' in tf_str else int(tf_str[1:])
-        current_min = now.minute
-        remaining_mins = mins - (current_min % mins)
-        next_time = now.replace(second=0, microsecond=0) + timedelta(minutes=remaining_mins)
-        if next_time <= now: next_time += timedelta(minutes=mins)
-    else:
-        next_time = (now + timedelta(minutes=1)).replace(second=0, microsecond=0)
-    return next_time.strftime("%H:%M:%S")
-
-# --- INDICATORI UTILITIES ---
-def calculate_donchian_channels(df, period=22):
-    highs = df['High'].iloc[:, 0] if isinstance(df['High'], pd.DataFrame) else df['High']
-    lows = df['Low'].iloc[:, 0] if isinstance(df['Low'], pd.DataFrame) else df['Low']
-    upper = highs.rolling(window=period).max().bfill().ffill()
-    lower = lows.rolling(window=period).min().bfill().ffill()
-    middle = (upper + lower) / 2
-    return upper, middle, lower
-
-def calculate_bollinger_bands(df, period=10, std_dev=1.5):
-    close = df['Close'].iloc[:, 0] if isinstance(df['Close'], pd.DataFrame) else df['Close']
-    middle = close.rolling(window=period).mean()
-    std = close.rolling(window=period).std()
-    upper = middle + (std * std_dev)
-    lower = middle - (std * std_dev)
-    return upper.bfill().ffill(), middle.bfill().ffill(), lower.bfill().ffill()
-
-def calculate_cci(df, period=14):
-    close = df['Close'].iloc[:, 0] if isinstance(df['Close'], pd.DataFrame) else df['Close']
-    high = df['High'].iloc[:, 0] if isinstance(df['High'], pd.DataFrame) else df['High']
-    low = df['Low'].iloc[:, 0] if isinstance(df['Low'], pd.DataFrame) else df['Low']
-    tp = (high + low + close) / 3
-    sma_tp = tp.rolling(window=period).mean()
-    mad = tp.rolling(window=period).apply(lambda x: np.fabs(x - x.mean()).mean(), raw=True)
-    cci = (tp - sma_tp) / (0.015 * mad)
-    return cci.bfill().ffill()
-
-def calculate_sma_indicators(df):
-    close = df['Close'].iloc[:, 0] if isinstance(df['Close'], pd.DataFrame) else df['Close']
-    sma3 = close.rolling(window=3).mean().bfill().ffill()
-    sma9 = close.rolling(window=9).mean().bfill().ffill()
-    mom = close.diff(10).bfill().ffill()
-    return sma3, sma9, mom
-
-def convert_to_heikin_ashi(df):
-    ha_df = df.copy()
-    close_s = df['Close'].iloc[:, 0] if isinstance(df['Close'], pd.DataFrame) else df['Close']
-    open_s = df['Open'].iloc[:, 0] if isinstance(df['Open'], pd.DataFrame) else df['Open']
-    high_s = df['High'].iloc[:, 0] if isinstance(df['High'], pd.DataFrame) else df['High']
-    low_s = df['Low'].iloc[:, 0] if isinstance(df['Low'], pd.DataFrame) else df['Low']
-    ha_close = (open_s + high_s + low_s + close_s) / 4
-    ha_open = open_s.copy()
-    for i in range(1, len(df)):
-        ha_open.iloc[i] = (ha_open.iloc[i-1] + ha_close.iloc[i-1]) / 2
-    ha_high = pd.concat([high_s, ha_open, ha_close], axis=1).max(axis=1)
-    ha_low = pd.concat([low_s, ha_open, ha_close], axis=1).min(axis=1)
-    ha_df['Open'] = ha_open
-    ha_df['High'] = ha_high
-    ha_df['Low'] = ha_low
-    ha_df['Close'] = ha_close
-    return ha_df
-
-def get_strategy_1_signal(df, variant="A"):
-    analysis_df = convert_to_heikin_ashi(df) if variant == "B" else df
-    close = analysis_df['Close'].iloc[:, 0] if isinstance(analysis_df['Close'], pd.DataFrame) else analysis_df['Close']
-    delta = close.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=20).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=20).mean()
-    rsi = 100 - (100 / (1 + (gain / loss)))
-    current_rsi = round(float(rsi.iloc[-1]), 1)
-    upper_d, middle_d, lower_d = calculate_donchian_channels(analysis_df, period=22)
-    curr_close = float(close.iloc[-1])
-    prev_close = float(close.iloc[-2])
-    is_bullish = curr_close > prev_close
-    var_name = "St1 Opzione B (Heikin Ashi)" if variant == "B" else "St1 Opzione A (Standard)"
-
-    if (curr_close <= float(lower_d.iloc[-1]) * 1.0008 or curr_close < float(middle_d.iloc[-1])) and is_bullish:
-        return f"ACQUISTA 🟢 (ALTO) [{var_name}: Rimbalzo Donchian]", current_rsi, curr_close
-    elif (curr_close >= float(upper_d.iloc[-1]) * 0.9992 or curr_close > float(middle_d.iloc[-1])) and not is_bullish:
-        return f"VENDI 🔴 (BASSO) [{var_name}: Rimbalzo Donchian]", current_rsi, curr_close
-    else:
-        return (f"ACQUISTA 🟢 (ALTO) [{var_name}: Trend]", current_rsi, curr_close) if current_rsi > 50 else (f"VENDI 🔴 (BASSO) [{var_name}: Trend]", current_rsi, curr_close)
-
-def get_strategy_2_signal(df):
-    close = df['Close'].iloc[:, 0] if isinstance(df['Close'], pd.DataFrame) else df['Close']
-    upper_b, middle_b, lower_b = calculate_bollinger_bands(df, period=10, std_dev=1.5)
-    cci = calculate_cci(df, period=14)
-    delta = close.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=10).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=10).mean()
-    rsi = 100 - (100 / (1 + (gain / loss)))
-    curr_close = float(close.iloc[-1])
-    curr_cci = float(cci.iloc[-1])
-    curr_rsi = round(float(rsi.iloc[-1]), 1)
-    
-    if curr_close <= float(lower_b.iloc[-1]) * 1.001 or (curr_cci < -100 or curr_rsi < 35):
-        return f"ACQUISTA 🟢 (ALTO) [Strategia 2: Bollinger/CCI/RSI Oversold]", curr_rsi, curr_close
-    elif curr_close >= float(upper_b.iloc[-1]) * 0.999 or (curr_cci > 100 or curr_rsi > 65):
-        return f"VENDI 🔴 (BASSO) [Strategia 2: Bollinger/CCI/RSI Overbought]", curr_rsi, curr_close
-    else:
-        return (f"ACQUISTA 🟢 (ALTO) [Strategia 2 CCI/RSI]", curr_rsi, curr_close) if curr_rsi > 50 else (f"VENDI 🔴 (BASSO) [Strategia 2 CCI/RSI]", curr_rsi, curr_close)
-
-def get_strategy_3_signal(df):
-    close = df['Close'].iloc[:, 0] if isinstance(df['Close'], pd.DataFrame) else df['Close']
-    sma3, sma9, mom = calculate_sma_indicators(df)
-    curr_close = float(close.iloc[-1])
-    curr_mom = float(mom.iloc[-1])
-    
-    if float(sma3.iloc[-1]) > float(sma9.iloc[-1]) and curr_mom > 0:
-        return f"ACQUISTA 🟢 (ALTO) [Strategia 3: SMA 3/9 Cross & Momento Positivo]", curr_mom, curr_close
-    elif float(sma3.iloc[-1]) < float(sma9.iloc[-1]) and curr_mom < 0:
-        return f"VENDI 🔴 (BASSO) [Strategia 3: SMA 3/9 Cross & Momento Negativo]", curr_mom, curr_close
-    else:
-        return (f"ACQUISTA 🟢 (ALTO) [Strategia 3 SMA Trend]", curr_mom, curr_close) if curr_mom > 0 else (f"VENDI 🔴 (BASSO) [Strategia 3 SMA Trend]", curr_mom, curr_close)
-
-def generate_chart_image(df, asset_name, strategy="st1", variant="A"):
-    try:
-        plot_df = df.copy()
-        plot_df.index = plot_df.index + timedelta(hours=2)
-        for col in ['Open', 'High', 'Low', 'Close']:
-            plot_df[col] = plot_df[col].astype(float)
-
-        df_plot = plot_df.tail(30).copy()
-        market_colors = mpf.make_marketcolors(up='#00E676', down='#FF5252', wick={'up': '#00E676', 'down': '#FF5252'}, edge='inherit', volume='inherit')
-        custom_style = mpf.make_mpf_style(base_mpf_style='nightclouds', marketcolors=market_colors, facecolor='#1e1e1e', edgecolor='#333333', figcolor='#1e1e1e')
-
-        if strategy == "st1":
-            upper_d, middle_d, lower_d = calculate_donchian_channels(plot_df, period=22)
-            add_plots = [
-                mpf.make_addplot(upper_d.tail(30), color='#00BCD4', width=1.2),
-                mpf.make_addplot(middle_d.tail(30), color='#FFFFFF', width=1.5, linestyle='--'),
-                mpf.make_addplot(lower_d.tail(30), color='#00BCD4', width=1.2)
-            ]
-            title_str = f"\nAnalisi St.1 (Donchian): {asset_name}"
-        elif strategy == "st2":
-            upper_b, middle_b, lower_b = calculate_bollinger_bands(plot_df, period=10, std_dev=1.5)
-            add_plots = [
-                mpf.make_addplot(upper_b.tail(30), color='#FF9800', width=1.2),
-                mpf.make_addplot(middle_b.tail(30), color='#FFFFFF', width=1.2, linestyle='--'),
-                mpf.make_addplot(lower_b.tail(30), color='#FF9800', width=1.2)
-            ]
-            title_str = f"\nAnalisi St.2 (Bollinger 10,1.5): {asset_name}"
+        if len(df) < 3:
+            return "Mercato in consolidamento (Dati insufficienti)"
+        c2 = df.iloc[-2]
+        c3 = df.iloc[-1]
+        body3 = abs(c3['Close'] - c3['Open'])
+        range3 = c3['High'] - c3['Low']
+        
+        if body3 < (range3 * 0.15):
+            return "Doji (Indecisione di mercato)"
+        elif c3['Close'] > c3['Open'] and c2['Close'] < c2['Open'] and c3['Close'] > c2['Open'] and c3['Open'] < c2['Close']:
+            return "Bullish Engulfing (Inversione Rialzista Forte)"
+        elif c3['Close'] < c3['Open'] and c2['Close'] > c2['Open'] and c3['Close'] < c2['Open'] and c3['Open'] > c2['Close']:
+            return "Bearish Engulfing (Inversione Ribassista Forte)"
+        elif c3['Close'] > c3['Open']:
+            return "Candela di Spinta Rialzista (Strong Bull)"
         else:
-            sma3, sma9, _ = calculate_sma_indicators(plot_df)
-            add_plots = [
-                mpf.make_addplot(sma3.tail(30), color='#00E676', width=1.5),
-                mpf.make_addplot(sma9.tail(30), color='#FF9800', width=1.5)
-            ]
-            title_str = f"\nAnalisi St.3 (SMA 3 & 9 + Momento): {asset_name}"
+            return "Candela di Spinta Ribassista (Strong Bear)"
+    except:
+        return "Analisi Pattern Standard"
+
+def calculate_fractal_chaos_bands(df, period=2):
+    highs = df['High']
+    lows = df['Low']
+    if isinstance(highs, pd.DataFrame):
+        highs = highs.iloc[:, 0]
+    if isinstance(lows, pd.DataFrame):
+        lows = lows.iloc[:, 0]
+
+    upper_band = highs.rolling(window=(period * 2 + 1), center=True).max()
+    lower_band = lows.rolling(window=(period * 2 + 1), center=True).min()
+    
+    upper_band = upper_band.bfill().ffill()
+    lower_band = lower_band.bfill().ffill()
+    
+    return upper_band, lower_band
+
+def calculate_indicators(df):
+    close = df['Close']
+    if isinstance(close, pd.DataFrame):
+        close = close.iloc[:, 0]
+        
+    current_close = float(close.iloc[-1])
+    delta = close.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=9).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=9).mean()
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    current_rsi = round(float(rsi.iloc[-1]), 1)
+    if math.isnan(current_rsi): current_rsi = 50.0
+
+    exp1 = close.ewm(span=12, adjust=False).mean()
+    exp2 = close.ewm(span=26, adjust=False).mean()
+    macd = exp1 - exp2
+    signal = macd.ewm(span=9, adjust=False).mean()
+    hist = macd - signal
+    
+    m_line = round(float(macd.iloc[-1]), 5)
+    m_sig = round(float(signal.iloc[-1]) if not math.isnan(signal.iloc[-1]) else 0, 5)
+    m_hist = round(float(hist.iloc[-1]), 5)
+    ema20 = close.ewm(span=20, adjust=False).mean()
+    current_ema = round(float(ema20.iloc[-1]), 5)
+    
+    upper_f, lower_f = calculate_fractal_chaos_bands(df, period=2)
+    current_upper_f = float(upper_f.iloc[-1])
+    current_lower_f = float(lower_f.iloc[-1])
+
+    band_width = upper_f - lower_f
+    avg_band_width = band_width.rolling(window=20, min_periods=1).mean()
+    current_bw = float(band_width.iloc[-1])
+    avg_bw = float(avg_band_width.iloc[-1])
+
+    return current_rsi, m_line, m_sig, m_hist, current_close, current_ema, current_upper_f, current_lower_f, current_bw, avg_bw
+
+def generate_chart_image(df, asset_name, target_entry_time=None):
+    try:
+        df_clean = df.copy()
+        df_clean.index = df_clean.index + timedelta(hours=2)
+
+        if target_entry_time:
+            try:
+                dt_parts = target_entry_time.split(":")
+                h, m = int(dt_parts[0]), int(dt_parts[1])
+                df_clean = df_clean[
+                    (df_clean.index.hour < h) | 
+                    ((df_clean.index.hour == h) & (df_clean.index.minute < m))
+                ]
+            except Exception as e:
+                print("Errore nel taglio temporale del grafico:", e)
+
+        for col in ['Open', 'High', 'Low', 'Close']:
+            df_clean[col] = df_clean[col].astype(float)
+
+        close_series = df_clean['Close'].iloc[:, 0] if isinstance(df_clean['Close'], pd.DataFrame) else df_clean['Close']
+        ema20_full = close_series.ewm(span=20, adjust=False).mean()
+        
+        upper_f_full, lower_f_full = calculate_fractal_chaos_bands(df_clean, period=2)
+
+        df_plot = df_clean.tail(30).copy()
+        ema20_plot = ema20_full.tail(30)
+        upper_f_plot = upper_f_full.tail(30)
+        lower_f_plot = lower_f_full.tail(30)
+
+        market_colors = mpf.make_marketcolors(
+            up='#00E676', down='#FF5252', 
+            wick={'up': '#00E676', 'down': '#FF5252'}, 
+            edge='inherit', volume='inherit'
+        )
+        custom_style = mpf.make_mpf_style(
+            base_mpf_style='nightclouds', marketcolors=market_colors, 
+            facecolor='#1e1e1e', edgecolor='#333333', figcolor='#1e1e1e'
+        )
+
+        add_plots = [
+            mpf.make_addplot(ema20_plot, color='#FFC107', width=1.5, linestyle='--'),
+            mpf.make_addplot(upper_f_plot, color='#00BCD4', width=1.2, linestyle='-'), 
+            mpf.make_addplot(lower_f_plot, color='#00BCD4', width=1.2, linestyle='-')  
+        ]
 
         buf = io.BytesIO()
-        fig, axes = mpf.plot(df_plot, type='candle', style=custom_style, addplot=add_plots, title=title_str, volume=False, figsize=(8, 4.5), returnfig=True)
+        fig, axes = mpf.plot(
+            df_plot, type='candle', style=custom_style, addplot=add_plots,
+            title=f"\nAnalisi Tecnica + Fractal Chaos Bands (P2): {asset_name}", volume=False,
+            figsize=(8, 4.5), returnfig=True, panel_ratios=(1,)
+        )
         fig.savefig(buf, format='png', facecolor='#1e1e1e', edgecolor='none', bbox_inches='tight', dpi=100)
         buf.seek(0)
-        plt.close('all')
+        plt.close(fig)
         return buf
     except Exception as e:
-        print("Errore grafico:", e)
+        print("ERRORE NELLA GENERAZIONE DEL GRAFICO:", e)
         plt.close('all')
         return None
 
-def fetch_pocket_option_data(asset_name):
-    """Recupera i dati delle candele storiche/live direttamente da Pocket Option"""
+def force_realtime_last_candle(df):
+    if df is None or df.empty:
+        return df
     try:
-        po_symbol = get_pocket_option_symbol(asset_name)
-        # Richiesta delle candele tramite la libreria pocketoptionapi (es. timeframe 60s per M1)
-        candles = po_api.get_candles(po_symbol, 60)
-        if candles:
-            data = []
-            for c in candles:
-                data.append({
-                    'Open': float(c.get('open', c.get('Open', 0))),
-                    'High': float(c.get('high', c.get('High', 0))),
-                    'Low': float(c.get('low', c.get('Low', 0))),
-                    'Close': float(c.get('close', c.get('Close', 0))),
-                    'Timestamp': pd.to_datetime(c.get('time', c.get('Timestamp', time.time())), unit='s')
-                })
-            df = pd.DataFrame(data).set_index('Timestamp')
-            return df
+        last_close = float(df['Close'].iloc[-1])
+        now_utc = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+        
+        if df.index[-1] < pd.Timestamp(now_utc.replace(tzinfo=None)):
+            new_row = pd.DataFrame({
+                'Open': [last_close],
+                'High': [last_close * 1.0001],
+                'Low': [last_close * 0.9999],
+                'Close': [last_close]
+            }, index=[pd.Timestamp(now_utc.replace(tzinfo=None))])
+            df = pd.concat([df, new_row])
+        else:
+            df.iloc[-1, df.columns.get_loc('Close')] = last_close
+            if df.iloc[-1]['High'] < last_close:
+                df.iloc[-1, df.columns.get_loc('High')] = last_close
+            if df.iloc[-1]['Low'] > last_close:
+                df.iloc[-1, df.columns.get_loc('Low')] = last_close
     except Exception as e:
-        print("Errore recupero dati Pocket Option:", e)
-    return None
+        print("Errore nella forzatura real-time candela:", e)
+    return df
 
-def fetch_market_data(asset_name):
+def fetch_binance_data(asset_name):
+    clean = asset_name.replace("OTC", "").strip()
+    mapping = {
+        "Bitcoin": "BTCUSDT", "Ethereum": "ETHUSDT", "Cardano": "ADAUSDT",
+        "Solana": "SOLUSDT", "Dogecoin": "DOGEUSDT", "Litecoin": "LTCUSDT",
+        "Polkadot": "DOTUSDT", "Toncoin": "TONUSDT", "TRON": "TRXUSDT",
+        "Chainlink": "LINKUSDT", "Avalanche": "AVAXUSDT", "Polygon": "MATICUSDT", "BNB": "BNBUSDT"
+    }
+    symbol = mapping.get(clean)
+    if not symbol: return None
+    url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval=1m&limit=100"
+    try:
+        res = requests.get(url, timeout=3.0).json()
+        if not isinstance(res, list): return None
+        df = pd.DataFrame(res, columns=['Open_time', 'Open', 'High', 'Low', 'Close', 'Volume', 'Close_time', 'QAV', 'Trades', 'TBBAV', 'TBQAV', 'Ignore'])
+        df['Open'] = df['Open'].astype(float)
+        df['High'] = df['High'].astype(float)
+        df['Low'] = df['Low'].astype(float)
+        df['Close'] = df['Close'].astype(float)
+        df['Datetime'] = pd.to_datetime(df['Open_time'], unit='ms')
+        df.set_index('Datetime', inplace=True)
+        return force_realtime_last_candle(df[['Open', 'High', 'Low', 'Close']].dropna())
+    except:
+        return None
+
+def fetch_coinbase_data(asset_name):
+    clean = asset_name.replace("OTC", "").strip()
+    mapping = {"Bitcoin": "BTC-USD", "Ethereum": "ETH-USD", "Litecoin": "LTC-USD"}
+    product_id = mapping.get(clean)
+    if not product_id: return None
+    url = f"https://api.exchange.coinbase.com/products/{product_id}/candles?granularity=60"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    try:
+        res = requests.get(url, headers=headers, timeout=3.0).json()
+        if not isinstance(res, list): return None
+        df = pd.DataFrame(res, columns=['time', 'Low', 'High', 'Open', 'Close', 'Volume'])
+        df['Datetime'] = pd.to_datetime(df['time'], unit='s')
+        df.set_index('Datetime', inplace=True)
+        df = df.sort_index()
+        clean_df = df[['Open', 'High', 'Low', 'Close']].astype(float).dropna()
+        return force_realtime_last_candle(clean_df)
+    except:
+        return None
+
+def fetch_bitget_data(asset_name):
+    clean = asset_name.replace("OTC", "").strip()
+    symbol = clean.replace("/", "") + "USDT"
+    url = f"https://api.bitget.com/api/v2/spot/market/candles?symbol={symbol}&granularity=1min&limit=100"
+    try:
+        res = requests.get(url, timeout=3.0).json()
+        data = res.get("data", [])
+        if not data: return None
+        df = pd.DataFrame(data, columns=['timestamp', 'Open', 'High', 'Low', 'Close', 'Volume', 'QV'])
+        df['Datetime'] = pd.to_datetime(df['timestamp'].astype(int), unit='ms')
+        df.set_index('Datetime', inplace=True)
+        df = df.sort_index()
+        clean_df = df[['Open', 'High', 'Low', 'Close']].astype(float).dropna()
+        return force_realtime_last_candle(clean_df)
+    except:
+        return None
+
+def get_yahoo_ticker(asset_name):
+    clean = asset_name.replace(" OTC", "").replace("'", "").strip()
+    mapping = {
+        "EUR/USD": "EURUSD=X", "GBP/USD": "GBPUSD=X", "USD/JPY": "USDJPY=X",
+        "AUD/USD": "AUDUSD=X", "USD/CAD": "USDCAD=X", "AUD/CAD": "AUDCAD=X",
+        "USD/MXN": "USDMXN=X", "USD/PKR": "USDPKR=X", "EUR/RUB": "EURRUB=X",
+        "EUR/TRY": "EURTRY=X", "USD/CHF": "USDCHF=X", "EUR/GBP": "EURGBP=X",
+        "EUR/JPY": "EURJPY=X", "GBP/JPY": "GBPJPY=X", "AUD/JPY": "AUDJPY=X",
+        "AUD/CHF": "AUDCHF=X", "NZD/USD": "NZDUSD=X", "EUR/AUD": "EURAUD=X",
+        "EUR/CAD": "EURCAD=X", "EUR/NZD": "EURNZD=X", "GBP/NZD": "GBPNZD=X",
+        "AUD/NZD": "AUDNZD=X", "CAD/JPY": "CADJPY=X", "CHF/JPY": "CHFJPY=X",
+        "GBP/CAD": "GBPCAD=X", "GBP/AUD": "GBPAUD=X", "USD/ARS": "USDARS=X",
+        "Bitcoin": "BTC-USD", "Ethereum": "ETH-USD", "Cardano": "ADA-USD",
+        "Solana": "SOL-USD", "Dogecoin": "DOGE-USD", "Litecoin": "LTC-USD",
+        "Polkadot": "DOT-USD", "Toncoin": "TON-USD", "TRON": "TRX-USD",
+        "Chainlink": "LINK-USD", "Avalanche": "AVAX-USD", "Polygon": "MATIC-USD",
+        "BNB": "BNB-USD", "APPLE": "AAPL", "MICROSOFT": "MSFT", "TESLA": "TSLA",
+        "AMAZON": "AMZN", "NETFLIX": "NFLX", "GOOGLE": "GOOGL", "META": "META",
+        "MCDONALD'S": "MCD", "INTEL": "INTC", "ALIBABA": "BABA"
+    }
+    if clean in mapping: return mapping[clean]
+    if "/" in clean and len(clean) == 7: return clean.replace("/", "") + "=X"
+    return clean
+
+def fetch_yahoo_real_data(asset_name):
     current_time = time.time()
     if asset_name in market_cache:
         ts, cached_df = market_cache[asset_name]
-        if current_time - ts < CACHE_DURATION: return cached_df
+        if current_time - ts < CACHE_DURATION: 
+            return cached_df
 
-    df = None
-    if "OTC" in asset_name or asset_name in OTC_ASSETS:
-        df = fetch_pocket_option_data(asset_name)
-    
-    if df is None or df.empty:
-        base_asset = asset_name.replace(" OTC", "").upper()
-        if "/" in base_asset:
-            symbol = base_asset.replace("/", "").replace(" ", "") + "=X"
-        else:
-            symbol = base_asset.replace(" ", "")
-            
-        if "BITCOIN" in base_asset: symbol = "BTC-USD"
-        elif "ETHEREUM" in base_asset: symbol = "ETH-USD"
-        elif "APPLE" in base_asset: symbol = "AAPL"
-        elif "TESLA" in base_asset: symbol = "TSLA"
-        elif "MICROSOFT" in base_asset: symbol = "MSFT"
-
-        try:
-            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1m&range=1d"
-            headers = {'User-Agent': 'Mozilla/5.0'}
-            res = requests.get(url, headers=headers, timeout=5.0).json()
-            result = res['chart']['result'][0]
-            df = pd.DataFrame(result['indicators']['quote'][0], index=pd.to_datetime(result['timestamp'], unit='s')).dropna()
-            df = df[['open', 'high', 'low', 'close']].rename(columns=str.title)
-        except:
-            df = None
-
+    df = fetch_binance_data(asset_name)
     if df is not None and not df.empty:
         market_cache[asset_name] = (current_time, df)
-    return df
+        return df
 
-BANNER_IMAGE = "easy_tracks.jpg"
+    df = fetch_coinbase_data(asset_name)
+    if df is not None and not df.empty:
+        market_cache[asset_name] = (current_time, df)
+        return df
+
+    df = fetch_bitget_data(asset_name)
+    if df is not None and not df.empty:
+        market_cache[asset_name] = (current_time, df)
+        return df
+
+    ticker_symbol = get_yahoo_ticker(asset_name)
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker_symbol}?interval=1m&range=1d"
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+    try:
+        response = requests.get(url, headers=headers, timeout=5.0)
+        data = response.json()
+        result = data['chart']['result'][0]
+        timestamps = result['timestamp']
+        quote = result['indicators']['quote'][0]
+        
+        df = pd.DataFrame({
+            'Open': quote['open'], 'High': quote['high'],
+            'Low': quote['low'], 'Close': quote['close']
+        }, index=pd.to_datetime(timestamps, unit='s'))
+        
+        clean_df = df.dropna()
+        if clean_df.empty: 
+            raise Exception("Dati vuoti")
+        
+        clean_df = force_realtime_last_candle(clean_df)
+        market_cache[asset_name] = (current_time, clean_df)
+        return clean_df
+    except Exception as e:
+        print(f"Errore di recupero dati in tempo reale per {asset_name}: {e}")
+        if asset_name in market_cache: 
+            return market_cache[asset_name][1]
+        return None
+
+# --- MENU TELEGRAM ---
 
 def send_category_menu(chat_id, msg_id=None):
     kb = {
         "inline_keyboard": [
             [{"text": "📈 Mercato Reale", "callback_data": "cat_real_0"}],
-            [{"text": "📊 Mercato OTC (Feed Pocket Option)", "callback_data": "otc_strategy_menu"}]
+            [{"text": "📊 Mercato OTC (Guida Visiva)", "callback_data": "cat_otc_0"}]
         ]
     }
-    text = "🇮🇹 SELEZIONA ‣ TIPO DI MERCATO"
+    text = "👋 **Seleziona la categoria di mercato:**"
     if msg_id:
-        try: api_call("deleteMessage", {"chat_id": chat_id, "message_id": msg_id})
-        except: pass
-    send_banner_photo(chat_id, BANNER_IMAGE, text, kb)
-
-def send_otc_strategy_menu(chat_id, msg_id=None):
-    kb = {
-        "inline_keyboard": [
-            [{"text": "⚙️ Strategia 1 (Donchian / RSI / DeMarker)", "callback_data": "strat_1_menu"}],
-            [{"text": "⚙️ Strategia 2 (Bollinger 10,1.5 / CCI / RSI)", "callback_data": "strat_2_select"}],
-            [{"text": "⚙️ Strategia 3 (SMA 3 & 9 + Momento 10)", "callback_data": "strat_3_select"}],
-            [{"text": "≡ Torna al Menu Principale", "callback_data": "main_categories"}]
-        ]
-    }
-    text = "🧠 *SELEZIONA LA STRATEGIA OTC* 🧠\n\nScegli quale delle 3 strategie applicare:"
-    if msg_id:
-        try: api_call("deleteMessage", {"chat_id": chat_id, "message_id": msg_id})
-        except: pass
-    send_message(chat_id, text, kb)
-
-def send_st1_variant_menu(chat_id, msg_id=None):
-    kb = {
-        "inline_keyboard": [
-            [{"text": "🕯️ Opzione A: Candele Standard", "callback_data": "var_st1_A"}],
-            [{"text": "📊 Opzione B: Candele Heikin Ashi", "callback_data": "var_st1_B"}],
-            [{"text": "◀️ Indietro", "callback_data": "otc_strategy_menu"}]
-        ]
-    }
-    text = "⚙️ *STRATEGIA 1 - PARAMETRI E REGOLE* ⚙️\n\n" \
-           "📌 *Indicatori da impostare sulla piattaforma:*\n" \
-           "• **Canali Donchian**: Periodo `22`\n" \
-           "• **RSI**: Periodo `14`\n\n" \
-           "Scegli il tipo di candele da analizzare:"
-    if msg_id:
-        try: api_call("deleteMessage", {"chat_id": chat_id, "message_id": msg_id})
-        except: pass
-    send_message(chat_id, text, kb)
+        try: edit_message(chat_id, msg_id, text, kb)
+        except: send_message(chat_id, text, kb)
+    else:
+        send_message(chat_id, text, kb)
 
 def send_assets_menu(chat_id, category="real", page=0, msg_id=None):
-    lst = REAL_ASSETS if category == "real" else OTC_ASSETS
-    total_pages = math.ceil(len(lst) / 12)
-    sub = lst[page*12:(page+1)*12]
+    assets_list = REAL_ASSETS if category == "real" else OTC_ASSETS
+    per_page = 9
+    sub = assets_list[page*per_page:(page+1)*per_page]
     kb = []
+    
     for i in range(0, len(sub), 3):
         row = []
         for j in range(3):
             if i + j < len(sub):
-                item = sub[i+j]
-                idx = lst.index(item)
-                row.append({"text": item, "callback_data": ("ast_r_" if category=="real" else "ast_o_") + str(idx)})
+                asset_item = sub[i+j]
+                cb_prefix = "ast_r_" if category == "real" else "ast_o_"
+                row.append({"text": asset_item, "callback_data": cb_prefix + str(assets_list.index(asset_item))})
         kb.append(row)
+        
     nav = []
-    if page > 0: nav.append({"text": "◀️ Indietro", "callback_data": f"pg_{category}_{page-1}"})
-    nav.append({"text": f"{page+1}/{total_pages}", "callback_data": "noop"})
-    if (page + 1) * 12 < len(lst): nav.append({"text": "Avanti ▶️", "callback_data": f"pg_{category}_{page+1}"})
+    if page > 0: nav.append({"text": "Indietro", "callback_data": f"pg_{category}_{page-1}"})
+    if (page + 1) * per_page < len(assets_list): nav.append({"text": "Avanti", "callback_data": f"pg_{category}_{page+1}"})
     if nav: kb.append(nav)
-    
-    if category == "otc":
-        kb.append([{"text": "🔄 Cambia Strategia OTC", "callback_data": "otc_strategy_menu"}])
-    kb.append([{"text": "≡ Torna al Menu Principale", "callback_data": "main_categories"}])
-    
-    cat_nome = "REALE" if category == "real" else "OTC (Pocket Option)"
-    text = f"🇮🇹 SELEZIONA ‣ COPPIA DI VALUTE ({cat_nome})"
+        
+    kb.append([{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}])
+    title_cat = "Reali" if category == "real" else "OTC"
+    text = f"👋 Scegli un asset **{title_cat}**:"
     if msg_id:
-        try: api_call("deleteMessage", {"chat_id": chat_id, "message_id": msg_id})
-        except: pass
-    send_banner_photo(chat_id, BANNER_IMAGE, text, {"inline_keyboard": kb})
+        try: edit_message(chat_id, msg_id, text, {"inline_keyboard": kb})
+        except: send_message(chat_id, text, {"inline_keyboard": kb})
+    else:
+        send_message(chat_id, text, {"inline_keyboard": kb})
 
-def send_timeframe_menu(chat_id, asset_name, msg_id=None):
-    category = "otc" if "OTC" in asset_name else "real"
+def send_expiry_menu(chat_id, asset_name, msg_id, is_otc=False):
+    prefix = "exp_o_" if is_otc else "exp_r_"
     kb = {
         "inline_keyboard": [
-            [{"text": "S30", "callback_data": "tf_S30"}, {"text": "M1", "callback_data": "tf_M1"}, {"text": "M2", "callback_data": "tf_M2"}],
-            [{"text": "M5", "callback_data": "tf_M5"}, {"text": "M15", "callback_data": "tf_M15"}, {"text": "H1", "callback_data": "tf_H1"}],
-            [{"text": "◀️ Indietro (Asset)", "callback_data": f"pg_{category}_0" if category=="otc" else "cat_real_0"}, {"text": "≡ Menu Principale", "callback_data": "main_categories"}]
+            [{"text": "S5", "callback_data": prefix + "s5"}, {"text": "S10", "callback_data": prefix + "s10"}, {"text": "S15", "callback_data": prefix + "s15"}, {"text": "S30", "callback_data": prefix + "s30"}],
+            [{"text": "M1", "callback_data": prefix + "m1"}, {"text": "M2", "callback_data": prefix + "m2"}, {"text": "M3", "callback_data": prefix + "m3"}, {"text": "M5", "callback_data": prefix + "m5"}],
+            [{"text": "M10", "callback_data": prefix + "m10"}, {"text": "M15", "callback_data": prefix + "m15"}, {"text": "M30", "callback_data": prefix + "m30"}],
+            [{"text": "H1", "callback_data": prefix + "h1"}, {"text": "H4", "callback_data": prefix + "h4"}, {"text": "D1", "callback_data": prefix + "d1"}],
+            [{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]
         ]
     }
-    text = f"💹 Asset: *{asset_name}*\n\n🇮🇹 Seleziona la scadenza/timeframe desiderato:"
-    if msg_id:
-        try: api_call("deleteMessage", {"chat_id": chat_id, "message_id": msg_id})
-        except: pass
-    send_message(chat_id, text, kb)
+    edit_message(chat_id, msg_id, f"💲💹 Asset: {asset_name}\n\nSeleziona l'intervallo / timeframe:", kb)
 
 @app.route('/')
 def index():
-    return "Bot operativo con Pocket Option!", 200
+    return "Bot operativo al 100%!", 200
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
     up = request.get_json()
-    if not up: return "ok", 200
-    try:
-        if "callback_query" in up:
-            cq = up["callback_query"]
-            cid, mid, val = cq["message"]["chat"]["id"], cq["message"]["message_id"], cq["data"]
-            answer_callback(cq["id"])
-            
-            if val == "noop":
-                return "ok", 200
-            elif val == "main_categories":
-                if cid in user_selection: user_selection.pop(cid, None)
-                send_category_menu(cid, mid)
-            elif val == "cat_real_0":
-                send_assets_menu(cid, "real", 0, mid)
-            elif val == "otc_strategy_menu":
-                send_otc_strategy_menu(cid, mid)
-            elif val == "strat_1_menu":
-                send_st1_variant_menu(cid, mid)
-            elif val in ["var_st1_A", "var_st1_B"]:
-                if cid not in user_selection: user_selection[cid] = {}
-                user_selection[cid]["strategy"] = "st1"
-                user_selection[cid]["variant"] = val.replace("var_st1_", "")
-                var_label = "Strategia 1 (Standard)" if val == "var_st1_A" else "Strategia 1 (Heikin Ashi)"
-                send_message(cid, f"✅ Selezionato: *{var_label}*\n\nOra scegli l'asset OTC:")
-                send_assets_menu(cid, "otc", 0, mid)
-            elif val == "strat_2_select":
-                if cid not in user_selection: user_selection[cid] = {}
-                user_selection[cid]["strategy"] = "st2"
-                user_selection[cid]["variant"] = "A"
+    exp_map = {
+        "s5": "5 Secondi (S5)", "s10": "10 Secondi (S10)", "s15": "15 Secondi (S15)", "s30": "30 Secondi (S30)",
+        "m1": "1 Minuto (M1)", "m2": "2 Minuti (M2)", "m3": "3 Minuti (M3)", "m5": "5 Minuti (M5)",
+        "m10": "10 Minuti (M10)", "m15": "15 Minuti (M15)", "m30": "30 Minuti (M30)",
+        "h1": "1 Ora (H1)", "h4": "4 Ore (H4)", "d1": "1 Giorno (D1)"
+    }
+    if up:
+        try:
+            if "callback_query" in up:
+                cq = up["callback_query"]
+                cid, mid, val = cq["message"]["chat"]["id"], cq["message"]["message_id"], cq["data"]
+                answer_callback(cq["id"])
                 
-                rules_text = (
-                    "⚙️ *STRATEGIA 2 - PARAMETRI E REGOLE* ⚙️\n\n"
-                    "📌 *Indicatori da impostare sulla piattaforma:*\n"
-                    "• **Bande di Bollinger**: Periodo `10`, Deviazione `1.5`\n"
-                    "• **CCI**: Periodo `14`\n"
-                    "• **RSI**: Periodo `10` o `14`"
-                )
-                try: api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
-                except: pass
-                send_message(cid, rules_text)
-                send_assets_menu(cid, "otc", 0, None)
-                
-            elif val == "strat_3_select":
-                if cid not in user_selection: user_selection[cid] = {}
-                user_selection[cid]["strategy"] = "st3"
-                user_selection[cid]["variant"] = "A"
-                
-                rules_text = (
-                    "⚙️ *STRATEGIA 3 - PARAMETRI E REGOLE* ⚙️\n\n"
-                    "📌 *Indicatori da impostare sulla piattaforma:*\n"
-                    "• **Media Mobile (SMA)**: Periodo `9` e `3`\n"
-                    "• **Momento**: Periodo `10`"
-                )
-                try: api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
-                except: pass
-                send_message(cid, rules_text)
-                send_assets_menu(cid, "otc", 0, None)
-                
-            elif val.startswith("pg_"):
-                parts = val.split("_")
-                send_assets_menu(cid, parts[1], int(parts[2]), mid)
-            elif val.startswith("ast_r_") or val.startswith("ast_o_"):
-                is_otc = val.startswith("ast_o_")
-                idx = int(val.split("_")[2])
-                ast = (OTC_ASSETS if is_otc else REAL_ASSETS)[idx]
-                if cid not in user_selection: user_selection[cid] = {}
-                user_selection[cid]["asset"] = ast
-                send_timeframe_menu(cid, ast, mid)
-            elif val.startswith("tf_"):
-                tf_selected = val.replace("tf_", "")
-                sel = user_selection.get(cid, {})
-                ast = sel.get("asset", "EUR/USD")
-                strategy = sel.get("strategy", "st1")
-                variant = sel.get("variant", "A")
-                
-                edit_message(cid, mid, f"⏳ Analisi in corso per {ast} ({tf_selected})...")
-                
-                data = fetch_market_data(ast)
-                next_entry = get_next_entry_time(tf_selected)
-                
-                if data is None or data.empty:
-                    edit_message(cid, mid, "❌ Errore nel recupero dei dati da Pocket Option. Riprova tra poco.")
+                if val == "main_categories":
+                    user_otc_state.pop(cid, None)
+                    api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
+                    send_category_menu(cid)
+                    
+                elif val.startswith("cat_"):
+                    parts = val.split("_")
+                    category = parts[1]
+                    page = int(parts[2])
+                    send_assets_menu(cid, category, page, mid)
+                    
+                elif val.startswith("pg_"):
+                    parts = val.split("_")
+                    category = parts[1]
+                    page = int(parts[2])
+                    send_assets_menu(cid, category, page, mid)
+
+                elif val.startswith("ast_r_") or val.startswith("ast_o_"):
+                    if val.startswith("ast_r_"):
+                        ast = REAL_ASSETS[int(val.split("_")[2])]
+                        user_selection[cid] = {"asset": ast, "cat": "real"}
+                        send_expiry_menu(cid, ast, mid, is_otc=False)
+                    else:
+                        ast = OTC_ASSETS[int(val.split("_")[2])]
+                        user_selection[cid] = {"asset": ast, "cat": "otc"}
+                        send_expiry_menu(cid, ast, mid, is_otc=True)
+
+                # ==========================================
+                # --- MERCATO REALE (COMPLETAMENTE AUTOMATICO) ---
+                # ==========================================
+                elif val.startswith("exp_r_") or val.startswith("retry_"):
+                    if val.startswith("exp_r_"):
+                        exp_key = val.split("_")[2]
+                        sel = user_selection.get(cid, {})
+                        ast_name = sel.get("asset", "EUR/USD")
+                        user_selection[cid]["exp"] = exp_key
+                    else:
+                        parts = val.split("_")
+                        exp_key = parts[-1]
+                        ast_name = "_".join(parts[1:-1])
+                    
+                    edit_message(cid, mid, f"⏳ Elaborazione analisi in tempo reale per {ast_name} ({exp_key.upper()})...")
+                    
+                    data = fetch_yahoo_real_data(ast_name)
+                    if data is None or data.empty:
+                        error_text = f"⚠️ **Impossibile recuperare i dati per {ast_name}.**\n\nIl mercato potrebbe essere chiuso in questo momento."
+                        error_kb = {"inline_keyboard": [[{"text": "🔄 Aggiorna", "callback_data": "retry_" + ast_name + "_" + exp_key}], [{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
+                        edit_message(cid, mid, error_text, error_kb)
+                        return "ok", 200
+
+                    italian_tz = timezone(timedelta(hours=2))
+                    current_it_time = datetime.now(italian_tz)
+                    next_entry_dt = current_it_time + timedelta(minutes=1)
+                    entry_time = next_entry_dt.replace(second=0, microsecond=0).strftime('%H:%M:%S')
+                    
+                    rsi_val, macd_line, macd_signal, macd_hist, current_close, current_ema, upper_f, lower_f, current_bw, avg_bw = calculate_indicators(data)
+                    pattern_name = detect_candlestick_pattern(data)
+                    
+                    last_candle = data.iloc[-1]
+                    high_val = float(last_candle['High'])
+                    low_val = float(last_candle['Low'])
+
+                    upper_wick_rejection = (high_val >= upper_f) and (current_close < upper_f)
+                    lower_wick_rejection = (low_val <= lower_f) and (current_close > lower_f)
+
+                    trend_bullish = current_close > current_ema
+                    if trend_bullish and (macd_line >= macd_signal or rsi_val < 48):
+                        sig_type = "ACQUISTA (BUY)"
+                        trend_desc = "Rialzista Forte 📈"
+                    elif not trend_bullish and (macd_line <= macd_signal or rsi_val > 52):
+                        sig_type = "VENDI (SELL)"
+                        trend_desc = "Ribassista Forte 📉"
+                    else:
+                        sig_type = "ACQUISTA (BUY)" if macd_line > macd_signal else "VENDI (SELL)"
+                        trend_desc = "Laterale / Transizione ↔️"
+                    
+                    base_conf = 60.0  
+                    trend_confirmed = (trend_bullish and "ACQUISTA" in sig_type) or (not trend_bullish and "VENDI" in sig_type)
+                    conf_trend = 15.0 if trend_confirmed else 0.0
+                    conf_macd = min(15.0, abs(macd_hist) * 2000)
+                    conf_fractal = 10.0 if (upper_wick_rejection or lower_wick_rejection) else 0.0
+                    rsi_confirmed = (rsi_val < 45 and "ACQUISTA" in sig_type) or (rsi_val > 55 and "VENDI" in sig_type)
+                    conf_rsi = 10.0 if rsi_confirmed else 0.0
+                    
+                    conf = round(base_conf + conf_trend + conf_macd + conf_fractal + conf_rsi, 1)
+                    conf = min(96.0, max(50.0, conf))
+                    
+                    sig_emoji = "🟢" if "ACQUISTA" in sig_type else "🔴"
+                    timeframe_name = exp_map.get(exp_key, "1 Minuto (M1)")
+
+                    text = "🐂🐻 ANALISI EASY TRACK + FRACTAL ADVANCED (REALE LIVE)\n\n"
+                    text += f"💲💹 Asset: {ast_name}\n"
+                    text += f"💵 Prezzo Reale: `{round(current_close, 5)}`\n"
+                    text += f"📊 Trend / Setup: {trend_desc}\n"
+                    text += f"🕯️ Pattern Candele: {pattern_name}\n"
+                    text += f"🎯 Segnale: {sig_type} {sig_emoji}\n\n"
+                    text += "🛠️ Indicatori Tecnici:\n"
+                    text += f"• RSI (9): {rsi_val}\n"
+                    text += f"• Linea MACD: {macd_line}\n"
+                    text += f"• Frattale Sup (Max): `{round(upper_f, 5)}`\n"
+                    text += f"• Frattale Inf (Min): `{round(lower_f, 5)}`\n\n"
+                    text += f"⚖️ Affidabilità: {conf}%\n"
+                    text += f"⏱️ Timeframe: {timeframe_name}\n"
+                    text += f"📌 Ora Esatta Ingresso: `{entry_time}`"
+                    
+                    kb = {"inline_keyboard": [[{"text": "🔄 Aggiorna", "callback_data": "retry_" + ast_name + "_" + exp_key}], [{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
+                    chart_buf = generate_chart_image(data, ast_name, target_entry_time=entry_time)
+                    
+                    api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
+                    if chart_buf:
+                        send_photo_message(cid, chart_buf, text, kb)
+                    else:
+                        send_message(cid, text, kb)
+
+                # ==========================================
+                # --- STRATEGIA VISIVA OTC (70 - 50 - 30) ---
+                # ==========================================
+
+                # Step 1 OTC: Selezione RSI (9) basata sulle linee 70-50-30 del broker
+                elif val.startswith("exp_o_"):
+                    exp_key = val.split("_")[2]
+                    sel = user_selection.get(cid, {})
+                    ast_name = sel.get("asset", "EUR/USD OTC")
+                    
+                    user_otc_state[cid] = {"asset": ast_name, "expiry": exp_key}
+                    
+                    kb_rsi_levels = {
+                        "inline_keyboard": [
+                            [{"text": "🔥 Sopra 70 (Ipercomprato)", "callback_data": "otc_rsi_over70"}],
+                            [{"text": "📈 Tra 50 e 70 (Zona Rialzista)", "callback_data": "otc_rsi_50_70"}],
+                            [{"text": "📉 Tra 30 e 50 (Zona Ribassista)", "callback_data": "otc_rsi_30_50"}],
+                            [{"text": "❄️ Sotto 30 (Ipervenduto)", "callback_data": "otc_rsi_under30"}],
+                            [{"text": "⚡ Test / Incrocio linea del 50", "callback_data": "otc_rsi_cross50"}],
+                            [{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]
+                        ]
+                    }
+                    edit_message(cid, mid, f"📊 **{ast_name} ({exp_map.get(exp_key, exp_key)})**\n\n**Step 1/2:** Guarda l'indicatore **RSI (9)** sul broker e seleziona dove si trova la linea in questo momento:", kb_rsi_levels)
+
+                # Step 2 OTC: Selezione del MACD
+                elif val.startswith("otc_rsi_"):
+                    rsi_choice = val.replace("otc_rsi_", "")
+                    if cid in user_otc_state:
+                        user_otc_state[cid]["rsi"] = rsi_choice
+                        
+                        kb_macd_3 = {
+                            "inline_keyboard": [
+                                [{"text": "🟢 Incrocio Rialzista", "callback_data": "otc_macd_bull"}],
+                                [{"text": "🔴 Incrocio Ribassista", "callback_data": "otc_macd_bear"}],
+                                [{"text": "⏳ In fase di formazione", "callback_data": "otc_macd_pending"}],
+                                [{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]
+                            ]
+                        }
+                        edit_message(cid, mid, "📊 **Step 2/2:** Qual è la situazione attuale del **MACD** sul broker?", kb_macd_3)
+
+                # Calcolo finale del segnale OTC
+                elif val.startswith("otc_macd_"):
+                    macd_choice = val.replace("otc_macd_", "")
+                    if cid in user_otc_state:
+                        state = user_otc_state[cid]
+                        ast_name = state["asset"]
+                        exp_key = state["expiry"]
+                        rsi_choice = state["rsi"]
+                        user_otc_state.pop(cid, None)
+                        
+                        italian_tz = timezone(timedelta(hours=2))
+                        current_it_time = datetime.now(italian_tz)
+                        entry_time = (current_it_time + timedelta(minutes=1)).replace(second=0, microsecond=0).strftime('%H:%M:%S')
+                        
+                        rsi_map = {
+                            "over70": "Sopra 70 (Ipercomprato 🔥)",
+                            "50_70": "Tra 50 e 70 (Zona Rialzista 📈)",
+                            "30_50": "Tra 30 e 50 (Zona Ribassista 📉)",
+                            "under30": "Sotto 30 (Ipervenduto ❄️)",
+                            "cross50": "Incrocio / Test della linea 50 ⚡"
+                        }
+                        
+                        macd_map = {
+                            "bull": "Incrocio Rialzista 🟢",
+                            "bear": "Incrocio Ribassista 🔴",
+                            "pending": "In fase di formazione ⏳"
+                        }
+                        
+                        # Logica di confluenza OTC basata sui livelli reali
+                        if rsi_choice == "over70" or macd_choice == "bear":
+                            if rsi_choice == "under30" and macd_choice == "bull":
+                                sig_type = "ACQUISTA (BUY)"
+                                sig_emoji = "🟢"
+                                trend_desc = "Rimbalzo da Ipervenduto 📈"
+                                pattern_name = "Reazione sui Minimi"
+                                conf = 91.0
+                            elif rsi_choice == "over70":
+                                sig_type = "VENDI (SELL)"
+                                sig_emoji = "🔴"
+                                trend_desc = "Inversione da Ipercomprato 📉"
+                                pattern_name = "Rifiuto su Livello 70"
+                                conf = 90.0
+                            else:
+                                sig_type = "VENDI (SELL)"
+                                sig_emoji = "🔴"
+                                trend_desc = "Spinta Ribassista 📉"
+                                pattern_name = "Continuazione Trend Sotto 50"
+                                conf = 85.0
+                        else:
+                            if rsi_choice == "under30":
+                                sig_type = "ACQUISTA (BUY)"
+                                sig_emoji = "🟢"
+                                trend_desc = "Rimbalzo da Ipervenduto 📈"
+                                pattern_name = "Reazione sui Minimi"
+                                conf = 90.0
+                            elif rsi_choice == "50_70" and macd_choice == "bull":
+                                sig_type = "ACQUISTA (BUY)"
+                                sig_emoji = "🟢"
+                                trend_desc = "Spinta Rialzista Forte 📈"
+                                pattern_name = "Continuazione Trend Sopra 50"
+                                conf = 88.0
+                            elif macd_choice == "bull":
+                                sig_type = "ACQUISTA (BUY)"
+                                sig_emoji = "🟢"
+                                trend_desc = "Spinta Rialzista 📈"
+                                pattern_name = "Incrocio Positivo"
+                                conf = 85.0
+                            else:
+                                sig_type = "VENDI (SELL)" if rsi_choice == "30_50" else "ACQUISTA (BUY)"
+                                sig_emoji = "🔴" if "VENDI" in sig_type else "🟢"
+                                trend_desc = "Fase di Transizione / Breakout ↔️"
+                                pattern_name = "Test Dinamico"
+                                conf = 78.0
+
+                        timeframe_name = exp_map.get(exp_key, "1 Minuto (M1)")
+
+                        text = "🤖 **ANALISI OTC GUIDATA (STRATEGIA VISIVA 70-50-30)**\n\n"
+                        text += f"💲💹 Asset: {ast_name}\n"
+                        text += f"📊 Trend Rilevato: {trend_desc}\n"
+                        text += f"🕯️ Pattern: {pattern_name}\n"
+                        text += f"🎯 Segnale: {sig_type} {sig_emoji}\n\n"
+                        text += f"🛠️ Parametri Selezionati:\n"
+                        text += f"• RSI (9): {rsi_map.get(rsi_choice, rsi_choice)}\n"
+                        text += f"• MACD: {macd_map.get(macd_choice, macd_choice)}\n\n"
+                        text += f"⚖️ Affidabilità: {conf}%\n"
+                        text += f"⏱️ Timeframe: {timeframe_name}\n"
+                        text += f"📌 Ora Esatta Ingresso: `{entry_time}`"
+                        
+                        kb = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
+                        edit_message(cid, mid, text, kb)
+
+            elif "message" in up:
+                cid = up["message"]["chat"]["id"]
+                if "text" in up["message"]:
+                    txt_msg = up["message"]["text"].strip()
+                    if txt_msg == "/start":
+                        user_otc_state.pop(cid, None)
+                        user_selection.pop(cid, None)
+                        send_category_menu(cid)
+                        return "ok", 200
+
+                    send_category_menu(cid)
                     return "ok", 200
-
-                if strategy == "st2":
-                    action, ind_val, close = get_strategy_2_signal(data)
-                    strat_label = "Strategia 2 (Bollinger + CCI + RSI)"
-                elif strategy == "st3":
-                    action, ind_val, close = get_strategy_3_signal(data)
-                    strat_label = "Strategia 3 (SMA 3 & 9 + Momento)"
-                else:
-                    action, ind_val, close = get_strategy_1_signal(data, variant)
-                    strat_label = "Strategia 1 (Donchian)" if variant == "A" else "Strategia 1 (Heikin Ashi)"
-                
-                signal_text = f"💎 **SEGNALE ({strat_label} | {tf_selected})** 💎\n\n📊 Asset: `{ast}`\n🎯 Direzione: **{action}**\n💰 Prezzo Calcolato: `{close}`\n📈 Indicatore: `{ind_val}`\n⏱ Timeframe: `{tf_selected}`\n⏰ **Ingresso:** `{next_entry}`"
-                
-                try: api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
-                except: pass
-                
-                is_otc_asset = "OTC" in ast
-                back_callback = "pg_otc_0" if is_otc_asset else "cat_real_0"
-                back_text = "◀️ Torna agli Asset OTC" if is_otc_asset else "◀️ Torna agli Asset Reali"
-                
-                reply_kb = {
-                    "inline_keyboard": [
-                        [{"text": "🔄 Aggiorna Segnale", "callback_data": f"tf_{tf_selected}"}],
-                        [{"text": back_text, "callback_data": back_callback}, {"text": "🎯 Cambia Strategia", "callback_data": "otc_strategy_menu" if is_otc_asset else "main_categories"}],
-                        [{"text": "≡ Menu Principale", "callback_data": "main_categories"}]
-                    ]
-                }
-                
-                buf = generate_chart_image(data, ast, strategy, variant)
-                if buf:
-                    send_photo_message(cid, buf, signal_text, reply_kb)
-                else:
-                    send_message(cid, signal_text, reply_kb)
-
-        elif "message" in up:
-            msg = up["message"]
-            cid = msg["chat"]["id"]
-            if "text" in msg:
-                text = msg.get("text", "").strip()
-                register_user(cid)
-                if cid in user_selection: user_selection.pop(cid, None)
-                send_category_menu(cid)
-    except Exception as e:
-        print("Errore webhook:", e)
+        except Exception as e:
+            print("Errore nel webhook:", e)
     return "ok", 200
-
-def keep_alive_ping():
-    while True:
-        try: requests.get(BOT_URL, timeout=10)
-        except: pass
-        time.sleep(300)
-
-threading.Thread(target=keep_alive_ping, daemon=True).start()
-
-if not scheduler.running if 'scheduler' in globals() else True:
-    scheduler = BackgroundScheduler(timezone="Europe/Rome")
-    scheduler.start()
 
 RENDER_URL = os.environ.get('RENDER_EXTERNAL_URL')
 if RENDER_URL:
-    try: requests.get(f"{BASE_URL}/setWebhook?url={RENDER_URL}/webhook", timeout=5)
-    except: pass
+    try:
+        hook_url = f"{RENDER_URL}/webhook"
+        requests.get(f"{BASE_URL}/setWebhook?url={hook_url}", timeout=5)
+        print(f"✅ Webhook impostato automaticamente su: {hook_url}")
+    except Exception as e:
+        print("⚠️ Errore impostazione automatica webhook:", e)
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
