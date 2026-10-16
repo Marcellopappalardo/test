@@ -1,10 +1,11 @@
-flask
+Flask
 requests
 pandas
 numpy
-apscheduler
 matplotlib
 mplfinance
 google-generativeai
+APScheduler
 pytz
+websocket-client
 gunicorn 
