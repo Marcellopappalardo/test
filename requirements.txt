@@ -1,4 +1,5 @@
 Flask==3.0.2
+gunicorn==21.2.0
 requests==2.31.0
 pandas==2.2.1
 numpy==1.26.4
@@ -8,5 +9,3 @@ pytz==2024.1
 apscheduler==3.10.4
 websocket-client==1.7.0
 google-generativeai==0.4.1
-pocketoptionapi
-gunicorn 
