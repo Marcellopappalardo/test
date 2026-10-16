@@ -6,7 +6,6 @@ import io
 import threading
 from datetime import datetime, timedelta, timezone
 import pytz
-import websocket
 
 import matplotlib
 matplotlib.use('Agg')
@@ -18,6 +17,9 @@ import pandas as pd
 import numpy as np
 import google.generativeai as genai
 from apscheduler.schedulers.background import BackgroundScheduler
+
+# Import della libreria Pocket Option API (assicurati di aver installato il pacchetto corretto)
+from pocketoptionapi.stable_api import PocketOption
 
 app = Flask(__name__)
 
@@ -53,31 +55,22 @@ OTC_ASSETS = [
     "ADVANCED MICRO OTC", "Coinbase Global OTC"
 ]
 
-def get_deriv_symbol(asset_name):
-    """Mappa gli asset OTC originali sui simboli reali disponibili su Deriv"""
-    clean_name = asset_name.replace(" OTC", "").strip().upper()
-    
-    # Mappatura Forex principale
-    forex_map = {
-        "EUR/USD": "frxEURUSD", "GBP/USD": "frxGBPUSD", "USD/JPY": "frxUSDJPY",
-        "AUD/USD": "frxAUDUSD", "USD/CAD": "frxUSDCAD", "USD/CHF": "frxUSDCHF",
-        "EUR/GBP": "frxEURGBP", "EUR/JPY": "frxEURJPY", "GBP/JPY": "frxGBPJPY",
-        "AUD/CAD": "frxAUDCAD", "AUD/JPY": "frxAUDJPY", "EUR/AUD": "frxEURAUD",
-        "EUR/CAD": "frxEURCAD", "EUR/NZD": "frxEURNZD", "NZD/JPY": "frxNZDJPY",
-        "NZD/USD": "frxNZDUSD", "CAD/JPY": "frxCADJPY", "EUR/CHF": "frxEURCHF",
-        "AUD/CHF": "frxAUDCHF", "AUD/NZD": "frxAUDNZD", "GBP/AUD": "frxGBPAUD",
-        "CAD/CHF": "frxCADCHF", "CHF/NOK": "frxUSDCHF" # Fallback sicuro
-    }
-    
-    if clean_name in forex_map:
-        return forex_map[clean_name]
-        
-    # Mappatura Azionarie / Indicatori / Esotiche -> Collegati aiVolatility Index o indici di riferimento stabili di Deriv
-    if "APPLE" in clean_name or "MICROSOFT" in clean_name or "TESLA" in clean_name or "AMAZON" in clean_name or "NETFLIX" in clean_name or "VISA" in clean_name:
-        return "R_50" # Volatility 50 Index come benchmark stabile di movimento
-    
-    # Default per qualsiasi altro OTC esotico non presente su Deriv forex diretto (es. valute locali o azionari secondari)
-    return "frxEURUSD"
+# --- CONNESSIONE POCKET OPTION ---
+# Inserisci qui il tuo SSID o token di sessione di Pocket Option se richiesto, oppure connettiti in Demo
+PO_SSID = os.environ.get("PO_SSID", "IL_TUO_SSID")
+po_api = PocketOption(PO_SSID, demo=True)
+po_connected, po_reason = po_api.connect()
+
+if po_connected:
+    print("Connessione a Pocket Option stabilita con successo!")
+else:
+    print(f"Errore di connessione a Pocket Option: {po_reason}")
+
+def get_pocket_option_symbol(asset_name):
+    """Formatta il nome dell'asset in base agli standard accettati dalla libreria Pocket Option"""
+    # Esempio: "AUD/NZD OTC" -> "AUDNZD_otc" o formato simile gestito dal broker
+    clean = asset_name.replace("/", "").replace(" ", "_").lower()
+    return clean
 
 user_selection = {}
 
@@ -312,37 +305,26 @@ def generate_chart_image(df, asset_name, strategy="st1", variant="A"):
         plt.close('all')
         return None
 
-def fetch_deriv_data(symbol):
+def fetch_pocket_option_data(asset_name):
+    """Recupera i dati delle candele storiche/live direttamente da Pocket Option"""
     try:
-        ws_url = "wss://ws.derivws.com/websockets/v3?app_id=1089"
-        ws = websocket.create_connection(ws_url, timeout=5)
-        req = json.dumps({
-            "ticks_history": symbol,
-            "adjust_start_time": 1,
-            "count": 100,
-            "end": "latest",
-            "granularity": 60,
-            "style": "candles"
-        })
-        ws.send(req)
-        res = json.loads(ws.recv())
-        ws.close()
-        
-        if "candles" in res:
-            candles = res["candles"]
+        po_symbol = get_pocket_option_symbol(asset_name)
+        # Richiesta delle candele tramite la libreria pocketoptionapi (es. timeframe 60s per M1)
+        candles = po_api.get_candles(po_symbol, 60)
+        if candles:
             data = []
             for c in candles:
                 data.append({
-                    'Open': float(c['open']),
-                    'High': float(c['high']),
-                    'Low': float(c['low']),
-                    'Close': float(c['close']),
-                    'Timestamp': pd.to_datetime(c['epoch'], unit='s')
+                    'Open': float(c.get('open', c.get('Open', 0))),
+                    'High': float(c.get('high', c.get('High', 0))),
+                    'Low': float(c.get('low', c.get('Low', 0))),
+                    'Close': float(c.get('close', c.get('Close', 0))),
+                    'Timestamp': pd.to_datetime(c.get('time', c.get('Timestamp', time.time())), unit='s')
                 })
             df = pd.DataFrame(data).set_index('Timestamp')
             return df
     except Exception as e:
-        print("Errore connessione Deriv WebSocket:", e)
+        print("Errore recupero dati Pocket Option:", e)
     return None
 
 def fetch_market_data(asset_name):
@@ -352,9 +334,8 @@ def fetch_market_data(asset_name):
         if current_time - ts < CACHE_DURATION: return cached_df
 
     df = None
-    if "OTC" in asset_name:
-        deriv_sym = get_deriv_symbol(asset_name)
-        df = fetch_deriv_data(deriv_sym)
+    if "OTC" in asset_name or asset_name in OTC_ASSETS:
+        df = fetch_pocket_option_data(asset_name)
     
     if df is None or df.empty:
         base_asset = asset_name.replace(" OTC", "").upper()
@@ -389,7 +370,7 @@ def send_category_menu(chat_id, msg_id=None):
     kb = {
         "inline_keyboard": [
             [{"text": "📈 Mercato Reale", "callback_data": "cat_real_0"}],
-            [{"text": "📊 Mercato OTC (Feed Reale)", "callback_data": "otc_strategy_menu"}]
+            [{"text": "📊 Mercato OTC (Feed Pocket Option)", "callback_data": "otc_strategy_menu"}]
         ]
     }
     text = "🇮🇹 SELEZIONA ‣ TIPO DI MERCATO"
@@ -454,7 +435,7 @@ def send_assets_menu(chat_id, category="real", page=0, msg_id=None):
         kb.append([{"text": "🔄 Cambia Strategia OTC", "callback_data": "otc_strategy_menu"}])
     kb.append([{"text": "≡ Torna al Menu Principale", "callback_data": "main_categories"}])
     
-    cat_nome = "REALE" if category == "real" else "OTC (Feed Reale)"
+    cat_nome = "REALE" if category == "real" else "OTC (Pocket Option)"
     text = f"🇮🇹 SELEZIONA ‣ COPPIA DI VALUTE ({cat_nome})"
     if msg_id:
         try: api_call("deleteMessage", {"chat_id": chat_id, "message_id": msg_id})
@@ -478,7 +459,7 @@ def send_timeframe_menu(chat_id, asset_name, msg_id=None):
 
 @app.route('/')
 def index():
-    return "Bot operativo!", 200
+    return "Bot operativo con Pocket Option!", 200
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -564,7 +545,7 @@ def webhook():
                 next_entry = get_next_entry_time(tf_selected)
                 
                 if data is None or data.empty:
-                    edit_message(cid, mid, "❌ Errore nel recupero dei dati di mercato. Riprova tra poco.")
+                    edit_message(cid, mid, "❌ Errore nel recupero dei dati da Pocket Option. Riprova tra poco.")
                     return "ok", 200
 
                 if strategy == "st2":
