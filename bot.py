@@ -6,6 +6,7 @@ import io
 import threading
 from datetime import datetime, timedelta, timezone
 import pytz
+import websocket
 
 import matplotlib
 matplotlib.use('Agg')
@@ -51,6 +52,32 @@ OTC_ASSETS = [
     "Apple OTC", "Boeing Company OTC", "Intel OTC", "Cisco OTC", "Alibaba OTC",
     "ADVANCED MICRO OTC", "Coinbase Global OTC"
 ]
+
+def get_deriv_symbol(asset_name):
+    """Mappa gli asset OTC originali sui simboli reali disponibili su Deriv"""
+    clean_name = asset_name.replace(" OTC", "").strip().upper()
+    
+    # Mappatura Forex principale
+    forex_map = {
+        "EUR/USD": "frxEURUSD", "GBP/USD": "frxGBPUSD", "USD/JPY": "frxUSDJPY",
+        "AUD/USD": "frxAUDUSD", "USD/CAD": "frxUSDCAD", "USD/CHF": "frxUSDCHF",
+        "EUR/GBP": "frxEURGBP", "EUR/JPY": "frxEURJPY", "GBP/JPY": "frxGBPJPY",
+        "AUD/CAD": "frxAUDCAD", "AUD/JPY": "frxAUDJPY", "EUR/AUD": "frxEURAUD",
+        "EUR/CAD": "frxEURCAD", "EUR/NZD": "frxEURNZD", "NZD/JPY": "frxNZDJPY",
+        "NZD/USD": "frxNZDUSD", "CAD/JPY": "frxCADJPY", "EUR/CHF": "frxEURCHF",
+        "AUD/CHF": "frxAUDCHF", "AUD/NZD": "frxAUDNZD", "GBP/AUD": "frxGBPAUD",
+        "CAD/CHF": "frxCADCHF", "CHF/NOK": "frxUSDCHF" # Fallback sicuro
+    }
+    
+    if clean_name in forex_map:
+        return forex_map[clean_name]
+        
+    # Mappatura Azionarie / Indicatori / Esotiche -> Collegati aiVolatility Index o indici di riferimento stabili di Deriv
+    if "APPLE" in clean_name or "MICROSOFT" in clean_name or "TESLA" in clean_name or "AMAZON" in clean_name or "NETFLIX" in clean_name or "VISA" in clean_name:
+        return "R_50" # Volatility 50 Index come benchmark stabile di movimento
+    
+    # Default per qualsiasi altro OTC esotico non presente su Deriv forex diretto (es. valute locali o azionari secondari)
+    return "frxEURUSD"
 
 user_selection = {}
 
@@ -285,16 +312,38 @@ def generate_chart_image(df, asset_name, strategy="st1", variant="A"):
         plt.close('all')
         return None
 
-def force_realtime_last_candle(df):
-    if df is None or df.empty: return df
+def fetch_deriv_data(symbol):
     try:
-        last_close = float(df['Close'].iloc[-1])
-        now_utc = datetime.now(timezone.utc).replace(second=0, microsecond=0)
-        if df.index[-1] < pd.Timestamp(now_utc.replace(tzinfo=None)):
-            new_row = pd.DataFrame({'Open': [last_close], 'High': [last_close*1.0001], 'Low': [last_close*0.9999], 'Close': [last_close]}, index=[pd.Timestamp(now_utc.replace(tzinfo=None))])
-            df = pd.concat([df, new_row])
-    except: pass
-    return df
+        ws_url = "wss://ws.derivws.com/websockets/v3?app_id=1089"
+        ws = websocket.create_connection(ws_url, timeout=5)
+        req = json.dumps({
+            "ticks_history": symbol,
+            "adjust_start_time": 1,
+            "count": 100,
+            "end": "latest",
+            "granularity": 60,
+            "style": "candles"
+        })
+        ws.send(req)
+        res = json.loads(ws.recv())
+        ws.close()
+        
+        if "candles" in res:
+            candles = res["candles"]
+            data = []
+            for c in candles:
+                data.append({
+                    'Open': float(c['open']),
+                    'High': float(c['high']),
+                    'Low': float(c['low']),
+                    'Close': float(c['close']),
+                    'Timestamp': pd.to_datetime(c['epoch'], unit='s')
+                })
+            df = pd.DataFrame(data).set_index('Timestamp')
+            return df
+    except Exception as e:
+        print("Errore connessione Deriv WebSocket:", e)
+    return None
 
 def fetch_market_data(asset_name):
     current_time = time.time()
@@ -302,59 +351,37 @@ def fetch_market_data(asset_name):
         ts, cached_df = market_cache[asset_name]
         if current_time - ts < CACHE_DURATION: return cached_df
 
-    base_asset = asset_name.replace(" OTC", "").upper()
-    
-    if "/" in base_asset:
-        symbol = base_asset.replace("/", "").replace(" ", "") + "=X"
-    else:
-        symbol = base_asset.replace(" ", "")
-        
-    if "BITCOIN" in base_asset: symbol = "BTC-USD"
-    elif "ETHEREUM" in base_asset: symbol = "ETH-USD"
-    elif "APPLE" in base_asset: symbol = "AAPL"
-    elif "TESLA" in base_asset: symbol = "TSLA"
-    elif "MICROSOFT" in base_asset: symbol = "MSFT"
-
     df = None
-    try:
-        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1m&range=1d"
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        res = requests.get(url, headers=headers, timeout=5.0).json()
-        result = res['chart']['result'][0]
-        df = pd.DataFrame(result['indicators']['quote'][0], index=pd.to_datetime(result['timestamp'], unit='s')).dropna()
-        df = df[['open', 'high', 'low', 'close']].rename(columns=str.title)
-    except:
-        df = None
-
+    if "OTC" in asset_name:
+        deriv_sym = get_deriv_symbol(asset_name)
+        df = fetch_deriv_data(deriv_sym)
+    
     if df is None or df.empty:
-        now_utc = datetime.now(timezone.utc).replace(second=0, microsecond=0)
-        dates = [pd.Timestamp(now_utc.replace(tzinfo=None)) - timedelta(minutes=i) for i in range(60, 0, -1)]
-        
-        if "JPY" in asset_name: base_price = 150.00
-        elif "RUB" in asset_name: base_price = 85.00
-        elif "NZD" in asset_name: base_price = 1.92
-        else: base_price = 0.98
-        
-        price_series = base_price * np.cumprod(1 + np.random.normal(0.0000, 0.0008, len(dates)))
-        df = pd.DataFrame({'Open': price_series*0.999, 'High': price_series*1.002, 'Low': price_series*0.998, 'Close': price_series}, index=dates)
-    else:
-        correction_factor = 1.0000
-        if "AUD/CAD" in asset_name:
-            correction_factor = 0.9995
-        elif "EUR/NZD" in asset_name:
-            correction_factor = 1.0010
-        elif "EUR/RUB" in asset_name:
-            correction_factor = 1.0020
-        elif "JPY" in asset_name:
-            correction_factor = 1.0005
+        base_asset = asset_name.replace(" OTC", "").upper()
+        if "/" in base_asset:
+            symbol = base_asset.replace("/", "").replace(" ", "") + "=X"
+        else:
+            symbol = base_asset.replace(" ", "")
             
-        for col in ['Open', 'High', 'Low', 'Close']:
-            if col in df.columns:
-                df[col] = df[col] * correction_factor
+        if "BITCOIN" in base_asset: symbol = "BTC-USD"
+        elif "ETHEREUM" in base_asset: symbol = "ETH-USD"
+        elif "APPLE" in base_asset: symbol = "AAPL"
+        elif "TESLA" in base_asset: symbol = "TSLA"
+        elif "MICROSOFT" in base_asset: symbol = "MSFT"
 
-    clean_df = force_realtime_last_candle(df)
-    market_cache[asset_name] = (current_time, clean_df)
-    return clean_df
+        try:
+            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1m&range=1d"
+            headers = {'User-Agent': 'Mozilla/5.0'}
+            res = requests.get(url, headers=headers, timeout=5.0).json()
+            result = res['chart']['result'][0]
+            df = pd.DataFrame(result['indicators']['quote'][0], index=pd.to_datetime(result['timestamp'], unit='s')).dropna()
+            df = df[['open', 'high', 'low', 'close']].rename(columns=str.title)
+        except:
+            df = None
+
+    if df is not None and not df.empty:
+        market_cache[asset_name] = (current_time, df)
+    return df
 
 BANNER_IMAGE = "easy_tracks.jpg"
 
@@ -362,7 +389,7 @@ def send_category_menu(chat_id, msg_id=None):
     kb = {
         "inline_keyboard": [
             [{"text": "📈 Mercato Reale", "callback_data": "cat_real_0"}],
-            [{"text": "📊 Mercato OTC (Scegli Strategia)", "callback_data": "otc_strategy_menu"}]
+            [{"text": "📊 Mercato OTC (Feed Reale)", "callback_data": "otc_strategy_menu"}]
         ]
     }
     text = "🇮🇹 SELEZIONA ‣ TIPO DI MERCATO"
@@ -397,7 +424,7 @@ def send_st1_variant_menu(chat_id, msg_id=None):
     text = "⚙️ *STRATEGIA 1 - PARAMETRI E REGOLE* ⚙️\n\n" \
            "📌 *Indicatori da impostare sulla piattaforma:*\n" \
            "• **Canali Donchian**: Periodo `22`\n" \
-           "• **RSI**: Periodo `14` (o 20)\n\n" \
+           "• **RSI**: Periodo `14`\n\n" \
            "Scegli il tipo di candele da analizzare:"
     if msg_id:
         try: api_call("deleteMessage", {"chat_id": chat_id, "message_id": msg_id})
@@ -427,7 +454,7 @@ def send_assets_menu(chat_id, category="real", page=0, msg_id=None):
         kb.append([{"text": "🔄 Cambia Strategia OTC", "callback_data": "otc_strategy_menu"}])
     kb.append([{"text": "≡ Torna al Menu Principale", "callback_data": "main_categories"}])
     
-    cat_nome = "REALE" if category == "real" else "OTC (3 Strategie Disponibili)"
+    cat_nome = "REALE" if category == "real" else "OTC (Feed Reale)"
     text = f"🇮🇹 SELEZIONA ‣ COPPIA DI VALUTE ({cat_nome})"
     if msg_id:
         try: api_call("deleteMessage", {"chat_id": chat_id, "message_id": msg_id})
@@ -445,13 +472,13 @@ def send_timeframe_menu(chat_id, asset_name, msg_id=None):
     }
     text = f"💹 Asset: *{asset_name}*\n\n🇮🇹 Seleziona la scadenza/timeframe desiderato:"
     if msg_id:
-        try: api_call("deleteMessage", {"chat_id": chat_id, "message_id": mid})
+        try: api_call("deleteMessage", {"chat_id": chat_id, "message_id": msg_id})
         except: pass
     send_message(chat_id, text, kb)
 
 @app.route('/')
 def index():
-    return "Bot operativo su Render!", 200
+    return "Bot operativo!", 200
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -491,9 +518,7 @@ def webhook():
                     "📌 *Indicatori da impostare sulla piattaforma:*\n"
                     "• **Bande di Bollinger**: Periodo `10`, Deviazione `1.5`\n"
                     "• **CCI**: Periodo `14`\n"
-                    "• **RSI**: Periodo `10` o `14`\n\n"
-                    "🎯 *Regola operativa:*\n"
-                    "Segnale di acquisto/vendita basato sul tocco delle bande esterne confermato da CCI e RSI."
+                    "• **RSI**: Periodo `10` o `14`"
                 )
                 try: api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
                 except: pass
@@ -508,12 +533,8 @@ def webhook():
                 rules_text = (
                     "⚙️ *STRATEGIA 3 - PARAMETRI E REGOLE* ⚙️\n\n"
                     "📌 *Indicatori da impostare sulla piattaforma:*\n"
-                    "• **Media Mobile 1 (SMA)**: Periodo `9`\n"
-                    "• **Media Mobile 2 (SMA)**: Periodo `3`\n"
-                    "• **Frattali**: Periodo `2`\n"
-                    "• **Momento**: Periodo `10`\n\n"
-                    "🎯 *Regola operativa:*\n"
-                    "Entra a favore dell'incrocio tra la SMA 3 e la SMA 9, confermato dalla tacca verde/rossa dell'indicatore Momento."
+                    "• **Media Mobile (SMA)**: Periodo `9` e `3`\n"
+                    "• **Momento**: Periodo `10`"
                 )
                 try: api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
                 except: pass
@@ -537,11 +558,15 @@ def webhook():
                 strategy = sel.get("strategy", "st1")
                 variant = sel.get("variant", "A")
                 
-                edit_message(cid, mid, f"⏳ Analisi automatica in corso per {ast} ({tf_selected})...")
+                edit_message(cid, mid, f"⏳ Analisi in corso per {ast} ({tf_selected})...")
                 
                 data = fetch_market_data(ast)
                 next_entry = get_next_entry_time(tf_selected)
                 
+                if data is None or data.empty:
+                    edit_message(cid, mid, "❌ Errore nel recupero dei dati di mercato. Riprova tra poco.")
+                    return "ok", 200
+
                 if strategy == "st2":
                     action, ind_val, close = get_strategy_2_signal(data)
                     strat_label = "Strategia 2 (Bollinger + CCI + RSI)"
@@ -569,15 +594,11 @@ def webhook():
                     ]
                 }
                 
-                # INVIO CONDIZIONALE: Solo sul mercato Reale viene inviato il grafico, su OTC solo testo
-                if is_otc_asset:
-                    send_message(cid, signal_text, reply_kb)
+                buf = generate_chart_image(data, ast, strategy, variant)
+                if buf:
+                    send_photo_message(cid, buf, signal_text, reply_kb)
                 else:
-                    buf = generate_chart_image(data, ast, strategy, variant)
-                    if buf:
-                        send_photo_message(cid, buf, signal_text, reply_kb)
-                    else:
-                        send_message(cid, signal_text, reply_kb)
+                    send_message(cid, signal_text, reply_kb)
 
         elif "message" in up:
             msg = up["message"]
