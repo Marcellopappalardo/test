@@ -1,8 +1,9 @@
-Flask
+flask
 requests
 pandas
 numpy
 matplotlib
 mplfinance
 google-generativeai
-gunicorn
+Pillow
+gunicorn 
