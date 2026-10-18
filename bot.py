@@ -141,7 +141,7 @@ def edit_message(chat_id, msg_id, text, markup=None):
 def answer_callback(cq_id):
     api_call("answerCallbackQuery", {"callback_query_id": cq_id})
 
-# --- FUNZIONE ANALISI SCREENSHOT CON CONTROLLO LIMITE GIORNALIERO ---
+# --- FUNZIONE ANALISI SCREENSHOT CON GESTIONE QUOTA & LIMITE ---
 
 def handle_chart_image(message, chat_id):
     # 1. Protezione Anti-Loop (Blocco simultaneo)
@@ -201,10 +201,27 @@ def handle_chart_image(message, chat_id):
             "- Motivazione tecnica: [Massimo 2 righe con trend, pattern o livelli chiave]"
         )
 
-        response = gemini_client.models.generate_content(
-            model="gemini-3.8-flash",
-            contents=[image, prompt]
-        )
+        try:
+            response = gemini_client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=[image, prompt]
+            )
+        except Exception as api_err:
+            error_str = str(api_err)
+            if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
+                italian_tz = timezone(timedelta(hours=2))
+                tomorrow_midnight = (datetime.now(italian_tz) + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+                reset_time_str = tomorrow_midnight.strftime("%H:%M")
+                
+                msg_quota = (
+                    "⚠️ **Limite API di Gemini Raggiunto (Quota Esaurita)**\n\n"
+                    "Il sistema ha esaurito temporaneamente le richieste gratuite disponibili per l'intelligenza artificiale.\n\n"
+                    f"🕒 **Il servizio si riattiverà automaticamente alle ore {reset_time_str}** o ricaricando la quota del piano."
+                )
+                send_message(chat_id, msg_quota)
+                return
+            else:
+                raise api_err
         
         if response and response.text:
             # Consuma il credito SOLO ad analisi avvenuta con successo
@@ -220,7 +237,7 @@ def handle_chart_image(message, chat_id):
     finally:
         user_processing_lock[chat_id] = False
 
-# --- RESTO DEL CODICE PER MERCATI E MENU ---
+# --- INDICATORI E CALCOLI TECNICI ---
 
 def detect_candlestick_pattern(df):
     try:
