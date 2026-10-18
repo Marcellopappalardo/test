@@ -156,6 +156,11 @@ def handle_chart_image(message, chat_id):
         else:
             send_message(chat_id, "⚠️ Gemini ha restituito una risposta vuota.")
 
+        # --- ELIMINAZIONE AUTOMATICA DELLA FOTO DOPO L'INVIO DELL'ANALISI ---
+        msg_id = message.get("message_id")
+        if msg_id:
+            api_call("deleteMessage", {"chat_id": chat_id, "message_id": msg_id})
+
     except Exception as e:
         error_msg = str(e)
         print("ERRORE CRITICO VISION:", error_msg)
