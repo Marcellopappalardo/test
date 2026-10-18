@@ -136,12 +136,13 @@ def handle_chart_image(message, chat_id):
         image = Image.open(io.BytesIO(image_bytes))
 
         prompt = (
-            "Sei un trader professionista di opzioni binarie specializzato sulla piattaforma Pocket Option. "
-            "Analizza questo screenshot del grafico e fornisci:\n\n"
-            "1. **ASSET E TIMEFRAME**: Identifica l'asset e il timeframe visibile.\n"
-            "2. **DIREZIONE**: Indica chiaramente il segnale operativo con '🟢 ACQUISTA (BUY)' oppure '🔴 VENDI (SELL)'.\n"
-            "3. **ORARIO ESATTO DI INGRESSO**: Leggi l'orologio/orario o il timer nell'immagine e indica l'ora esatta al minuto/secondo in cui entrare a mercato (es. 'Ingresso alla chiusura della candela delle ore XX:XX:00').\n"
-            "4. **MOTIVAZIONE**: Spiegazione tecnica sintetica (supporti, resistenze, price action)."
+            "Sei un trader professionista di opzioni binarie. "
+            "Analizza questo screenshot del grafico e struttura la risposta esattamente in questo modo:\n\n"
+            "🎯 **SEGNALE**: [Scrivi '🟢 ACQUISTA (BUY)' oppure '🔴 VENDI (SELL)']\n"
+            "⏰ **ORARIO ESATTO DI INGRESSO**: [Scrivi l'orario esatto al secondo letto dal timer/orologio nell'immagine]\n\n"
+            "📊 **ANALISI SINTETICA**: \n"
+            "- Asset e Timeframe: [Indicali in breve]\n"
+            "- Motivazione tecnica: [Massimo 2 righe con trend, pattern o livelli chiave]"
         )
 
         # Chiamata API aggiornata con il modello gemini-3.8-flash richiesto da Google
