@@ -5,6 +5,7 @@ import time
 import io
 import re
 import traceback
+from PIL import Image
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -131,7 +132,7 @@ def handle_chart_image(message, chat_id):
         image_bytes = img_response.content
         send_message(chat_id, "🔍 *Analisi visiva in corso... Calcolo direzione e orario esatto di ingresso...*")
 
-        # Conversione dei byte in oggetto PIL Image compatibile con la nuova libreria google-genai
+        # Conversione dei byte in oggetto PIL Image compatibile
         image = Image.open(io.BytesIO(image_bytes))
 
         prompt = (
