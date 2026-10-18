@@ -5,7 +5,7 @@ import time
 import io
 import re
 import traceback
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -101,7 +101,7 @@ def edit_message(chat_id, msg_id, text, markup=None):
 def answer_callback(cq_id):
     api_call("answerCallbackQuery", {"callback_query_id": cq_id})
 
-# --- FUNZIONE ANALISI E RISTRUTTURAZIONE GRAFICA CON GEMINI 3.8-flash ---
+# --- FUNZIONE ANALISI SCREENSHOT CON GEMINI VISION AGGIORNATA ---
 
 def handle_chart_image(message, chat_id):
     try:
@@ -130,71 +130,38 @@ def handle_chart_image(message, chat_id):
             return
 
         image_bytes = img_response.content
-        processing_msg_id = send_message(chat_id, "🔍 *Elaborazione grafica e analisi con Gemini 3.8 in corso...*")
+        send_message(chat_id, "🔍 *Analisi visiva in corso... Calcolo direzione e orario esatto di ingresso...*")
 
-        # Carichiamo l'immagine con PIL per poterla modificare fisicamente
-        img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-        draw = ImageDraw.Draw(img)
-        width, height = img.size
-
-        # Calcoliamo l'orario esatto del minuto successivo in Italia (UTC+2)
-        italian_tz = timezone(timedelta(hours=2))
-        current_it_time = datetime.now(italian_tz)
-        entry_time = (current_it_time + timedelta(minutes=1)).replace(second=0, microsecond=0).strftime('%H:%M:%S')
+        # Conversione dei byte in oggetto PIL Image compatibile
+        image = Image.open(io.BytesIO(image_bytes))
 
         prompt = (
             "Sei un trader professionista di opzioni binarie. "
-            "Analizza questo screenshot del grafico e restituisci un'analisi tecnica.\n"
-            f"Usa tassativamente questo orario esatto di ingresso: {entry_time}\n\n"
-            "Rispondi ESATTAMENTE in questo formato:\n"
-            "SEGNALE: BUY oppure SELL\n"
-            "MOTIVAZIONE: [Massimo 6 parole chiave]"
+            "Analizza questo screenshot del grafico e struttura la risposta esattamente in questo modo:\n\n"
+            "🎯 **SEGNALE**: [Scrivi '🟢 ACQUISTA (BUY)' oppure '🔴 VENDI (SELL)']\n"
+            "⏰ **ORARIO ESATTO DI INGRESSO**: [Scrivi l'orario esatto al secondo letto dal timer/orologio nell'immagine]\n\n"
+            "📊 **ANALISI SINTETICA**: \n"
+            "- Asset e Timeframe: [Indicali in breve]\n"
+            "- Motivazione tecnica: [Massimo 2 righe con trend, pattern o livelli chiave]"
         )
 
+        # Chiamata API aggiornata con il modello gemini-3.8-flash richiesto da Google
         response = gemini_client.models.generate_content(
             model="gemini-3.8-flash",
-            contents=[img, prompt]
+            contents=[image, prompt]
         )
         
-        analysis_text = response.text if response and response.text else "SEGNALE: BUY\nMOTIVAZIONE: Trend Rialzista"
-        
-        is_buy = "BUY" in analysis_text.upper() or "ACQUISTA" in analysis_text.upper()
-        signal_color = (0, 230, 118) if is_buy else (255, 82, 82) # Verde o Rosso RGB
-        signal_text_ui = "🟢 ACQUISTA (BUY)" if is_buy else "🔴 VENDI (SELL)"
-
-        # RISTRUTTURAZIONE GRAFICA SULL'IMMAGINE
-        banner_height = 90
-        draw.rectangle([(0, 0), (width, banner_height)], fill=(30, 30, 30))
-        draw.rectangle([(0, banner_height - 6), (width, banner_height)], fill=signal_color)
-
-        try:
-            font_large = ImageFont.load_default()
-        except:
-            font_large = None
-
-        draw.text((20, 15), f"SEGNALE: {signal_text_ui}", fill=signal_color, font=font_large)
-        draw.text((20, 45), f"INGRESSO ESATTO: {entry_time}", fill=(255, 255, 255), font=font_large)
-
-        # Salviamo l'immagine modificata in un buffer
-        output_buf = io.BytesIO()
-        img.save(output_buf, format='PNG')
-        output_buf.seek(0)
-
-        if processing_msg_id:
-            api_call("deleteMessage", {"chat_id": chat_id, "message_id": processing_msg_id})
-        
-        caption = f"🎯 **SEGNALE**: {signal_text_ui}\n" \
-                  f"⏰ **ORARIO ESATTO DI INGRESSO**: `{entry_time}`\n\n" \
-                  f"📊 **ANALISI TECNICA RISTRUTTURATA**:\n`{analysis_text}`"
-
-        send_photo_message(chat_id, output_buf, caption)
+        if response and response.text:
+            send_message(chat_id, response.text)
+        else:
+            send_message(chat_id, "⚠️ Gemini ha restituito una risposta vuota.")
 
     except Exception as e:
         error_msg = str(e)
-        print("ERRORE CRITICO MODIFICA GRAFICO:", error_msg)
-        send_message(chat_id, f"⚠️ Errore nell'elaborazione grafica dell'immagine:\n`{error_msg}`")
+        print("ERRORE CRITICO VISION:", error_msg)
+        send_message(chat_id, f"⚠️ Errore tecnico nell'elaborazione dell'immagine:\n`{error_msg}`")
 
-# --- FUNZIONI DI MERCATO E GRAFICI ---
+# --- RESTO DELLE FUNZIONALITÀ DI MERCATO E MENU ---
 
 def detect_candlestick_pattern(df):
     try:
@@ -282,7 +249,7 @@ def generate_chart_image(df, asset_name, target_entry_time=None):
                 h, m = int(dt_parts[0]), int(dt_parts[1])
                 df_clean = df_clean[
                     (df_clean.index.hour < h) | 
-                    ((df_clean.index.hour == h) & (df_clean.index.minute <= m))
+                    ((df_clean.index.hour == h) & (df_clean.index.minute < m))
                 ]
             except Exception as e:
                 print("Errore nel taglio temporale del grafico:", e)
@@ -319,7 +286,7 @@ def generate_chart_image(df, asset_name, target_entry_time=None):
         buf = io.BytesIO()
         fig, axes = mpf.plot(
             df_plot, type='candle', style=custom_style, addplot=add_plots,
-            title=f"\nAnalisi Tecnica + Fractal Chaos Bands: {asset_name}", volume=False,
+            title=f"\nAnalisi Tecnica + Fractal Chaos Bands (P2): {asset_name}", volume=False,
             figsize=(8, 4.5), returnfig=True, panel_ratios=(1,)
         )
         fig.savefig(buf, format='png', facecolor='#1e1e1e', edgecolor='none', bbox_inches='tight', dpi=100)
@@ -564,6 +531,7 @@ def webhook():
     }
     if up:
         try:
+            # GESTIONE FOTO INVIATE A TELEGRAM
             if "message" in up and "photo" in up["message"]:
                 msg = up["message"]
                 cid = msg["chat"]["id"]
@@ -678,7 +646,6 @@ def webhook():
                     text += f"📌 Ora Esatta Ingresso: `{entry_time}`"
                     
                     kb = {"inline_keyboard": [[{"text": "🔄 Aggiorna", "callback_data": "retry_" + ast_name + "_" + exp_key}], [{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
-                    
                     chart_buf = generate_chart_image(data, ast_name, target_entry_time=entry_time)
                     
                     api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
