@@ -23,14 +23,15 @@ app = Flask(__name__)
 TG_TOKEN = "8585533636:AAE_J2ospaddCWva9gPHzE26dCp2_WaziLk"
 BASE_URL = "https://api.telegram.org/bot" + TG_TOKEN
 
-# CONFIGURAZIONE GEMINI API KEY
-GEMINI_API_KEY = "AQ.Ab8RN6IDlTHsxy-8n-Uie0x-MQsFt3F22lNlqhIwA-Mg13XDLA"
-genai.configure(api_key=GEMINI_API_KEY)
+# CONFIGURAZIONE PULITA: Legge la chiave esclusivamente dalle variabili d'ambiente di Render
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
 
 gemini_model = genai.GenerativeModel('gemini-1.5-flash')
 
 market_cache = {}
-CACHE_DURATION = 60 # Ridotto a 60 secondi per mantenere il real-time
+CACHE_DURATION = 60
 
 REAL_ASSETS = [
     "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD", "AUD/CAD", "USD/CHF",
@@ -102,6 +103,10 @@ def answer_callback(cq_id):
 
 def handle_chart_image(message, chat_id):
     try:
+        if not GEMINI_API_KEY:
+            send_message(chat_id, "⚠️ Errore: Chiave GEMINI_API_KEY non configurata nelle variabili d'ambiente di Render.")
+            return
+
         photo_list = message.get("photo", [])
         if not photo_list:
             send_message(chat_id, "⚠️ Nessuna foto rilevata nel messaggio.")
@@ -123,7 +128,7 @@ def handle_chart_image(message, chat_id):
             return
 
         image_bytes = img_response.content
-        send_message(chat_id, "🔍 *Analisi tecnica dello screenshot Pocket Option in corso...*")
+        send_message(chat_id, "🔍 *Analisi visiva in corso... Calcolo direzione e orario esatto di ingresso...*")
 
         image_part = {
             "mime_type": "image/jpeg",
@@ -131,10 +136,12 @@ def handle_chart_image(message, chat_id):
         }
 
         prompt = (
-            "Sei un trader professionista di opzioni binarie. Analizza questo screenshot della piattaforma Pocket Option[span_1](start_span)[span_1](end_span). "
-            "1. Identifica l'asset e il timeframe visibile[span_2](start_span)[span_2](end_span). "
-            "2. Fai una rapida analisi tecnica del trend attuale (supporti, resistenze, azione delle candele)[span_3](start_span)[span_3](end_span). "
-            "3. Dammi un segnale di ingresso chiaro per una scadenza a 1 minuto specificando se conviene fare ACQUISTA (BUY) o VENDI (SELL) e motiva la risposta in modo sintetico[span_4](start_span)[span_4](end_span)."
+            "Sei un trader professionista di opzioni binarie specializzato sulla piattaforma Pocket Option[span_0](start_span)[span_0](end_span). "
+            "Analizza questo screenshot del grafico e fornisci:\n\n"
+            "1. **ASSET E TIMEFRAME**: Identifica l'asset e il timeframe visibile[span_1](start_span)[span_1](end_span).\n"
+            "2. **DIREZIONE**: Indica chiaramente il segnale operativo con '🟢 ACQUISTA (BUY)' oppure '🔴 VENDI (SELL)[span_2](start_span)'[span_2](end_span).\n"
+            "3. **ORARIO ESATTO DI INGRESSO**: Leggi l'orologio/orario o il timer nell'immagine e indica l'ora esatta al minuto/secondo in cui entrare a mercato (es. 'Ingresso alla chiusura della candela delle ore XX:XX:00').\n"
+            "4. **MOTIVAZIONE**: Spiegazione tecnica sintetica (supporti, resistenze, price action)[span_3](start_span)[span_3](end_span)."
         )
 
         response = gemini_model.generate_content([prompt, image_part])
@@ -455,7 +462,7 @@ def send_category_menu(chat_id, msg_id=None):
             [{"text": "📊 Mercato OTC (Guida Visiva)", "callback_data": "cat_otc_0"}]
         ]
     }
-    text = "👋 **Seleziona la categoria di mercato o invia uno screenshot del grafico Pocket Option per un'analisi IA immediata:**"
+    text = "👋 **Seleziona la categoria di mercato o invia uno screenshot del grafico Pocket Option per un'analisi IA immediata (con direzione e orario di ingresso):**"
     if msg_id:
         try: edit_message(chat_id, msg_id, text, kb)
         except: send_message(chat_id, text, kb)
