@@ -4,6 +4,6 @@ pandas
 numpy
 matplotlib
 mplfinance
-google-generativeai
+google-genai
 Pillow
-gunicorn 
+gunicorn
