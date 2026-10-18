@@ -146,7 +146,7 @@ def handle_chart_image(message, chat_id):
         )
 
         response = gemini_client.models.generate_content(
-            model="gemini-flash-latest",
+            model="gemini-4-flash",
             contents=[image, prompt]
         )
         
