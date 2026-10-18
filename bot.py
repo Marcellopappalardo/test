@@ -101,7 +101,7 @@ def edit_message(chat_id, msg_id, text, markup=None):
 def answer_callback(cq_id):
     api_call("answerCallbackQuery", {"callback_query_id": cq_id})
 
-# --- FUNZIONE ANALISI SCREENSHOT CON GEMINI VISION AGGIORNATA ---
+# --- FUNZIONE ANALISI SCREENSHOT CON GESTIONE ERRORE QUOTA (429) ---
 
 def handle_chart_image(message, chat_id):
     try:
@@ -130,9 +130,8 @@ def handle_chart_image(message, chat_id):
             return
 
         image_bytes = img_response.content
-        send_message(chat_id, "🔍 *Analisi visiva in corso... Calcolo direzione e orario esatto di ingresso...*")
+        processing_msg_id = send_message(chat_id, "🔍 *Analisi visiva in corso... Calcolo direzione e orario esatto di ingresso...*")
 
-        # Conversione dei byte in oggetto PIL Image compatibile
         image = Image.open(io.BytesIO(image_bytes))
 
         prompt = (
@@ -145,26 +144,38 @@ def handle_chart_image(message, chat_id):
             "- Motivazione tecnica: [Massimo 2 righe con trend, pattern o livelli chiave]"
         )
 
-        # Chiamata API aggiornata con il modello gemini-3.8-flash richiesto da Google
         response = gemini_client.models.generate_content(
             model="gemini-3.8-flash",
             contents=[image, prompt]
         )
         
         if response and response.text:
-            send_message(chat_id, response.text)
+            if processing_msg_id:
+                edit_message(chat_id, processing_msg_id, response.text)
+            else:
+                send_message(chat_id, response.text)
         else:
-            send_message(chat_id, "⚠️ Gemini ha restituito una risposta vuota.")
-
-        # --- ELIMINAZIONE AUTOMATICA DELLA FOTO DOPO L'INVIO DELL'ANALISI ---
-        msg_id = message.get("message_id")
-        if msg_id:
-            api_call("deleteMessage", {"chat_id": chat_id, "message_id": msg_id})
+            if processing_msg_id:
+                edit_message(chat_id, processing_msg_id, "⚠️ Gemini ha restituito una risposta vuota.")
 
     except Exception as e:
         error_msg = str(e)
         print("ERRORE CRITICO VISION:", error_msg)
-        send_message(chat_id, f"⚠️ Errore tecnico nell'elaborazione dell'immagine:\n`{error_msg}`")
+        
+        # Controlla se è l'errore di quota esaurita (429 / RESOURCE_EXHAUSTED)
+        if "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg:
+            friendly_text = (
+                "⚠️ *Limite giornaliero raggiunto*\n\n"
+                "Ho completato il numero massimo di analisi di screenshot disponibili per oggi[span_1](start_span)[span_1](end_span).\n"
+                "🕒 Il servizio si riattiverà automaticamente nelle prossime ore o passando a un piano superiore."
+            )
+        else:
+            friendly_text = f"⚠️ Errore tecnico nell'elaborazione dell'immagine:\n`{error_msg}`"
+
+        if 'processing_msg_id' in locals() and processing_msg_id:
+            edit_message(chat_id, processing_msg_id, friendly_text)
+        else:
+            send_message(chat_id, friendly_text)
 
 # --- RESTO DELLE FUNZIONALITÀ DI MERCATO E MENU ---
 
