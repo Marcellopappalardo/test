@@ -98,6 +98,57 @@ def edit_message(chat_id, msg_id, text, markup=None):
 def answer_callback(cq_id):
     api_call("answerCallbackQuery", {"callback_query_id": cq_id})
 
+# --- FUNZIONE ANALISI SCREENSHOT CON GEMINI VISION ---
+
+def handle_chart_image(message, chat_id):
+    try:
+        photo_list = message.get("photo", [])
+        if not photo_list:
+            send_message(chat_id, "⚠️ Nessuna foto rilevata nel messaggio.")
+            return
+        
+        file_id = photo_list[-1]["file_id"]
+        
+        file_info_res = api_call("getFile", {"file_id": file_id})
+        if not file_info_res or not file_info_res.get("ok"):
+            send_message(chat_id, "⚠️ Errore Telegram: Impossibile recuperare il file.")
+            return
+            
+        file_path = file_info_res["result"]["file_path"]
+        download_url = f"https://api.telegram.org/file/bot{TG_TOKEN}/{file_path}"
+        
+        img_response = requests.get(download_url, timeout=10.0)
+        if img_response.status_code != 200:
+            send_message(chat_id, "⚠️ Errore download: Impossibile scaricare l'immagine.")
+            return
+
+        image_bytes = img_response.content
+        send_message(chat_id, "🔍 *Analisi tecnica dello screenshot Pocket Option in corso...*")
+
+        image_part = {
+            "mime_type": "image/jpeg",
+            "data": image_bytes
+        }
+
+        prompt = (
+            "Sei un trader professionista di opzioni binarie. Analizza questo screenshot della piattaforma Pocket Option[span_1](start_span)[span_1](end_span). "
+            "1. Identifica l'asset e il timeframe visibile[span_2](start_span)[span_2](end_span). "
+            "2. Fai una rapida analisi tecnica del trend attuale (supporti, resistenze, azione delle candele)[span_3](start_span)[span_3](end_span). "
+            "3. Dammi un segnale di ingresso chiaro per una scadenza a 1 minuto specificando se conviene fare ACQUISTA (BUY) o VENDI (SELL) e motiva la risposta in modo sintetico[span_4](start_span)[span_4](end_span)."
+        )
+
+        response = gemini_model.generate_content([prompt, image_part])
+        
+        if response and response.text:
+            send_message(chat_id, response.text)
+        else:
+            send_message(chat_id, "⚠️ Gemini ha restituito una risposta vuota.")
+
+    except Exception as e:
+        error_msg = str(e)
+        print("ERRORE CRITICO VISION:", error_msg)
+        send_message(chat_id, f"⚠️ Errore tecnico nell'elaborazione dell'immagine:\n`{error_msg}`")
+
 # --- FUNZIONALITÀ MERCATO REALE ---
 
 def detect_candlestick_pattern(df):
@@ -404,7 +455,7 @@ def send_category_menu(chat_id, msg_id=None):
             [{"text": "📊 Mercato OTC (Guida Visiva)", "callback_data": "cat_otc_0"}]
         ]
     }
-    text = "👋 **Seleziona la categoria di mercato:**"
+    text = "👋 **Seleziona la categoria di mercato o invia uno screenshot del grafico Pocket Option per un'analisi IA immediata:**"
     if msg_id:
         try: edit_message(chat_id, msg_id, text, kb)
         except: send_message(chat_id, text, kb)
@@ -468,6 +519,13 @@ def webhook():
     }
     if up:
         try:
+            # GESTIONE FOTO INVIATE A TELEGRAM
+            if "message" in up and "photo" in up["message"]:
+                msg = up["message"]
+                cid = msg["chat"]["id"]
+                handle_chart_image(msg, cid)
+                return "ok", 200
+
             if "callback_query" in up:
                 cq = up["callback_query"]
                 cid, mid, val = cq["message"]["chat"]["id"], cq["message"]["message_id"], cq["data"]
@@ -500,9 +558,6 @@ def webhook():
                         user_selection[cid] = {"asset": ast, "cat": "otc"}
                         send_expiry_menu(cid, ast, mid, is_otc=True)
 
-                # ==========================================
-                # --- MERCATO REALE (COMPLETAMENTE AUTOMATICO) ---
-                # ==========================================
                 elif val.startswith("exp_r_") or val.startswith("retry_"):
                     if val.startswith("exp_r_"):
                         exp_key = val.split("_")[2]
@@ -587,11 +642,6 @@ def webhook():
                     else:
                         send_message(cid, text, kb)
 
-                # ==========================================
-                # --- STRATEGIA VISIVA OTC (70 - 50 - 30) ---
-                # ==========================================
-
-                # Step 1 OTC: Selezione RSI (9) basata sulle linee 70-50-30 del broker
                 elif val.startswith("exp_o_"):
                     exp_key = val.split("_")[2]
                     sel = user_selection.get(cid, {})
@@ -611,7 +661,6 @@ def webhook():
                     }
                     edit_message(cid, mid, f"📊 **{ast_name} ({exp_map.get(exp_key, exp_key)})**\n\n**Step 1/2:** Guarda l'indicatore **RSI (9)** sul broker e seleziona dove si trova la linea in questo momento:", kb_rsi_levels)
 
-                # Step 2 OTC: Selezione del MACD
                 elif val.startswith("otc_rsi_"):
                     rsi_choice = val.replace("otc_rsi_", "")
                     if cid in user_otc_state:
@@ -627,7 +676,6 @@ def webhook():
                         }
                         edit_message(cid, mid, "📊 **Step 2/2:** Qual è la situazione attuale del **MACD** sul broker?", kb_macd_3)
 
-                # Calcolo finale del segnale OTC
                 elif val.startswith("otc_macd_"):
                     macd_choice = val.replace("otc_macd_", "")
                     if cid in user_otc_state:
@@ -655,7 +703,6 @@ def webhook():
                             "pending": "In fase di formazione ⏳"
                         }
                         
-                        # Logica di confluenza OTC basata sui livelli reali
                         if rsi_choice == "over70" or macd_choice == "bear":
                             if rsi_choice == "under30" and macd_choice == "bull":
                                 sig_type = "ACQUISTA (BUY)"
