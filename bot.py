@@ -15,8 +15,8 @@ import requests
 import pandas as pd
 import numpy as np
 
-# Importa la libreria di Google Generative AI
-import google.generativeai as genai
+# Importa l'SDK ufficiale aggiornato di Google GenAI
+from google import genai
 
 app = Flask(__name__)
 
@@ -25,10 +25,11 @@ BASE_URL = "https://api.telegram.org/bot" + TG_TOKEN
 
 # CONFIGURAZIONE PULITA: Legge la chiave esclusivamente dalle variabili d'ambiente di Render
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
 
-gemini_model = genai.GenerativeModel('gemini-1.5-flash')
+# Inizializzazione corretta del client Gemini
+gemini_client = None
+if GEMINI_API_KEY:
+    gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
 market_cache = {}
 CACHE_DURATION = 60
@@ -99,11 +100,11 @@ def edit_message(chat_id, msg_id, text, markup=None):
 def answer_callback(cq_id):
     api_call("answerCallbackQuery", {"callback_query_id": cq_id})
 
-# --- FUNZIONE ANALISI SCREENSHOT CON GEMINI VISION ---
+# --- FUNZIONE ANALISI SCREENSHOT CON GEMINI VISION AGGIORNATA ---
 
 def handle_chart_image(message, chat_id):
     try:
-        if not GEMINI_API_KEY:
+        if not gemini_client:
             send_message(chat_id, "⚠️ Errore: Chiave GEMINI_API_KEY non configurata nelle variabili d'ambiente di Render.")
             return
 
@@ -130,21 +131,23 @@ def handle_chart_image(message, chat_id):
         image_bytes = img_response.content
         send_message(chat_id, "🔍 *Analisi visiva in corso... Calcolo direzione e orario esatto di ingresso...*")
 
-        image_part = {
-            "mime_type": "image/jpeg",
-            "data": image_bytes
-        }
+        # Conversione dei byte in oggetto PIL Image compatibile con la nuova libreria google-genai
+        image = Image.open(io.BytesIO(image_bytes))
 
         prompt = (
             "Sei un trader professionista di opzioni binarie specializzato sulla piattaforma Pocket Option[span_0](start_span)[span_0](end_span). "
             "Analizza questo screenshot del grafico e fornisci:\n\n"
             "1. **ASSET E TIMEFRAME**: Identifica l'asset e il timeframe visibile[span_1](start_span)[span_1](end_span).\n"
             "2. **DIREZIONE**: Indica chiaramente il segnale operativo con '🟢 ACQUISTA (BUY)' oppure '🔴 VENDI (SELL)[span_2](start_span)'[span_2](end_span).\n"
-            "3. **ORARIO ESATTO DI INGRESSO**: Leggi l'orologio/orario o il timer nell'immagine e indica l'ora esatta al minuto/secondo in cui entrare a mercato (es. 'Ingresso alla chiusura della candela delle ore XX:XX:00').\n"
-            "4. **MOTIVAZIONE**: Spiegazione tecnica sintetica (supporti, resistenze, price action)[span_3](start_span)[span_3](end_span)."
+            "3. **ORARIO ESATTO DI INGRESSO**: Leggi l'orologio/orario o il timer nell'immagine e indica l'ora esatta al minuto/secondo in cui entrare a mercato (es. 'Ingresso alla chiusura della candela delle ore XX:XX:00')[span_3](start_span)[span_3](end_span).\n"
+            "4. **MOTIVAZIONE**: Spiegazione tecnica sintetica (supporti, resistenze, price action)[span_4](start_span)[span_4](end_span)."
         )
 
-        response = gemini_model.generate_content([prompt, image_part])
+        # Chiamata API corretta tramite il nuovo client e modello gemini-1.5-flash
+        response = gemini_client.models.generate_content(
+            model="gemini-1.5-flash",
+            contents=[image, prompt]
+        )
         
         if response and response.text:
             send_message(chat_id, response.text)
@@ -156,7 +159,7 @@ def handle_chart_image(message, chat_id):
         print("ERRORE CRITICO VISION:", error_msg)
         send_message(chat_id, f"⚠️ Errore tecnico nell'elaborazione dell'immagine:\n`{error_msg}`")
 
-# --- FUNZIONALITÀ MERCATO REALE ---
+# --- RESTO DELLE FUNZIONALITÀ DI MERCATO E MENU ---
 
 def detect_candlestick_pattern(df):
     try:
