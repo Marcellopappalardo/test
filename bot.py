@@ -791,4 +791,11 @@ if RENDER_URL:
         print("⚠️ Errore impostazione automatica webhook:", e)
 
 if __name__ == "__main__":
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
+    port = int(os.environ.get('PORT', 5000))
+    while True:
+        try:
+            print(f"🚀 Avvio del server Flask sulla porta {port}...")
+            app.run(host='0.0.0.0', port=port)
+        except Exception as e:
+            print(f"⚠️ Errore critico nel server, riavvio automatico... Dettagli: {e}")
+            time.sleep(3)
