@@ -144,7 +144,7 @@ def handle_chart_image(message, chat_id):
 
         # Chiamata corretta tramite il nuovo client google-genai
         response = gemini_client.models.generate_content(
-            model="gemini-1.5-flash",
+            model="gemini-2.5-flash",
             contents=[image, prompt]
         )
         
