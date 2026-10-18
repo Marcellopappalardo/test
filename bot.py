@@ -24,16 +24,56 @@ app = Flask(__name__)
 TG_TOKEN = "8585533636:AAE_J2ospaddCWva9gPHzE26dCp2_WaziLk"
 BASE_URL = "https://api.telegram.org/bot" + TG_TOKEN
 
-# CONFIGURAZIONE PULITA: Legge la chiave esclusivamente dalle variabili d'ambiente di Render
+# CONFIGURAZIONE: Legge la chiave esclusivamente dalle variabili d'ambiente di Render
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
-# Inizializzazione corretta del client Gemini
+# Inizializzazione del client Gemini
 gemini_client = None
 if GEMINI_API_KEY:
     gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
 market_cache = {}
 CACHE_DURATION = 60
+
+# --- GESTIONE CREDITI E LIMITE GIORNALIERO ---
+MAX_DAILY_ANALYSIS = 10  # Numero massimo di analisi giornaliere per utente
+user_daily_usage = {}   # Dizionario per memorizzare conteggio e data dell'utente
+user_processing_lock = {}  # Blocco anti-loop
+
+def check_and_update_credits(chat_id):
+    """
+    Verifica se l'utente ha superato il limite giornaliero.
+    Restituisce (can_proceed, remaining_credits, reset_time_str).
+    """
+    italian_tz = timezone(timedelta(hours=2))
+    now = datetime.now(italian_tz)
+    today_str = now.strftime("%Y-%m-%d")
+    
+    # Calcola l'orario di reset (mezzanotte del giorno successivo)
+    tomorrow_midnight = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    reset_time_str = tomorrow_midnight.strftime("%H:%M")
+
+    user_data = user_daily_usage.get(chat_id, {"date": today_str, "count": 0})
+
+    # Reset del contatore se è iniziato un nuovo giorno
+    if user_data["date"] != today_str:
+        user_data = {"date": today_str, "count": 0}
+
+    # Controlla se il limite è stato raggiunto
+    if user_data["count"] >= MAX_DAILY_ANALYSIS:
+        return False, 0, reset_time_str
+
+    return True, MAX_DAILY_ANALYSIS - user_data["count"], reset_time_str
+
+def consume_credit(chat_id):
+    """Incrementa il contatore delle analisi utilizzate dall'utente."""
+    italian_tz = timezone(timedelta(hours=2))
+    today_str = datetime.now(italian_tz).strftime("%Y-%m-%d")
+    
+    if chat_id not in user_daily_usage or user_daily_usage[chat_id]["date"] != today_str:
+        user_daily_usage[chat_id] = {"date": today_str, "count": 1}
+    else:
+        user_daily_usage[chat_id]["count"] += 1
 
 REAL_ASSETS = [
     "EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "USD/CAD", "AUD/CAD", "USD/CHF",
@@ -101,10 +141,27 @@ def edit_message(chat_id, msg_id, text, markup=None):
 def answer_callback(cq_id):
     api_call("answerCallbackQuery", {"callback_query_id": cq_id})
 
-# --- FUNZIONE ANALISI SCREENSHOT CON GESTIONE ERRORE QUOTA (429) ---
+# --- FUNZIONE ANALISI SCREENSHOT CON CONTROLLO LIMITE GIORNALIERO ---
 
 def handle_chart_image(message, chat_id):
+    # 1. Protezione Anti-Loop (Blocco simultaneo)
+    if user_processing_lock.get(chat_id, False):
+        return
+
     try:
+        user_processing_lock[chat_id] = True
+
+        # 2. Controllo Limite Giornaliero
+        can_proceed, remaining, reset_time = check_and_update_credits(chat_id)
+        if not can_proceed:
+            msg_stop = (
+                "⚠️ **Limite giornaliero raggiunto**\n\n"
+                "Ho completato il numero massimo di analisi di screenshot disponibili per oggi.\n\n"
+                f"🕒 **Il servizio si riattiverà automaticamente alle ore {reset_time}** o passando a un piano superiore."
+            )
+            send_message(chat_id, msg_stop)
+            return
+
         if not gemini_client:
             send_message(chat_id, "⚠️ Errore: Chiave GEMINI_API_KEY non configurata nelle variabili d'ambiente di Render.")
             return
@@ -130,7 +187,7 @@ def handle_chart_image(message, chat_id):
             return
 
         image_bytes = img_response.content
-        processing_msg_id = send_message(chat_id, "🔍 *Analisi visiva in corso... Calcolo direzione e orario esatto di ingresso...*")
+        send_message(chat_id, "🔍 *Analisi visiva in corso... Calcolo direzione e orario esatto di ingresso...*")
 
         image = Image.open(io.BytesIO(image_bytes))
 
@@ -150,34 +207,20 @@ def handle_chart_image(message, chat_id):
         )
         
         if response and response.text:
-            if processing_msg_id:
-                edit_message(chat_id, processing_msg_id, response.text)
-            else:
-                send_message(chat_id, response.text)
+            # Consuma il credito SOLO ad analisi avvenuta con successo
+            consume_credit(chat_id)
+            send_message(chat_id, response.text)
         else:
-            if processing_msg_id:
-                edit_message(chat_id, processing_msg_id, "⚠️ Gemini ha restituito una risposta vuota.")
+            send_message(chat_id, "⚠️ Gemini ha restituito una risposta vuota.")
 
     except Exception as e:
         error_msg = str(e)
         print("ERRORE CRITICO VISION:", error_msg)
-        
-        # Controlla se è l'errore di quota esaurita (429 / RESOURCE_EXHAUSTED)
-        if "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg:
-            friendly_text = (
-                "⚠️ *Limite giornaliero raggiunto*\n\n"
-                "Ho completato il numero massimo di analisi di screenshot disponibili per oggi[span_1](start_span)[span_1](end_span).\n"
-                "🕒 Il servizio si riattiverà automaticamente nelle prossime ore o passando a un piano superiore."
-            )
-        else:
-            friendly_text = f"⚠️ Errore tecnico nell'elaborazione dell'immagine:\n`{error_msg}`"
+        send_message(chat_id, f"⚠️ Errore tecnico nell'elaborazione dell'immagine:\n`{error_msg}`")
+    finally:
+        user_processing_lock[chat_id] = False
 
-        if 'processing_msg_id' in locals() and processing_msg_id:
-            edit_message(chat_id, processing_msg_id, friendly_text)
-        else:
-            send_message(chat_id, friendly_text)
-
-# --- RESTO DELLE FUNZIONALITÀ DI MERCATO E MENU ---
+# --- RESTO DEL CODICE PER MERCATI E MENU ---
 
 def detect_candlestick_pattern(df):
     try:
@@ -204,24 +247,16 @@ def detect_candlestick_pattern(df):
 def calculate_fractal_chaos_bands(df, period=2):
     highs = df['High']
     lows = df['Low']
-    if isinstance(highs, pd.DataFrame):
-        highs = highs.iloc[:, 0]
-    if isinstance(lows, pd.DataFrame):
-        lows = lows.iloc[:, 0]
+    if isinstance(highs, pd.DataFrame): highs = highs.iloc[:, 0]
+    if isinstance(lows, pd.DataFrame): lows = lows.iloc[:, 0]
 
-    upper_band = highs.rolling(window=(period * 2 + 1), center=True).max()
-    lower_band = lows.rolling(window=(period * 2 + 1), center=True).min()
-    
-    upper_band = upper_band.bfill().ffill()
-    lower_band = lower_band.bfill().ffill()
-    
+    upper_band = highs.rolling(window=(period * 2 + 1), center=True).max().bfill().ffill()
+    lower_band = lows.rolling(window=(period * 2 + 1), center=True).min().bfill().ffill()
     return upper_band, lower_band
 
 def calculate_indicators(df):
     close = df['Close']
-    if isinstance(close, pd.DataFrame):
-        close = close.iloc[:, 0]
-        
+    if isinstance(close, pd.DataFrame): close = close.iloc[:, 0]
     current_close = float(close.iloc[-1])
     delta = close.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=9).mean()
@@ -263,10 +298,7 @@ def generate_chart_image(df, asset_name, target_entry_time=None):
             try:
                 dt_parts = target_entry_time.split(":")
                 h, m = int(dt_parts[0]), int(dt_parts[1])
-                df_clean = df_clean[
-                    (df_clean.index.hour < h) | 
-                    ((df_clean.index.hour == h) & (df_clean.index.minute < m))
-                ]
+                df_clean = df_clean[(df_clean.index.hour < h) | ((df_clean.index.hour == h) & (df_clean.index.minute < m))]
             except Exception as e:
                 print("Errore nel taglio temporale del grafico:", e)
 
@@ -275,7 +307,6 @@ def generate_chart_image(df, asset_name, target_entry_time=None):
 
         close_series = df_clean['Close'].iloc[:, 0] if isinstance(df_clean['Close'], pd.DataFrame) else df_clean['Close']
         ema20_full = close_series.ewm(span=20, adjust=False).mean()
-        
         upper_f_full, lower_f_full = calculate_fractal_chaos_bands(df_clean, period=2)
 
         df_plot = df_clean.tail(30).copy()
@@ -315,26 +346,21 @@ def generate_chart_image(df, asset_name, target_entry_time=None):
         return None
 
 def force_realtime_last_candle(df):
-    if df is None or df.empty:
-        return df
+    if df is None or df.empty: return df
     try:
         last_close = float(df['Close'].iloc[-1])
         now_utc = datetime.now(timezone.utc).replace(second=0, microsecond=0)
         
         if df.index[-1] < pd.Timestamp(now_utc.replace(tzinfo=None)):
             new_row = pd.DataFrame({
-                'Open': [last_close],
-                'High': [last_close * 1.0001],
-                'Low': [last_close * 0.9999],
-                'Close': [last_close]
+                'Open': [last_close], 'High': [last_close * 1.0001],
+                'Low': [last_close * 0.9999], 'Close': [last_close]
             }, index=[pd.Timestamp(now_utc.replace(tzinfo=None))])
             df = pd.concat([df, new_row])
         else:
             df.iloc[-1, df.columns.get_loc('Close')] = last_close
-            if df.iloc[-1]['High'] < last_close:
-                df.iloc[-1, df.columns.get_loc('High')] = last_close
-            if df.iloc[-1]['Low'] > last_close:
-                df.iloc[-1, df.columns.get_loc('Low')] = last_close
+            if df.iloc[-1]['High'] < last_close: df.iloc[-1, df.columns.get_loc('High')] = last_close
+            if df.iloc[-1]['Low'] > last_close: df.iloc[-1, df.columns.get_loc('Low')] = last_close
     except Exception as e:
         print("Errore nella forzatura real-time candela:", e)
     return df
@@ -378,8 +404,7 @@ def fetch_coinbase_data(asset_name):
         df['Datetime'] = pd.to_datetime(df['time'], unit='s')
         df.set_index('Datetime', inplace=True)
         df = df.sort_index()
-        clean_df = df[['Open', 'High', 'Low', 'Close']].astype(float).dropna()
-        return force_realtime_last_candle(clean_df)
+        return force_realtime_last_candle(df[['Open', 'High', 'Low', 'Close']].astype(float).dropna())
     except:
         return None
 
@@ -395,8 +420,7 @@ def fetch_bitget_data(asset_name):
         df['Datetime'] = pd.to_datetime(df['timestamp'].astype(int), unit='ms')
         df.set_index('Datetime', inplace=True)
         df = df.sort_index()
-        clean_df = df[['Open', 'High', 'Low', 'Close']].astype(float).dropna()
-        return force_realtime_last_candle(clean_df)
+        return force_realtime_last_candle(df[['Open', 'High', 'Low', 'Close']].astype(float).dropna())
     except:
         return None
 
@@ -428,20 +452,9 @@ def fetch_yahoo_real_data(asset_name):
     current_time = time.time()
     if asset_name in market_cache:
         ts, cached_df = market_cache[asset_name]
-        if current_time - ts < CACHE_DURATION: 
-            return cached_df
+        if current_time - ts < CACHE_DURATION: return cached_df
 
-    df = fetch_binance_data(asset_name)
-    if df is not None and not df.empty:
-        market_cache[asset_name] = (current_time, df)
-        return df
-
-    df = fetch_coinbase_data(asset_name)
-    if df is not None and not df.empty:
-        market_cache[asset_name] = (current_time, df)
-        return df
-
-    df = fetch_bitget_data(asset_name)
+    df = fetch_binance_data(asset_name) or fetch_coinbase_data(asset_name) or fetch_bitget_data(asset_name)
     if df is not None and not df.empty:
         market_cache[asset_name] = (current_time, df)
         return df
@@ -456,22 +469,15 @@ def fetch_yahoo_real_data(asset_name):
         timestamps = result['timestamp']
         quote = result['indicators']['quote'][0]
         
-        df = pd.DataFrame({
-            'Open': quote['open'], 'High': quote['high'],
-            'Low': quote['low'], 'Close': quote['close']
-        }, index=pd.to_datetime(timestamps, unit='s'))
-        
+        df = pd.DataFrame({'Open': quote['open'], 'High': quote['high'], 'Low': quote['low'], 'Close': quote['close']}, index=pd.to_datetime(timestamps, unit='s'))
         clean_df = df.dropna()
-        if clean_df.empty: 
-            raise Exception("Dati vuoti")
-        
+        if clean_df.empty: raise Exception("Dati vuoti")
         clean_df = force_realtime_last_candle(clean_df)
         market_cache[asset_name] = (current_time, clean_df)
         return clean_df
     except Exception as e:
         print(f"Errore di recupero dati in tempo reale per {asset_name}: {e}")
-        if asset_name in market_cache: 
-            return market_cache[asset_name][1]
+        if asset_name in market_cache: return market_cache[asset_name][1]
         return None
 
 # --- MENU TELEGRAM ---
@@ -483,7 +489,7 @@ def send_category_menu(chat_id, msg_id=None):
             [{"text": "📊 Mercato OTC (Guida Visiva)", "callback_data": "cat_otc_0"}]
         ]
     }
-    text = "👋 **Seleziona la categoria di mercato o invia uno screenshot del grafico Pocket Option per un'analisi IA immediata (con direzione e orario di ingresso):**"
+    text = "👋 **Seleziona la categoria di mercato o invia uno screenshot del grafico Pocket Option per un'analisi IA immediata:**"
     if msg_id:
         try: edit_message(chat_id, msg_id, text, kb)
         except: send_message(chat_id, text, kb)
@@ -547,7 +553,6 @@ def webhook():
     }
     if up:
         try:
-            # GESTIONE FOTO INVIATE A TELEGRAM
             if "message" in up and "photo" in up["message"]:
                 msg = up["message"]
                 cid = msg["chat"]["id"]
@@ -566,15 +571,11 @@ def webhook():
                     
                 elif val.startswith("cat_"):
                     parts = val.split("_")
-                    category = parts[1]
-                    page = int(parts[2])
-                    send_assets_menu(cid, category, page, mid)
+                    send_assets_menu(cid, parts[1], int(parts[2]), mid)
                     
                 elif val.startswith("pg_"):
                     parts = val.split("_")
-                    category = parts[1]
-                    page = int(parts[2])
-                    send_assets_menu(cid, category, page, mid)
+                    send_assets_menu(cid, parts[1], int(parts[2]), mid)
 
                 elif val.startswith("ast_r_") or val.startswith("ast_o_"):
                     if val.startswith("ast_r_"):
@@ -601,7 +602,7 @@ def webhook():
                     
                     data = fetch_yahoo_real_data(ast_name)
                     if data is None or data.empty:
-                        error_text = f"⚠️ **Impossibile recuperare i dati per {ast_name}.**\n\nIl mercato potrebbe essere chiuso in questo momento."
+                        error_text = f"⚠️ **Impossibile recuperare i dati per {ast_name}.**\n\nIl mercato potrebbe essere chiuso."
                         error_kb = {"inline_keyboard": [[{"text": "🔄 Aggiorna", "callback_data": "retry_" + ast_name + "_" + exp_key}], [{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
                         edit_message(cid, mid, error_text, error_kb)
                         return "ok", 200
@@ -615,19 +616,16 @@ def webhook():
                     pattern_name = detect_candlestick_pattern(data)
                     
                     last_candle = data.iloc[-1]
-                    high_val = float(last_candle['High'])
-                    low_val = float(last_candle['Low'])
+                    high_val, low_val = float(last_candle['High']), float(last_candle['Low'])
 
                     upper_wick_rejection = (high_val >= upper_f) and (current_close < upper_f)
                     lower_wick_rejection = (low_val <= lower_f) and (current_close > lower_f)
 
                     trend_bullish = current_close > current_ema
                     if trend_bullish and (macd_line >= macd_signal or rsi_val < 48):
-                        sig_type = "ACQUISTA (BUY)"
-                        trend_desc = "Rialzista Forte 📈"
+                        sig_type, trend_desc = "ACQUISTA (BUY)", "Rialzista Forte 📈"
                     elif not trend_bullish and (macd_line <= macd_signal or rsi_val > 52):
-                        sig_type = "VENDI (SELL)"
-                        trend_desc = "Ribassista Forte 📉"
+                        sig_type, trend_desc = "VENDI (SELL)", "Ribassista Forte 📉"
                     else:
                         sig_type = "ACQUISTA (BUY)" if macd_line > macd_signal else "VENDI (SELL)"
                         trend_desc = "Laterale / Transizione ↔️"
@@ -640,9 +638,7 @@ def webhook():
                     rsi_confirmed = (rsi_val < 45 and "ACQUISTA" in sig_type) or (rsi_val > 55 and "VENDI" in sig_type)
                     conf_rsi = 10.0 if rsi_confirmed else 0.0
                     
-                    conf = round(base_conf + conf_trend + conf_macd + conf_fractal + conf_rsi, 1)
-                    conf = min(96.0, max(50.0, conf))
-                    
+                    conf = min(96.0, max(50.0, round(base_conf + conf_trend + conf_macd + conf_fractal + conf_rsi, 1)))
                     sig_emoji = "🟢" if "ACQUISTA" in sig_type else "🔴"
                     timeframe_name = exp_map.get(exp_key, "1 Minuto (M1)")
 
@@ -665,16 +661,13 @@ def webhook():
                     chart_buf = generate_chart_image(data, ast_name, target_entry_time=entry_time)
                     
                     api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
-                    if chart_buf:
-                        send_photo_message(cid, chart_buf, text, kb)
-                    else:
-                        send_message(cid, text, kb)
+                    if chart_buf: send_photo_message(cid, chart_buf, text, kb)
+                    else: send_message(cid, text, kb)
 
                 elif val.startswith("exp_o_"):
                     exp_key = val.split("_")[2]
                     sel = user_selection.get(cid, {})
                     ast_name = sel.get("asset", "EUR/USD OTC")
-                    
                     user_otc_state[cid] = {"asset": ast_name, "expiry": exp_key}
                     
                     kb_rsi_levels = {
@@ -693,7 +686,6 @@ def webhook():
                     rsi_choice = val.replace("otc_rsi_", "")
                     if cid in user_otc_state:
                         user_otc_state[cid]["rsi"] = rsi_choice
-                        
                         kb_macd_3 = {
                             "inline_keyboard": [
                                 [{"text": "🟢 Incrocio Rialzista", "callback_data": "otc_macd_bull"}],
@@ -708,75 +700,33 @@ def webhook():
                     macd_choice = val.replace("otc_macd_", "")
                     if cid in user_otc_state:
                         state = user_otc_state[cid]
-                        ast_name = state["asset"]
-                        exp_key = state["expiry"]
-                        rsi_choice = state["rsi"]
+                        ast_name, exp_key, rsi_choice = state["asset"], state["expiry"], state["rsi"]
                         user_otc_state.pop(cid, None)
                         
                         italian_tz = timezone(timedelta(hours=2))
-                        current_it_time = datetime.now(italian_tz)
-                        entry_time = (current_it_time + timedelta(minutes=1)).replace(second=0, microsecond=0).strftime('%H:%M:%S')
+                        entry_time = (datetime.now(italian_tz) + timedelta(minutes=1)).replace(second=0, microsecond=0).strftime('%H:%M:%S')
                         
-                        rsi_map = {
-                            "over70": "Sopra 70 (Ipercomprato 🔥)",
-                            "50_70": "Tra 50 e 70 (Zona Rialzista 📈)",
-                            "30_50": "Tra 30 e 50 (Zona Ribassista 📉)",
-                            "under30": "Sotto 30 (Ipervenduto ❄️)",
-                            "cross50": "Incrocio / Test della linea 50 ⚡"
-                        }
-                        
-                        macd_map = {
-                            "bull": "Incrocio Rialzista 🟢",
-                            "bear": "Incrocio Ribassista 🔴",
-                            "pending": "In fase di formazione ⏳"
-                        }
+                        rsi_map = {"over70": "Sopra 70 🔥", "50_70": "Tra 50 e 70 📈", "30_50": "Tra 30 e 50 📉", "under30": "Sotto 30 ❄️", "cross50": "Test linea 50 ⚡"}
+                        macd_map = {"bull": "Incrocio Rialzista 🟢", "bear": "Incrocio Ribassista 🔴", "pending": "In formazione ⏳"}
                         
                         if rsi_choice == "over70" or macd_choice == "bear":
                             if rsi_choice == "under30" and macd_choice == "bull":
-                                sig_type = "ACQUISTA (BUY)"
-                                sig_emoji = "🟢"
-                                trend_desc = "Rimbalzo da Ipervenduto 📈"
-                                pattern_name = "Reazione sui Minimi"
-                                conf = 91.0
+                                sig_type, sig_emoji, trend_desc, pattern_name, conf = "ACQUISTA (BUY)", "🟢", "Rimbalzo da Ipervenduto 📈", "Reazione sui Minimi", 91.0
                             elif rsi_choice == "over70":
-                                sig_type = "VENDI (SELL)"
-                                sig_emoji = "🔴"
-                                trend_desc = "Inversione da Ipercomprato 📉"
-                                pattern_name = "Rifiuto su Livello 70"
-                                conf = 90.0
+                                sig_type, sig_emoji, trend_desc, pattern_name, conf = "VENDI (SELL)", "🔴", "Inversione da Ipercomprato 📉", "Rifiuto su Livello 70", 90.0
                             else:
-                                sig_type = "VENDI (SELL)"
-                                sig_emoji = "🔴"
-                                trend_desc = "Spinta Ribassista 📉"
-                                pattern_name = "Continuazione Trend Sotto 50"
-                                conf = 85.0
+                                sig_type, sig_emoji, trend_desc, pattern_name, conf = "VENDI (SELL)", "🔴", "Spinta Ribassista 📉", "Continuazione Trend Sotto 50", 85.0
                         else:
                             if rsi_choice == "under30":
-                                sig_type = "ACQUISTA (BUY)"
-                                sig_emoji = "🟢"
-                                trend_desc = "Rimbalzo da Ipervenduto 📈"
-                                pattern_name = "Reazione sui Minimi"
-                                conf = 90.0
+                                sig_type, sig_emoji, trend_desc, pattern_name, conf = "ACQUISTA (BUY)", "🟢", "Rimbalzo da Ipervenduto 📈", "Reazione sui Minimi", 90.0
                             elif rsi_choice == "50_70" and macd_choice == "bull":
-                                sig_type = "ACQUISTA (BUY)"
-                                sig_emoji = "🟢"
-                                trend_desc = "Spinta Rialzista Forte 📈"
-                                pattern_name = "Continuazione Trend Sopra 50"
-                                conf = 88.0
+                                sig_type, sig_emoji, trend_desc, pattern_name, conf = "ACQUISTA (BUY)", "🟢", "Spinta Rialzista Forte 📈", "Continuazione Trend Sopra 50", 88.0
                             elif macd_choice == "bull":
-                                sig_type = "ACQUISTA (BUY)"
-                                sig_emoji = "🟢"
-                                trend_desc = "Spinta Rialzista 📈"
-                                pattern_name = "Incrocio Positivo"
-                                conf = 85.0
+                                sig_type, sig_emoji, trend_desc, pattern_name, conf = "ACQUISTA (BUY)", "🟢", "Spinta Rialzista 📈", "Incrocio Positivo", 85.0
                             else:
                                 sig_type = "VENDI (SELL)" if rsi_choice == "30_50" else "ACQUISTA (BUY)"
                                 sig_emoji = "🔴" if "VENDI" in sig_type else "🟢"
-                                trend_desc = "Fase di Transizione / Breakout ↔️"
-                                pattern_name = "Test Dinamico"
-                                conf = 78.0
-
-                        timeframe_name = exp_map.get(exp_key, "1 Minuto (M1)")
+                                trend_desc, pattern_name, conf = "Fase di Transizione ↔️", "Test Dinamico", 78.0
 
                         text = "🤖 **ANALISI OTC GUIDATA (STRATEGIA VISIVA 70-50-30)**\n\n"
                         text += f"💲💹 Asset: {ast_name}\n"
@@ -787,7 +737,7 @@ def webhook():
                         text += f"• RSI (9): {rsi_map.get(rsi_choice, rsi_choice)}\n"
                         text += f"• MACD: {macd_map.get(macd_choice, macd_choice)}\n\n"
                         text += f"⚖️ Affidabilità: {conf}%\n"
-                        text += f"⏱️ Timeframe: {timeframe_name}\n"
+                        text += f"⏱️ Timeframe: {exp_map.get(exp_key, '1 Minuto (M1)')}\n"
                         text += f"📌 Ora Esatta Ingresso: `{entry_time}`"
                         
                         kb = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
@@ -796,13 +746,8 @@ def webhook():
             elif "message" in up:
                 cid = up["message"]["chat"]["id"]
                 if "text" in up["message"]:
-                    txt_msg = up["message"]["text"].strip()
-                    if txt_msg == "/start":
-                        user_otc_state.pop(cid, None)
-                        user_selection.pop(cid, None)
-                        send_category_menu(cid)
-                        return "ok", 200
-
+                    user_otc_state.pop(cid, None)
+                    user_selection.pop(cid, None)
                     send_category_menu(cid)
                     return "ok", 200
         except Exception as e:
