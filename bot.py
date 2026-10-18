@@ -158,32 +158,8 @@ def handle_chart_image(message, chat_id):
 
     except Exception as e:
         error_msg = str(e)
-        # Intercetta l'errore 429 o RESOURCE_EXHAUSTED senza bisogno di moduli esterni
-        if "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg:
-            retry_match = re.search(r'retry in ([^\'"]+)', error_msg)
-            tempo_attesa = retry_match.group(1) if retry_match else "circa 3 ore (reset giornaliero)"
-
-            segnale_fallback = (
-                "🎯 **SEGNALE:** 🔴 VENDI (SELL)[span_0](start_span)[span_0](end_span)\n"
-                "⏰ **ORARIO ESATTO DI INGRESSO:** 11:37:14 UTC+2 *(alla chiusura della candela M1 in corso, secondo il timer residuo 00:46)*[span_1](start_span)[span_1](end_span)\n\n"
-                "📊 **ANALISI SINTETICA:**[span_2](start_span)[span_2](end_span)\n"
-                "- **Asset e Timeframe:** USD/CLP OTC, grafico a 1 minuto (M1), scadenza 1 minuto[span_3](start_span)[span_3](end_span).\n"
-                "- **Motivazione tecnica:** Respinta decisa dall'area di resistenza locale a 866.465 (doppio massimo), candela ribassista in rottura della media mobile con MACD che mostra incrocio verso il basso e RSI sotto quota 50[span_4](start_span)[span_4](end_span).\n\n"
-                "--- \n"
-                "⚠️ *Nota di gestione del rischio: Il trading su opzioni binarie e asset OTC comporta un elevatissimo rischio di perdita del capitale[span_5](start_span)[span_5](end_span).*"
-            )
-
-            messaggio_tecnico = (
-                f"⚠️ **Quota Giornaliera Esaurita (Errore 429 - Limit Reached)**\n\n"
-                f"Hai raggiunto il limite massimo di **20 richieste gratuite** previste dal sistema[span_6](start_span)[span_6](end_span).\n"
-                f"Il servizio tornerà operativo e disponibile il giorno successivo (o tra circa **{tempo_attesa}**)[span_7](start_span)[span_7](end_span).\n\n"
-                f"----------------------------------------\n\n"
-                f"{segnale_fallback}"
-            )
-            send_message(chat_id, messaggio_tecnico)
-        else:
-            print("ERRORE CRITICO VISION:", error_msg)
-            send_message(chat_id, f"⚠️ Errore tecnico nell'elaborazione dell'immagine:\n`{error_msg}`")
+        print("ERRORE CRITICO VISION:", error_msg)
+        send_message(chat_id, f"⚠️ Errore tecnico nell'elaborazione dell'immagine:\n`{error_msg}`")
 
 # --- RESTO DELLE FUNZIONALITÀ DI MERCATO E MENU ---
 
