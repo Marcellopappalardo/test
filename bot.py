@@ -16,7 +16,7 @@ import requests
 import pandas as pd
 import numpy as np
 
-# --- IMPORT CORRETTO SDK GOOGLE GENAI ---
+# Importa l'SDK ufficiale aggiornato di Google GenAI
 from google import genai
 
 app = Flask(__name__)
@@ -24,8 +24,10 @@ app = Flask(__name__)
 TG_TOKEN = "8585533636:AAE_J2ospaddCWva9gPHzE26dCp2_WaziLk"
 BASE_URL = "https://api.telegram.org/bot" + TG_TOKEN
 
-# Configurazione del client Gemini con la nuova libreria
+# CONFIGURAZIONE PULITA: Legge la chiave esclusivamente dalle variabili d'ambiente di Render
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+
+# Inizializzazione corretta del client Gemini
 gemini_client = None
 if GEMINI_API_KEY:
     gemini_client = genai.Client(api_key=GEMINI_API_KEY)
@@ -130,19 +132,19 @@ def handle_chart_image(message, chat_id):
         image_bytes = img_response.content
         send_message(chat_id, "🔍 *Analisi visiva in corso... Calcolo direzione e orario esatto di ingresso...*")
 
-        # Conversione dei byte in oggetto PIL Image
+        # Conversione dei byte in oggetto PIL Image compatibile
         image = Image.open(io.BytesIO(image_bytes))
 
         prompt = (
-            "Sei un trader professionista di opzioni binarie specializzato sulla piattaforma Pocket Option[span_1](start_span)[span_1](end_span). "
+            "Sei un trader professionista di opzioni binarie specializzato sulla piattaforma Pocket Option. "
             "Analizza questo screenshot del grafico e fornisci:\n\n"
-            "1. **ASSET E TIMEFRAME**: Identifica l'asset e il timeframe visibile[span_2](start_span)[span_2](end_span).\n"
-            "2. **DIREZIONE**: Indica chiaramente il segnale operativo con '🟢 ACQUISTA (BUY)' oppure '🔴 VENDI (SELL)[span_3](start_span)'[span_3](end_span).\n"
-            "3. **ORARIO ESATTO DI INGRESSO**: Leggi l'orologio/orario o il timer nell'immagine e indica l'ora esatta al minuto/secondo in cui entrare a mercato (es. 'Ingresso alla chiusura della candela delle ore XX:XX:00')[span_4](start_span)[span_4](end_span).\n"
-            "4. **MOTIVAZIONE**: Spiegazione tecnica sintetica (supporti, resistenze, price action)[span_5](start_span)[span_5](end_span)."
+            "1. **ASSET E TIMEFRAME**: Identifica l'asset e il timeframe visibile.\n"
+            "2. **DIREZIONE**: Indica chiaramente il segnale operativo con '🟢 ACQUISTA (BUY)' oppure '🔴 VENDI (SELL)'.\n"
+            "3. **ORARIO ESATTO DI INGRESSO**: Leggi l'orologio/orario o il timer nell'immagine e indica l'ora esatta al minuto/secondo in cui entrare a mercato (es. 'Ingresso alla chiusura della candela delle ore XX:XX:00').\n"
+            "4. **MOTIVAZIONE**: Spiegazione tecnica sintetica (supporti, resistenze, price action)."
         )
 
-        # Chiamata corretta tramite il nuovo client google-genai
+        # Chiamata API aggiornata con il modello gemini-3.8-flash richiesto da Google
         response = gemini_client.models.generate_content(
             model="gemini-3.8-flash",
             contents=[image, prompt]
