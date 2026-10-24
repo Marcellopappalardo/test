@@ -61,7 +61,6 @@ OTC_ASSETS = [
 ]
 
 user_selection = {}
-user_otc_state = {}
 
 def api_call(method, data):
     try:
@@ -132,7 +131,6 @@ def handle_chart_image(message, chat_id):
         image_bytes = img_response.content
         send_message(chat_id, "🔍 *Analisi visiva in corso... Calcolo direzione e orario esatto di ingresso...*")
 
-        # Conversione dei byte in oggetto PIL Image compatibile
         image = Image.open(io.BytesIO(image_bytes))
 
         prompt = (
@@ -145,7 +143,6 @@ def handle_chart_image(message, chat_id):
             "- Motivazione tecnica: [Massimo 2 righe con trend, pattern o livelli chiave]"
         )
 
-        # Chiamata API aggiornata con il modello gemini-3.8-flash richiesto da Google
         response = gemini_client.models.generate_content(
             model="gemini-3.8-flash",
             contents=[image, prompt]
@@ -161,7 +158,7 @@ def handle_chart_image(message, chat_id):
         print("ERRORE CRITICO VISION:", error_msg)
         send_message(chat_id, f"⚠️ Errore tecnico nell'elaborazione dell'immagine:\n`{error_msg}`")
 
-# --- RESTO DELLE FUNZIONALITÀ DI MERCATO E MENU ---
+# --- FUNZIONALITÀ DI MERCATO E INDICATORI ---
 
 def detect_candlestick_pattern(df):
     try:
@@ -286,7 +283,7 @@ def generate_chart_image(df, asset_name, target_entry_time=None):
         buf = io.BytesIO()
         fig, axes = mpf.plot(
             df_plot, type='candle', style=custom_style, addplot=add_plots,
-            title=f"\nAnalisi Tecnica + Fractal Chaos Bands (P2): {asset_name}", volume=False,
+            title=f"\nAnalisi OTC & Fractal Chaos: {asset_name}", volume=False,
             figsize=(8, 4.5), returnfig=True, panel_ratios=(1,)
         )
         fig.savefig(buf, format='png', facecolor='#1e1e1e', edgecolor='none', bbox_inches='tight', dpi=100)
@@ -408,7 +405,7 @@ def get_yahoo_ticker(asset_name):
     if "/" in clean and len(clean) == 7: return clean.replace("/", "") + "=X"
     return clean
 
-def fetch_yahoo_real_data(asset_name):
+def fetch_market_data(asset_name):
     current_time = time.time()
     if asset_name in market_cache:
         ts, cached_df = market_cache[asset_name]
@@ -453,7 +450,7 @@ def fetch_yahoo_real_data(asset_name):
         market_cache[asset_name] = (current_time, clean_df)
         return clean_df
     except Exception as e:
-        print(f"Errore di recupero dati in tempo reale per {asset_name}: {e}")
+        print(f"Errore di recupero dati per {asset_name}: {e}")
         if asset_name in market_cache: 
             return market_cache[asset_name][1]
         return None
@@ -464,7 +461,7 @@ def send_category_menu(chat_id, msg_id=None):
     kb = {
         "inline_keyboard": [
             [{"text": "📈 Mercato Reale", "callback_data": "cat_real_0"}],
-            [{"text": "📊 Mercato OTC (Guida Visiva)", "callback_data": "cat_otc_0"}]
+            [{"text": "📊 Mercato OTC (Automatico Live)", "callback_data": "cat_otc_0"}]
         ]
     }
     text = "👋 **Seleziona la categoria di mercato o invia uno screenshot del grafico Pocket Option per un'analisi IA immediata (con direzione e orario di ingresso):**"
@@ -531,7 +528,6 @@ def webhook():
     }
     if up:
         try:
-            # GESTIONE FOTO INVIATE A TELEGRAM
             if "message" in up and "photo" in up["message"]:
                 msg = up["message"]
                 cid = msg["chat"]["id"]
@@ -544,7 +540,7 @@ def webhook():
                 answer_callback(cq["id"])
                 
                 if val == "main_categories":
-                    user_otc_state.pop(cid, None)
+                    user_selection.pop(cid, None)
                     api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
                     send_category_menu(cid)
                     
@@ -570,22 +566,23 @@ def webhook():
                         user_selection[cid] = {"asset": ast, "cat": "otc"}
                         send_expiry_menu(cid, ast, mid, is_otc=True)
 
-                elif val.startswith("exp_r_") or val.startswith("retry_"):
-                    if val.startswith("exp_r_"):
+                elif val.startswith("exp_r_") or val.startswith("exp_o_") or val.startswith("retry_"):
+                    is_otc_flow = val.startswith("exp_o_") or ("OTC" in val)
+                    if val.startswith("exp_r_") or val.startswith("exp_o_"):
                         exp_key = val.split("_")[2]
                         sel = user_selection.get(cid, {})
-                        ast_name = sel.get("asset", "EUR/USD")
+                        ast_name = sel.get("asset", "EUR/USD OTC" if is_otc_flow else "EUR/USD")
                         user_selection[cid]["exp"] = exp_key
                     else:
                         parts = val.split("_")
                         exp_key = parts[-1]
                         ast_name = "_".join(parts[1:-1])
                     
-                    edit_message(cid, mid, f"⏳ Elaborazione analisi in tempo reale per {ast_name} ({exp_key.upper()})...")
+                    edit_message(cid, mid, f"⏳ Elaborazione analisi automatica per {ast_name} ({exp_key.upper()})...")
                     
-                    data = fetch_yahoo_real_data(ast_name)
+                    data = fetch_market_data(ast_name)
                     if data is None or data.empty:
-                        error_text = f"⚠️ **Impossibile recuperare i dati per {ast_name}.**\n\nIl mercato potrebbe essere chiuso in questo momento."
+                        error_text = f"⚠️ **Impossibile recuperare i dati per {ast_name}.**"
                         error_kb = {"inline_keyboard": [[{"text": "🔄 Aggiorna", "callback_data": "retry_" + ast_name + "_" + exp_key}], [{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
                         edit_message(cid, mid, error_text, error_kb)
                         return "ok", 200
@@ -616,7 +613,7 @@ def webhook():
                         sig_type = "ACQUISTA (BUY)" if macd_line > macd_signal else "VENDI (SELL)"
                         trend_desc = "Laterale / Transizione ↔️"
                     
-                    base_conf = 60.0  
+                    base_conf = 62.0  
                     trend_confirmed = (trend_bullish and "ACQUISTA" in sig_type) or (not trend_bullish and "VENDI" in sig_type)
                     conf_trend = 15.0 if trend_confirmed else 0.0
                     conf_macd = min(15.0, abs(macd_hist) * 2000)
@@ -625,14 +622,16 @@ def webhook():
                     conf_rsi = 10.0 if rsi_confirmed else 0.0
                     
                     conf = round(base_conf + conf_trend + conf_macd + conf_fractal + conf_rsi, 1)
-                    conf = min(96.0, max(50.0, conf))
+                    conf = min(96.0, max(52.0, conf))
                     
                     sig_emoji = "🟢" if "ACQUISTA" in sig_type else "🔴"
                     timeframe_name = exp_map.get(exp_key, "1 Minuto (M1)")
 
-                    text = "🐂🐻 ANALISI EASY TRACK + FRACTAL ADVANCED (REALE LIVE)\n\n"
+                    header_title = "🤖 ANALISI OTC AUTOMATICA (POCKET OPTION)" if "OTC" in ast_name else "🐂🐻 ANALISI EASY TRACK + FRACTAL ADVANCED (REALE LIVE)"
+
+                    text = f"{header_title}\n\n"
                     text += f"💲💹 Asset: {ast_name}\n"
-                    text += f"💵 Prezzo Reale: `{round(current_close, 5)}`\n"
+                    text += f"💵 Prezzo Riferimento: `{round(current_close, 5)}`\n"
                     text += f"📊 Trend / Setup: {trend_desc}\n"
                     text += f"🕯️ Pattern Candele: {pattern_name}\n"
                     text += f"🎯 Segnale: {sig_type} {sig_emoji}\n\n"
@@ -654,135 +653,11 @@ def webhook():
                     else:
                         send_message(cid, text, kb)
 
-                elif val.startswith("exp_o_"):
-                    exp_key = val.split("_")[2]
-                    sel = user_selection.get(cid, {})
-                    ast_name = sel.get("asset", "EUR/USD OTC")
-                    
-                    user_otc_state[cid] = {"asset": ast_name, "expiry": exp_key}
-                    
-                    kb_rsi_levels = {
-                        "inline_keyboard": [
-                            [{"text": "🔥 Sopra 70 (Ipercomprato)", "callback_data": "otc_rsi_over70"}],
-                            [{"text": "📈 Tra 50 e 70 (Zona Rialzista)", "callback_data": "otc_rsi_50_70"}],
-                            [{"text": "📉 Tra 30 e 50 (Zona Ribassista)", "callback_data": "otc_rsi_30_50"}],
-                            [{"text": "❄️ Sotto 30 (Ipervenduto)", "callback_data": "otc_rsi_under30"}],
-                            [{"text": "⚡ Test / Incrocio linea del 50", "callback_data": "otc_rsi_cross50"}],
-                            [{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]
-                        ]
-                    }
-                    edit_message(cid, mid, f"📊 **{ast_name} ({exp_map.get(exp_key, exp_key)})**\n\n**Step 1/2:** Guarda l'indicatore **RSI (9)** sul broker e seleziona dove si trova la linea in questo momento:", kb_rsi_levels)
-
-                elif val.startswith("otc_rsi_"):
-                    rsi_choice = val.replace("otc_rsi_", "")
-                    if cid in user_otc_state:
-                        user_otc_state[cid]["rsi"] = rsi_choice
-                        
-                        kb_macd_3 = {
-                            "inline_keyboard": [
-                                [{"text": "🟢 Incrocio Rialzista", "callback_data": "otc_macd_bull"}],
-                                [{"text": "🔴 Incrocio Ribassista", "callback_data": "otc_macd_bear"}],
-                                [{"text": "⏳ In fase di formazione", "callback_data": "otc_macd_pending"}],
-                                [{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]
-                            ]
-                        }
-                        edit_message(cid, mid, "📊 **Step 2/2:** Qual è la situazione attuale del **MACD** sul broker?", kb_macd_3)
-
-                elif val.startswith("otc_macd_"):
-                    macd_choice = val.replace("otc_macd_", "")
-                    if cid in user_otc_state:
-                        state = user_otc_state[cid]
-                        ast_name = state["asset"]
-                        exp_key = state["expiry"]
-                        rsi_choice = state["rsi"]
-                        user_otc_state.pop(cid, None)
-                        
-                        italian_tz = timezone(timedelta(hours=2))
-                        current_it_time = datetime.now(italian_tz)
-                        entry_time = (current_it_time + timedelta(minutes=1)).replace(second=0, microsecond=0).strftime('%H:%M:%S')
-                        
-                        rsi_map = {
-                            "over70": "Sopra 70 (Ipercomprato 🔥)",
-                            "50_70": "Tra 50 e 70 (Zona Rialzista 📈)",
-                            "30_50": "Tra 30 e 50 (Zona Ribassista 📉)",
-                            "under30": "Sotto 30 (Ipervenduto ❄️)",
-                            "cross50": "Incrocio / Test della linea 50 ⚡"
-                        }
-                        
-                        macd_map = {
-                            "bull": "Incrocio Rialzista 🟢",
-                            "bear": "Incrocio Ribassista 🔴",
-                            "pending": "In fase di formazione ⏳"
-                        }
-                        
-                        if rsi_choice == "over70" or macd_choice == "bear":
-                            if rsi_choice == "under30" and macd_choice == "bull":
-                                sig_type = "ACQUISTA (BUY)"
-                                sig_emoji = "🟢"
-                                trend_desc = "Rimbalzo da Ipervenduto 📈"
-                                pattern_name = "Reazione sui Minimi"
-                                conf = 91.0
-                            elif rsi_choice == "over70":
-                                sig_type = "VENDI (SELL)"
-                                sig_emoji = "🔴"
-                                trend_desc = "Inversione da Ipercomprato 📉"
-                                pattern_name = "Rifiuto su Livello 70"
-                                conf = 90.0
-                            else:
-                                sig_type = "VENDI (SELL)"
-                                sig_emoji = "🔴"
-                                trend_desc = "Spinta Ribassista 📉"
-                                pattern_name = "Continuazione Trend Sotto 50"
-                                conf = 85.0
-                        else:
-                            if rsi_choice == "under30":
-                                sig_type = "ACQUISTA (BUY)"
-                                sig_emoji = "🟢"
-                                trend_desc = "Rimbalzo da Ipervenduto 📈"
-                                pattern_name = "Reazione sui Minimi"
-                                conf = 90.0
-                            elif rsi_choice == "50_70" and macd_choice == "bull":
-                                sig_type = "ACQUISTA (BUY)"
-                                sig_emoji = "🟢"
-                                trend_desc = "Spinta Rialzista Forte 📈"
-                                pattern_name = "Continuazione Trend Sopra 50"
-                                conf = 88.0
-                            elif macd_choice == "bull":
-                                sig_type = "ACQUISTA (BUY)"
-                                sig_emoji = "🟢"
-                                trend_desc = "Spinta Rialzista 📈"
-                                pattern_name = "Incrocio Positivo"
-                                conf = 85.0
-                            else:
-                                sig_type = "VENDI (SELL)" if rsi_choice == "30_50" else "ACQUISTA (BUY)"
-                                sig_emoji = "🔴" if "VENDI" in sig_type else "🟢"
-                                trend_desc = "Fase di Transizione / Breakout ↔️"
-                                pattern_name = "Test Dinamico"
-                                conf = 78.0
-
-                        timeframe_name = exp_map.get(exp_key, "1 Minuto (M1)")
-
-                        text = "🤖 **ANALISI OTC GUIDATA (STRATEGIA VISIVA 70-50-30)**\n\n"
-                        text += f"💲💹 Asset: {ast_name}\n"
-                        text += f"📊 Trend Rilevato: {trend_desc}\n"
-                        text += f"🕯️ Pattern: {pattern_name}\n"
-                        text += f"🎯 Segnale: {sig_type} {sig_emoji}\n\n"
-                        text += f"🛠️ Parametri Selezionati:\n"
-                        text += f"• RSI (9): {rsi_map.get(rsi_choice, rsi_choice)}\n"
-                        text += f"• MACD: {macd_map.get(macd_choice, macd_choice)}\n\n"
-                        text += f"⚖️ Affidabilità: {conf}%\n"
-                        text += f"⏱️ Timeframe: {timeframe_name}\n"
-                        text += f"📌 Ora Esatta Ingresso: `{entry_time}`"
-                        
-                        kb = {"inline_keyboard": [[{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
-                        edit_message(cid, mid, text, kb)
-
             elif "message" in up:
                 cid = up["message"]["chat"]["id"]
                 if "text" in up["message"]:
                     txt_msg = up["message"]["text"].strip()
                     if txt_msg == "/start":
-                        user_otc_state.pop(cid, None)
                         user_selection.pop(cid, None)
                         send_category_menu(cid)
                         return "ok", 200
