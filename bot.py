@@ -4,6 +4,7 @@ import math
 import time
 import io
 import re
+import threading
 import traceback
 from PIL import Image
 import matplotlib
@@ -61,6 +62,27 @@ OTC_ASSETS = [
 ]
 
 user_selection = {}
+
+# --- FUNZIONE KEEP-ALIVE AUTOMATICA ---
+def start_keep_alive():
+    """Invia un ping periodico al server per evitare lo stand-by di Render."""
+    render_url = os.environ.get('RENDER_EXTERNAL_URL')
+    if not render_url:
+        print("⚠️ Keep-alive disattivato: RENDER_EXTERNAL_URL non trovata.")
+        return
+
+    def ping():
+        while True:
+            try:
+                time.sleep(600)  # Invia ping ogni 10 minuti (600 secondi)
+                res = requests.get(f"{render_url}/", timeout=10)
+                print(f"⏰ Ping Keep-Alive inviato a {render_url} - Status: {res.status_code}")
+            except Exception as e:
+                print(f"⚠️ Errore durante il Keep-Alive ping: {e}")
+
+    thread = threading.Thread(target=ping, daemon=True)
+    thread.start()
+    print(f"⚡ Keep-Alive attivato per: {render_url}")
 
 def api_call(method, data):
     try:
@@ -283,7 +305,7 @@ def generate_chart_image(df, asset_name, target_entry_time=None):
         buf = io.BytesIO()
         fig, axes = mpf.plot(
             df_plot, type='candle', style=custom_style, addplot=add_plots,
-            title=f"\nAnalisi OTC & Fractal Chaos: {asset_name}", volume=False,
+            title=f"\nAnalisi Reale & Fractal Chaos: {asset_name}", volume=False,
             figsize=(8, 4.5), returnfig=True, panel_ratios=(1,)
         )
         fig.savefig(buf, format='png', facecolor='#1e1e1e', edgecolor='none', bbox_inches='tight', dpi=100)
@@ -461,7 +483,7 @@ def send_category_menu(chat_id, msg_id=None):
     kb = {
         "inline_keyboard": [
             [{"text": "📈 Mercato Reale", "callback_data": "cat_real_0"}],
-            [{"text": "📊 Mercato OTC (Automatico Live)", "callback_data": "cat_otc_0"}]
+            [{"text": "📊 Mercato OTC (Solo Segnale)", "callback_data": "cat_otc_0"}]
         ]
     }
     text = "👋 **Seleziona la categoria di mercato o invia uno screenshot del grafico Pocket Option per un'analisi IA immediata (con direzione e orario di ingresso):**"
@@ -578,7 +600,7 @@ def webhook():
                         exp_key = parts[-1]
                         ast_name = "_".join(parts[1:-1])
                     
-                    edit_message(cid, mid, f"⏳ Elaborazione analisi automatica per {ast_name} ({exp_key.upper()})...")
+                    edit_message(cid, mid, f"⏳ Elaborazione analisi per {ast_name} ({exp_key.upper()})...")
                     
                     data = fetch_market_data(ast_name)
                     if data is None or data.empty:
@@ -627,31 +649,49 @@ def webhook():
                     sig_emoji = "🟢" if "ACQUISTA" in sig_type else "🔴"
                     timeframe_name = exp_map.get(exp_key, "1 Minuto (M1)")
 
-                    header_title = "🤖 ANALISI OTC AUTOMATICA (POCKET OPTION)" if "OTC" in ast_name else "🐂🐻 ANALISI EASY TRACK + FRACTAL ADVANCED (REALE LIVE)"
-
-                    text = f"{header_title}\n\n"
-                    text += f"💲💹 Asset: {ast_name}\n"
-                    text += f"💵 Prezzo Riferimento: `{round(current_close, 5)}`\n"
-                    text += f"📊 Trend / Setup: {trend_desc}\n"
-                    text += f"🕯️ Pattern Candele: {pattern_name}\n"
-                    text += f"🎯 Segnale: {sig_type} {sig_emoji}\n\n"
-                    text += "🛠️ Indicatori Tecnici:\n"
-                    text += f"• RSI (9): {rsi_val}\n"
-                    text += f"• Linea MACD: {macd_line}\n"
-                    text += f"• Frattale Sup (Max): `{round(upper_f, 5)}`\n"
-                    text += f"• Frattale Inf (Min): `{round(lower_f, 5)}`\n\n"
-                    text += f"⚖️ Affidabilità: {conf}%\n"
-                    text += f"⏱️ Timeframe: {timeframe_name}\n"
-                    text += f"📌 Ora Esatta Ingresso: `{entry_time}`"
-                    
                     kb = {"inline_keyboard": [[{"text": "🔄 Aggiorna", "callback_data": "retry_" + ast_name + "_" + exp_key}], [{"text": "≡ Torna alle Categorie", "callback_data": "main_categories"}]]}
-                    chart_buf = generate_chart_image(data, ast_name, target_entry_time=entry_time)
-                    
-                    api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
-                    if chart_buf:
-                        send_photo_message(cid, chart_buf, text, kb)
+
+                    if "OTC" in ast_name:
+                        # --- MERCATO OTC: SOLO TESTO (NESSUN GRAFICO) ---
+                        text = "🤖 **ANALISI OTC AUTOMATICA (POCKET OPTION)**\n\n"
+                        text += f"💲💹 Asset: {ast_name}\n"
+                        text += f"💵 Prezzo Riferimento: `{round(current_close, 5)}`\n"
+                        text += f"📊 Trend / Setup: {trend_desc}\n"
+                        text += f"🕯️ Pattern Candele: {pattern_name}\n"
+                        text += f"🎯 Segnale: {sig_type} {sig_emoji}\n\n"
+                        text += "🛠️ Indicatori Tecnici:\n"
+                        text += f"• RSI (9): {rsi_val}\n"
+                        text += f"• Linea MACD: {macd_line}\n"
+                        text += f"• Frattale Sup (Max): `{round(upper_f, 5)}`\n"
+                        text += f"• Frattale Inf (Min): `{round(lower_f, 5)}`\n\n"
+                        text += f"⚖️ Affidabilità: {conf}%\n"
+                        text += f"⏱️ Timeframe: {timeframe_name}\n"
+                        text += f"📌 Ora Esatta Ingresso: `{entry_time}`"
+
+                        edit_message(cid, mid, text, kb)
                     else:
-                        send_message(cid, text, kb)
+                        # --- MERCATO REALE: MESSAGGIO CON GRAFICO FOTO ---
+                        text = "🐂🐻 **ANALISI EASY TRACK + FRACTAL ADVANCED (REALE LIVE)**\n\n"
+                        text += f"💲💹 Asset: {ast_name}\n"
+                        text += f"💵 Prezzo Reale: `{round(current_close, 5)}`\n"
+                        text += f"📊 Trend / Setup: {trend_desc}\n"
+                        text += f"🕯️ Pattern Candele: {pattern_name}\n"
+                        text += f"🎯 Segnale: {sig_type} {sig_emoji}\n\n"
+                        text += "🛠️ Indicatori Tecnici:\n"
+                        text += f"• RSI (9): {rsi_val}\n"
+                        text += f"• Linea MACD: {macd_line}\n"
+                        text += f"• Frattale Sup (Max): `{round(upper_f, 5)}`\n"
+                        text += f"• Frattale Inf (Min): `{round(lower_f, 5)}`\n\n"
+                        text += f"⚖️ Affidabilità: {conf}%\n"
+                        text += f"⏱️ Timeframe: {timeframe_name}\n"
+                        text += f"📌 Ora Esatta Ingresso: `{entry_time}`"
+                        
+                        chart_buf = generate_chart_image(data, ast_name, target_entry_time=entry_time)
+                        api_call("deleteMessage", {"chat_id": cid, "message_id": mid})
+                        if chart_buf:
+                            send_photo_message(cid, chart_buf, text, kb)
+                        else:
+                            send_message(cid, text, kb)
 
             elif "message" in up:
                 cid = up["message"]["chat"]["id"]
@@ -678,6 +718,9 @@ if RENDER_URL:
         print("⚠️ Errore impostazione automatica webhook:", e)
 
 if __name__ == "__main__":
+    # Avvia la funzione di Keep-Alive su thread separato
+    start_keep_alive()
+
     port = int(os.environ.get('PORT', 5000))
     while True:
         try:
